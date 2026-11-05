@@ -27,6 +27,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 2. **Instalación, instanciación y arranque:** NO ejecutar `wails init/dev/build`, `npm install/run`, `go get/install/mod tidy`, `brew`, `tlmgr`, `sudo`, ni compiladores LaTeX. **El programador ejecuta esos comandos.** Claude escribe el código y le dice exactamente qué comando correr.
 3. Sí se permite verificar sin efectos externos: `go build`, `go vet`, `gofmt`, `wails doctor`.
 4. Idioma de comunicación: **español**. Código e identificadores: inglés.
+5. **Mensajes de commit:** NO agregar la línea `Co-Authored-By` ni ninguna otra atribución a Claude en los mensajes de commit que se propongan. Formato: prefijo convencional (`feat`, `fix`, `build`, `chore`…) y mensaje en español.
 
 ## Estado actual (actualizar al cerrar cada sección)
 - [x] **Sección 1 — Infraestructura y puente IPC** (validada por el programador con `wails dev` el 2026-11-04)
