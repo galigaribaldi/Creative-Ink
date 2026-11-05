@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git stash list:*)",
+      "Bash(go vet:*)",
+      "Bash(go build:*)",
+      "Bash(gofmt:*)",
+      "Bash(go version)",
+      "Bash(go env:*)",
+      "Bash(wails doctor)",
+      "Bash(which:*)",
+      "Bash(ls:*)"
+    ],
+    "ask": [
+      "Bash(git checkout:*)",
+      "Bash(git switch:*)",
+      "Bash(git stash:*)",
+      "Bash(git branch:*)"
+    ],
+    "deny": [
+      "Bash(git add:*)",
+      "Bash(git rm:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git reset:*)",
+      "Bash(git clean:*)",
+      "Bash(git rebase:*)",
+      "Bash(git merge:*)",
+      "Bash(git restore:*)",
+      "Bash(git remote:*)",
+      "Bash(git tag:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh repo:*)",
+      "Bash(gh release:*)",
+
+      "Bash(wails init:*)",
+      "Bash(wails dev:*)",
+      "Bash(wails build:*)",
+      "Bash(wails generate:*)",
+      "Bash(wails update:*)",
+
+      "Bash(go install:*)",
+      "Bash(go get:*)",
+      "Bash(go mod init:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go mod download:*)",
+      "Bash(go run:*)",
+
+      "Bash(npm install:*)",
+      "Bash(npm i:*)",
+      "Bash(npm ci:*)",
+      "Bash(npm init:*)",
+      "Bash(npm create:*)",
+      "Bash(npm run:*)",
+      "Bash(npm start:*)",
+      "Bash(npx:*)",
+      "Bash(pnpm:*)",
+      "Bash(yarn:*)",
+      "Bash(bun:*)",
+
+      "Bash(brew:*)",
+      "Bash(apt:*)",
+      "Bash(apt-get:*)",
+      "Bash(dnf:*)",
+      "Bash(pacman:*)",
+      "Bash(tlmgr:*)",
+      "Bash(sudo:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+
+      "Bash(latexmk:*)",
+      "Bash(pdflatex:*)",
+      "Bash(xelatex:*)",
+      "Bash(lualatex:*)",
+
+      "Bash(rm -rf:*)"
+    ]
+  }
+}
