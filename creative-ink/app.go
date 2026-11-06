@@ -1,6 +1,10 @@
 package main
 
-import "context"
+import (
+	"context"
+
+	"creative-ink/internal/system"
+)
 
 // App is the single IPC facade exposed to the frontend.
 // Every exported method becomes a Wails binding (window.go.main.App.*).
@@ -20,7 +24,8 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// SystemHealthCheck verifies that the frontend ↔ Go IPC bridge is alive.
-func (a *App) SystemHealthCheck() string {
-	return "Creative-ink Core: Puente IPC Activo"
+// SystemHealthCheck audits the host LaTeX toolchain (xelatex, latexmk, biber).
+// Wails serialises the struct to a plain JS object for the frontend.
+func (a *App) SystemHealthCheck() system.HealthStatus {
+	return system.CheckHealth()
 }
