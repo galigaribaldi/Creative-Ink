@@ -2,8 +2,6 @@ export namespace main {
 	
 	export class SaveResult {
 	    saved: boolean;
-	    compileSuccess: boolean;
-	    compileLogs: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SaveResult(source);
@@ -12,8 +10,6 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.saved = source["saved"];
-	        this.compileSuccess = source["compileSuccess"];
-	        this.compileLogs = source["compileLogs"];
 	    }
 	}
 

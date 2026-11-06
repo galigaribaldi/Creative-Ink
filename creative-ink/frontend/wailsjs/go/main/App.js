@@ -10,6 +10,10 @@ export function LoadContent() {
   return window['go']['main']['App']['LoadContent']();
 }
 
+export function RequestCompile() {
+  return window['go']['main']['App']['RequestCompile']();
+}
+
 export function SaveContent(arg1) {
   return window['go']['main']['App']['SaveContent'](arg1);
 }

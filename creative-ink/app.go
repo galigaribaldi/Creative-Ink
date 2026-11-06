@@ -111,6 +111,13 @@ func (a *App) SaveContent(content string) (SaveResult, error) {
 	return SaveResult{Saved: true}, nil
 }
 
+// RequestCompile queues a background compilation of the document as it is on
+// disk, without saving. It returns at once (progress arrives as events) and
+// reports false only while the app is shutting down.
+func (a *App) RequestCompile() bool {
+	return a.compiles.Request()
+}
+
 // LoadContent returns the current document, or "" if it does not exist yet.
 func (a *App) LoadContent() (string, error) {
 	return a.files.LoadDocument(a.docPath)

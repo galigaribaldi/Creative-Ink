@@ -7,6 +7,8 @@ export function DocumentPath():Promise<string>;
 
 export function LoadContent():Promise<string>;
 
+export function RequestCompile():Promise<boolean>;
+
 export function SaveContent(arg1:string):Promise<main.SaveResult>;
 
 export function SystemHealthCheck():Promise<system.HealthStatus>;

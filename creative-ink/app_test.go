@@ -119,3 +119,25 @@ func TestEmitWailsIsNoOpBeforeStartup(t *testing.T) {
 	// runtime.EventsEmit calls log.Fatalf with a nil context; this must not.
 	(&App{}).emitWails(EventCompileStarted)
 }
+
+func TestRequestCompileQueuesWithoutSaving(t *testing.T) {
+	a, events := newTestApp(t, func(ctx context.Context) (string, error) { return "ok", nil })
+
+	if !a.RequestCompile() {
+		t.Fatal("RequestCompile must be accepted while the app is running")
+	}
+	if ev := nextEvent(t, events); ev.name != EventCompileStarted {
+		t.Fatalf("first event = %+v", ev)
+	}
+	if ev := nextEvent(t, events); ev.name != EventCompileFinished {
+		t.Fatalf("second event = %+v", ev)
+	}
+	if _, err := os.Stat(a.docPath); !os.IsNotExist(err) {
+		t.Fatalf("RequestCompile must not write the document, stat err = %v", err)
+	}
+
+	a.compiles.Close(time.Second)
+	if a.RequestCompile() {
+		t.Fatal("RequestCompile after shutdown must report false")
+	}
+}
