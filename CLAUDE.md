@@ -20,8 +20,8 @@ Un editor LaTeX funcional "al estilo VS Code": explorador de archivos, editor, c
 - La compilación usa **latexmk** por defecto, con un motor seleccionable: `pdflatex`, `xelatex` o `lualatex`.
 - La app debe **detectar** los motores instalados (health check en `internal/system/`) y **ofrecer instalarlos** si faltan. La instalación siempre la confirma el usuario.
 - **Editor decidido:** CodeMirror 6 (sin `basicSetup`; las extensiones se eligen a mano en `Editor.svelte`).
-- **Visor PDF provisional:** `<iframe>` servido por el middleware de Go (`preview.go`). Funciona en macOS; en Linux se necesitará PDF.js.
-- Decisiones **pendientes** (no las asumas, espera instrucciones): visor de PDF definitivo, modelo de plugins, migración a TypeScript, licencia y patrón final de IPC.
+- **Visor PDF decidido:** PDF.js (`pdfjs-dist`) en `<canvas>`; el PDF lo sirve el middleware de Go (`preview.go`).
+- Decisiones **pendientes** (no las asumas, espera instrucciones): modelo de plugins, migración a TypeScript, licencia y patrón final de IPC.
 
 ## Reglas de trabajo (OBLIGATORIAS)
 Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permiso falte:
@@ -33,6 +33,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 
 ## Gotchas técnicos
 - **Svelte 5 (runes):** en `<!-- svelte-ignore a, b -->` los códigos se separan con **coma**. Después de un espacio, el compilador trata el resto como comentario.
+- **Svelte 5:** no llames `state` (ni `props`, `derived`, `effect`) a una prop o variable si usas la runa correspondiente: `$state` se interpretaría como un *store*.
 - **Template de Wails v2.17.1:** venía con `vite-plugin-svelte@6` (no acepta Vite 8), con `new App()` (Svelte 4) y con un `jsconfig` obsoleto. Ya está corregido.
 
 ## Estado actual (actualizar al cerrar cada sección)
@@ -74,4 +75,10 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] `preview.go`: middleware de Wails que sirve `/__preview/document.pdf` (más `preview_test.go`)
   - [x] `Preview.svelte`: iframe con `?t=pdfTimestamp`, estado y log de errores; mantiene el último PDF válido si hay error
   - [x] `Editor.svelte`: `onsavestart`/`onsaved` y compilación inicial al cargar
+  - [x] Validación del programador: el PDF se genera y se muestra
+- [ ] **Sección 5 — Visor PDF.js multiplataforma** (rama `feat/visor-pdfjs`; código listo, falta validar con `wails dev`)
+  - [x] Programador: `npm install pdfjs-dist` (6.5.438)
+  - [x] `src/lib/pdf.js`: worker local con `?url` y `loadPdf(url)` (fetch → `getDocument({data})`)
+  - [x] `Preview.svelte`: página 1 en `<canvas>`, doble buffer, cargas con secuencia, `ResizeObserver` y soporte HiDPI
+  - [x] `CompileLog.svelte`: log de LaTeX debajo del editor; se vuelve a abrir con cada error nuevo
   - [ ] Validación del programador: reiniciar `wails dev`

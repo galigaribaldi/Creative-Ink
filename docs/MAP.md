@@ -29,8 +29,11 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   ├── App.svelte        ← shell: barra superior + editor (izquierda) + vista previa (derecha)
         │   ├── components/
         │   │   ├── Editor.svelte      ← CodeMirror 6 (one-dark, stex) + autoguardado con debounce
+        │   │   ├── CompileLog.svelte  ← panel de errores de LaTeX debajo del editor
         │   │   ├── HealthPanel.svelte ← modal "Estado del sistema"
-        │   │   └── Preview.svelte     ← iframe del PDF + estado y log de compilación
+        │   │   └── Preview.svelte     ← PDF.js: página 1 en <canvas>, doble buffer y recarga por timestamp
+        │   ├── lib/
+        │   │   └── pdf.js        ← configuración de PDF.js (worker local) y loadPdf(url)
         │   └── style.css         ← estilos globales mínimos
         └── wailsjs/              ← GENERADO por Wails: no editar a mano
             ├── go/main/App.js    ← bindings de los métodos de App
@@ -91,7 +94,12 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
   - **Seguridad:** el nombre de archivo no puede tener directorios ni empezar con `-`. Las ejecuciones van en serie (mutex) y tienen un límite de 60 s.
   - **Logs:** stdout y stderr van al mismo buffer. Si falla, primero los bloques `! ...` hasta `l.<n>` y luego la cola de la salida (máximo 32 KB).
 - **Flujo:** autoguardado → `SaveContent` → `SaveDocument` → `CompileLaTeX` → `SaveResult` → la UI actualiza `pdfTimestamp` y el iframe recarga.
-- **Visor PDF (decisión provisional):** `<iframe>` nativo del WebView. En macOS, WKWebView muestra PDFs de forma nativa. **En Linux, WebKitGTK no lo hace:** habrá que usar PDF.js antes de dar soporte a Linux.
+- **Visor PDF:** PDF.js (`pdfjs-dist` 6.5) en `<canvas>`, igual en macOS y Linux (se descartó el iframe porque WebKitGTK no muestra PDFs).
+  - **Worker local** con `pdf.worker.min.mjs?url`, que Vite empaqueta como asset; Wails lo sirve con MIME `text/javascript`. Funciona sin conexión.
+  - `loadPdf(url)` hace `fetch(url, {cache:'no-store'})` → `getDocument({ data })`. No se usa `getDocument(url)` porque la capa de red de PDF.js (Range/streaming) no es fiable sobre el esquema `wails://`.
+  - **Recarga:** `pdfTimestamp` cambia → `$effect` → `reload()`. Cada carga recibe un número de secuencia y las viejas se descartan. La página se dibuja en un canvas fuera de pantalla y se copia al visible de una vez (sin parpadeo). Si algo falla, el canvas conserva el último PDF válido.
+  - Al redimensionar el panel, `ResizeObserver` vuelve a dibujar con un debounce de 150 ms. Se tiene en cuenta `devicePixelRatio` para pantallas Retina.
+  - **Si WebKitGTK antiguo falla con la build moderna:** usar `pdfjs-dist/legacy/build/pdf.mjs`.
 - **Test de integración opcional:** `CREATIVE_INK_LATEX_TEST=1 go test ./internal/compiler -run Integration -v` (lo ejecuta el programador).
 
 ## 5. Skills / conocimiento requerido
