@@ -89,11 +89,17 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] `CompileLog.svelte`: log de LaTeX debajo del editor; se vuelve a abrir con cada error nuevo
   - [x] Fix: liberación de documentos con `loadingTask.destroy()` + `PDFWorker` compartido (antes cada compilación dejaba vivo un worker y su documento)
   - [x] Retención de página: `currentPageNumber` se conserva entre compilaciones (ajustado a `numPages`)
-  - [ ] Validación del programador: reiniciar `wails dev`
+  - [ ] Validación del programador: reiniciar `wails dev` y confirmar que ya no aparece el aviso de `destroy`
 - [ ] **Sección 6 — Guardado y compilación desacoplados** (deuda técnica #1; código listo, falta validar con `wails dev`)
   - [x] `internal/compiler/scheduler.go`: `Scheduler` con un solo worker, ráfagas juntadas, `recover` de panics y `Close` con cancelación
   - [x] `CompileLaTeXContext` (cancelable) y errores leídos primero del `.log`; extractor robusto (no se traga el siguiente `!`, incluye la continuación de `l.<n>`)
   - [x] `App.SaveContent` → `SaveResult{Saved}` inmediato; eventos `compile:started` y `compile:finished` (`compiler.Result`); `OnShutdown` cancela latexmk
   - [x] Tests: planificador, fachada (`app_test.go`) y parseo de logs; `go test -race ./...` limpio
   - [x] Frontend: `App.svelte` escucha los eventos con `EventsOn` (y se da de baja en `onDestroy`); `Editor.svelte` ya no reporta compilación
+  - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 7 — Layout ActionBar | Sidebar | Workspace** (código listo; falta validar con `wails dev`)
+  - [x] `lib/ui.svelte.js` (estado visual con `$state`), `lib/compilation.svelte.js` (eventos `compile:*`) y `lib/actions.js` (guardar y compilar sin pasar props)
+  - [x] `ActionBar.svelte`, `Sidebar.svelte` y `Workspace.svelte`; `App.svelte` como grid `[44px | 0/240px | 1fr]` con transición de 120 ms y Cmd/Ctrl+B
+  - [x] Binding `RequestCompile()` para compilar sin guardar (más test)
+  - [x] `check-svelte.mjs` ahora también compila los módulos `.svelte.js`
   - [ ] Validación del programador: reiniciar `wails dev`

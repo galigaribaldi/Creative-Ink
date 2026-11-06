@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Compiles every .svelte file of the Creative-ink frontend with the project's
+// Compiles every .svelte component and .svelte.js rune module of the Creative-ink frontend with the project's
 // own Svelte compiler and reports errors and warnings. Read-only: it writes
 // nothing and installs nothing.
 //
@@ -24,13 +24,14 @@ if (!existsSync(join(frontend, 'node_modules/svelte'))) {
 const requireFromFrontend = createRequire(join(frontend, 'package.json'))
 const compilerModule = await import(pathToFileURL(requireFromFrontend.resolve('svelte/compiler')).href)
 // The "require" export is CommonJS: its API lands on `default` when imported.
-const { compile, VERSION } = compilerModule.compile ? compilerModule : compilerModule.default
+const { compile, compileModule, VERSION } = compilerModule.compile ? compilerModule : compilerModule.default
 
 function* svelteFiles(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name)
     if (entry.isDirectory()) yield* svelteFiles(path)
-    else if (entry.name.endsWith('.svelte')) yield path
+    // .svelte components and .svelte.js / .svelte.ts rune modules.
+    else if (/\.svelte(\.[jt]s)?$/.test(entry.name)) yield path
   }
 }
 
@@ -39,7 +40,10 @@ let warnings = 0
 for (const file of svelteFiles(srcDir)) {
   const name = relative(frontend, file)
   try {
-    const { warnings: list } = compile(readFileSync(file, 'utf8'), { filename: name, generate: 'client' })
+    const source = readFileSync(file, 'utf8')
+    const { warnings: list } = file.endsWith('.svelte')
+      ? compile(source, { filename: name, generate: 'client' })
+      : compileModule(source, { filename: name, generate: 'client' })
     if (list.length === 0) {
       console.log(`✓ ${name}`)
       continue

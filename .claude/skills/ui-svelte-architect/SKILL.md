@@ -18,11 +18,14 @@ Those files win over anything in this skill if they disagree.
   with JSDoc types. Mount with `mount()`, events with `onclick` (not `on:click`).
 - Styling: **plain CSS, scoped per component**. Global tokens live in `frontend/src/style.css`
   (`--bg`, `--fg`, `--accent`). Do not introduce Tailwind or any UI library unless the user decides it.
-- Current layout (`frontend/src/`):
-  - `App.svelte`: shell → top bar + two-column workspace (Editor | Preview) + `HealthPanel` modal.
-  - `components/Editor.svelte`: CodeMirror 6, autosave debounce, emits `onsavestart` / `onsaved`.
-  - `components/Preview.svelte`: PDF.js on `<canvas>`, driven by `pdfTimestamp`.
+- Current layout (`frontend/src/`), already migrated to the target layout below:
+  - `App.svelte`: CSS Grid shell `[ActionBar | Sidebar | Workspace]`, `HealthPanel` modal, Cmd/Ctrl+B.
+  - `components/ActionBar.svelte`, `Sidebar.svelte` (always mounted, `inert` when closed), `Workspace.svelte`.
+  - `components/Editor.svelte`: CodeMirror 6 + autosave debounce; registers `save`/`isDirty` in `lib/actions.js`.
+  - `components/Preview.svelte`: PDF.js on `<canvas>`, driven by `pdfTimestamp`; keeps `currentPageNumber`.
   - `components/CompileLog.svelte`, `components/HealthPanel.svelte`.
+  - State modules: `lib/ui.svelte.js` (visual state), `lib/compilation.svelte.js` (mirror of the
+    `compile:*` Go events), `lib/actions.js` (global save/compile actions).
   - `lib/pdf.js`: PDF.js worker and document lifecycle (`loadPdf`, `releasePdf`).
 - Backend calls only through `frontend/wailsjs/go/main/App.js` (generated; never edit by hand).
 
@@ -50,8 +53,8 @@ App.svelte                  grid: [ActionBar | Sidebar? | Workspace], provides U
     └── Preview.svelte
 ```
 
-Migrate from the current two-column layout incrementally: keep `Editor` and `Preview` untouched
-and move them into `Workspace.svelte`; add `ActionBar` and `Sidebar` around it.
+New drawers add a `SidebarTool` id in `lib/ui.svelte.js`, a button in `ActionBar` and a branch in
+`Sidebar`. Never move `Editor` or `Preview` out of `Workspace`, and never wrap them in `{#if}`.
 
 ## Steps for architecting a layout
 
@@ -85,8 +88,8 @@ From the repo root:
 node .claude/skills/ui-svelte-architect/scripts/check-svelte.mjs
 ```
 
-It compiles every `.svelte` file under `creative-ink/frontend/src` with the project's own Svelte
-compiler and prints errors and warnings. It changes nothing and needs no install. It does not
+It compiles every `.svelte` component and `.svelte.js` rune module under `creative-ink/frontend/src`
+with the project's own Svelte compiler and prints errors and warnings. It changes nothing and needs no install. It does not
 replace testing in the real app.
 
 ## Gotchas

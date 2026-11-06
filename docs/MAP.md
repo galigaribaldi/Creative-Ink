@@ -30,13 +30,19 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         ├── index.html
         ├── src/
         │   ├── main.js           ← monta App.svelte
-        │   ├── App.svelte        ← shell: barra superior + editor (izquierda) + vista previa (derecha)
+        │   ├── App.svelte        ← shell en CSS Grid: [ActionBar | Sidebar | Workspace], atajo Cmd/Ctrl+B
         │   ├── components/
+        │   │   ├── ActionBar.svelte   ← barra vertical de 44 px: Explorador, Guardar, Compilar, Estado del sistema
+        │   │   ├── Sidebar.svelte     ← cajón de 240 px (siempre montado, `inert` si está cerrado)
+        │   │   ├── Workspace.svelte   ← Editor | Preview (+ CompileLog bajo el editor); solo layout
         │   │   ├── Editor.svelte      ← CodeMirror 6 (one-dark, stex) + autoguardado con debounce
         │   │   ├── CompileLog.svelte  ← panel de errores de LaTeX debajo del editor
         │   │   ├── HealthPanel.svelte ← modal "Estado del sistema"
-        │   │   └── Preview.svelte     ← PDF.js: página 1 en <canvas>, doble buffer y recarga por timestamp
+        │   │   └── Preview.svelte     ← PDF.js en <canvas>, doble buffer, conserva la página al recargar
         │   ├── lib/
+        │   │   ├── ui.svelte.js          ← estado visual ($state): sidebarOpen, activeTool, healthOpen. Nunca va a Go
+        │   │   ├── compilation.svelte.js ← reflejo de los eventos compile:* (status, logs, pdfTimestamp)
+        │   │   ├── actions.js            ← acciones globales (guardar, compilar); el Editor registra sus comandos
         │   │   └── pdf.js        ← configuración de PDF.js (worker local) y loadPdf(url)
         │   └── style.css         ← estilos globales mínimos
         └── wailsjs/              ← GENERADO por Wails: no editar a mano
@@ -71,6 +77,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 |---------|-----------------------|------------|-----------------|---------|
 | Binding | `SystemHealthCheck`   | UI → Go    | `() → system.HealthStatus` = `{ hasXeLaTeX, hasLatexmk, hasBiber: boolean; totalRAMGB, freeDiskSpaceGB: number; cpuCores: number; hardwareTier: string; hardwareTierId: 'basic'\|'advanced'\|'unknown'; warnings: string[] }` | 2 |
 | Binding | `SaveContent`         | UI → Go    | `(content: string) → main.SaveResult` = `{ saved: boolean }`. Guarda en `workspace/main.tex`, **responde de inmediato** y encola una compilación en segundo plano. La promesa solo se rechaza si falla el guardado (y entonces no se compila) | 6 |
+| Binding | `RequestCompile`      | UI → Go    | `() → boolean`: encola una compilación de lo que hay en disco, **sin guardar**. Responde de inmediato; `false` solo durante el cierre. Lo usa el botón Compilar cuando no hay cambios sin guardar | 7 |
 | Evento  | `compile:started`     | Go → UI    | Sin payload. Lo emite el Scheduler al empezar cada compilación | 6 |
 | Evento  | `compile:finished`    | Go → UI    | `compiler.Result` = `{ success: boolean; logs: string; durationMs: number }`. No se emite después del cierre de la app | 6 |
 | HTTP    | `/__preview/document.pdf` | WebView → Go | `GET` → PDF del documento actual (`Cache-Control: no-store`, admite Range; 404 si todavía no existe). La UI agrega `?t=<timestamp>` para forzar la recarga | 4 |
