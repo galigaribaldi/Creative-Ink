@@ -7,6 +7,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 ├── CLAUDE.md                     ← contexto persistente para Claude
 ├── .claude/settings.json         ← permisos (qué puede y no puede ejecutar Claude)
 ├── .claude/skills/ui-svelte-architect/ ← skill de diseño UI (SKILL.md + scripts/check-svelte.mjs)
+├── .claude/skills/go-wails-ipc-bridge/ ← skill de backend Go/Wails (fachada, eventos, async)
+├── .claude/skills/latex-toolchain-orchestrator/ ← skill de compilación con latexmk
 ├── docs/MAP.md                   ← este archivo
 └── creative-ink/                 ← app Wails (generada por `wails init`)
     ├── main.go                   ← arranque de Wails: ventana, assets, Bind(&App{})

@@ -25,6 +25,8 @@ Un editor LaTeX funcional "al estilo VS Code": explorador de archivos, editor, c
 
 ## Skills del proyecto (`.claude/skills/`)
 - **`ui-svelte-architect`**: diseño de layouts y componentes Svelte 5 (ActionBar, Sidebar, Workspace, paneles) y estado del frontend sin sobrecargar el IPC. Úsala para cualquier trabajo de UI. Para verificar: `node .claude/skills/ui-svelte-architect/scripts/check-svelte.mjs` (solo lectura).
+- **`go-wails-ipc-bridge`**: backend en Go para Wails: fachada `App`, bindings y eventos, tareas asíncronas sin bloquear el IPC, resultados frente a errores y data races. Úsala para cualquier cambio en `app.go` o `internal/*`.
+- **`latex-toolchain-orchestrator`**: compilación con latexmk: resolución de binarios TeX, ejecución segura sin shell, timeouts, selección de motor y extracción de errores de TeX. Úsala para cualquier cambio en `internal/compiler/`.
 
 ## Reglas de trabajo (OBLIGATORIAS)
 Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permiso falte:
