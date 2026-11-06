@@ -19,7 +19,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     ├── go.mod
     ├── internal/                 ← lógica Go no importable desde fuera del módulo
     │   ├── compiler/
-    │   │   └── orchestrator.go   ← CompileLaTeX: latexmk -xelatex con timeout, PATH de TeX y resumen de errores
+    │   │   ├── orchestrator.go   ← CompileLaTeXContext: latexmk -xelatex con timeout/cancelación, PATH de TeX, errores del .log
+    │   │   └── scheduler.go      ← Scheduler: compilación en segundo plano, una a la vez, juntando ráfagas
     │   ├── core/                 ← dominio: proyectos, archivos, (futuro) plugins
     │   │   └── file_manager.go   ← FileManager: guardado atómico (tmp + rename) y carga de documentos
     │   └── system/               ← entorno: health check de LaTeX y detección/instalación de motores
@@ -69,7 +70,9 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 | Tipo    | Nombre                | Dirección  | Firma / payload | Sección |
 |---------|-----------------------|------------|-----------------|---------|
 | Binding | `SystemHealthCheck`   | UI → Go    | `() → system.HealthStatus` = `{ hasXeLaTeX, hasLatexmk, hasBiber: boolean; totalRAMGB, freeDiskSpaceGB: number; cpuCores: number; hardwareTier: string; hardwareTierId: 'basic'\|'advanced'\|'unknown'; warnings: string[] }` | 2 |
-| Binding | `SaveContent`         | UI → Go    | `(content: string) → main.SaveResult` = `{ saved, compileSuccess: boolean; compileLogs: string }`. Guarda en `workspace/main.tex` y luego compila. La promesa solo se rechaza si falla el guardado; un error de compilación es un resultado normal | 4 |
+| Binding | `SaveContent`         | UI → Go    | `(content: string) → main.SaveResult` = `{ saved: boolean }`. Guarda en `workspace/main.tex`, **responde de inmediato** y encola una compilación en segundo plano. La promesa solo se rechaza si falla el guardado (y entonces no se compila) | 6 |
+| Evento  | `compile:started`     | Go → UI    | Sin payload. Lo emite el Scheduler al empezar cada compilación | 6 |
+| Evento  | `compile:finished`    | Go → UI    | `compiler.Result` = `{ success: boolean; logs: string; durationMs: number }`. No se emite después del cierre de la app | 6 |
 | HTTP    | `/__preview/document.pdf` | WebView → Go | `GET` → PDF del documento actual (`Cache-Control: no-store`, admite Range; 404 si todavía no existe). La UI agrega `?t=<timestamp>` para forzar la recarga | 4 |
 | Binding | `LoadContent`         | UI → Go    | `() → string` (`""` si el archivo todavía no existe) | 3 |
 | Binding | `DocumentPath`        | UI → Go    | `() → string`: ruta absoluta del documento actual | 3 |
@@ -92,11 +95,13 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 - **Pendiente:** el guardado al cerrar la ventana (`OnBeforeClose`) y la ruta del documento cuando la app se abre desde el Finder (el directorio de trabajo es `/`).
 
 ## 4.3 Pipeline de compilación (Módulo 3)
-- `internal/compiler.CompileLaTeX(workdir, filename)` ejecuta `latexmk -xelatex -interaction=nonstopmode -halt-on-error <filename>` (sin shell).
+- `internal/compiler.CompileLaTeXContext(ctx, workdir, filename)` ejecuta `latexmk -xelatex -interaction=nonstopmode -halt-on-error <filename>` (sin shell). `CompileLaTeX` es el mismo sin cancelación externa.
   - **Resolución de binarios:** `system.FindBinary` encuentra latexmk; su directorio se antepone al `PATH` del subproceso para que latexmk encuentre xelatex y biber aunque la app se abra desde el Finder.
   - **Seguridad:** el nombre de archivo no puede tener directorios ni empezar con `-`. Las ejecuciones van en serie (mutex) y tienen un límite de 60 s.
-  - **Logs:** stdout y stderr van al mismo buffer. Si falla, primero los bloques `! ...` hasta `l.<n>` y luego la cola de la salida (máximo 32 KB).
-- **Flujo:** autoguardado → `SaveContent` → `SaveDocument` → `CompileLaTeX` → `SaveResult` → la UI actualiza `pdfTimestamp` y el iframe recarga.
+  - **Logs:** stdout y stderr van al mismo buffer. Si falla, los bloques `! ...` hasta `l.<n>` (más su línea de continuación) salen primero de `<doc>.log` y, si el `.log` no tiene errores, de stdout. Después va la cola de la salida (máximo 32 KB). Un bloque sin `l.<n>` se corta a las 6 líneas o en el siguiente `! `.
+- **Flujo asíncrono:** autoguardado → `SaveContent` → `SaveDocument` → responde `{saved}` → `Scheduler.Request()` → goroutine: `compile:started` → `CompileLaTeXContext` → `compile:finished` → `App.svelte` actualiza `pdfTimestamp` → `Preview` recarga el canvas.
+  - **Scheduler:** un solo worker. Si llegan peticiones mientras compila, se juntan en **una** compilación más, que lee el archivo más reciente del disco: tres guardados rápidos producen como mucho dos compilaciones. Un `panic` se recupera y se informa como fallo. Al cerrar la app, `OnShutdown` → `Close(3s)` cancela latexmk y descarta lo pendiente.
+  - Los eventos se emiten por `App.emit`, inyectable: `runtime.EventsEmit` hace `log.Fatalf` si el contexto es `nil`, así que los tests nunca lo llaman.
 - **Visor PDF:** PDF.js (`pdfjs-dist` 6.5) en `<canvas>`, igual en macOS y Linux (se descartó el iframe porque WebKitGTK no muestra PDFs).
   - **Worker local** con `pdf.worker.min.mjs?url`, que Vite empaqueta como asset; Wails lo sirve con MIME `text/javascript`. Funciona sin conexión.
   - `loadPdf(url)` hace `fetch(url, {cache:'no-store'})` → `getDocument({ data })`. No se usa `getDocument(url)` porque la capa de red de PDF.js (Range/streaming) no es fiable sobre el esquema `wails://`.
@@ -113,8 +118,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 - **Test de integración opcional:** `CREATIVE_INK_LATEX_TEST=1 go test ./internal/compiler -run Integration -v` (lo ejecuta el programador).
 
 ## 4.4 Deuda técnica conocida (análisis del 2026-11-05)
-1. **Guardar y compilar están acoplados en `SaveContent`.** El autoguardado espera a que latexmk termine (hasta 60 s de timeout). Mientras tanto, lo que se escribe no llega al disco, porque el frontend solo permite un guardado en curso.
-   - **Propuesta:** que `SaveContent` solo guarde y responda de inmediato. La compilación se lanzaría en Go de forma asíncrona, juntando las peticiones (si llega otra mientras compila, se ejecuta una sola vez más con el contenido final), y avisaría con eventos de Wails (`compile:started` / `compile:finished`), tal como prevé la regla de capas.
+1. ~~**Guardar y compilar están acoplados en `SaveContent`.**~~ **Resuelto el 2026-11-06:** `SaveContent` responde de inmediato y la compilación va por el `Scheduler` con eventos (ver §4.3).
 2. **Se compila con cada pausa de 1 s.** Convendría un debounce propio para la compilación (por ejemplo 2–3 s), además de Cmd+S para compilar al instante.
 3. **No se guarda al cerrar la ventana:** falta `OnBeforeClose` para hacer un flush en Go.
 4. **`workspace/` depende del directorio de trabajo:** si la app se abre desde el Finder, ese directorio es `/`. Se resuelve con "abrir carpeta/archivo".

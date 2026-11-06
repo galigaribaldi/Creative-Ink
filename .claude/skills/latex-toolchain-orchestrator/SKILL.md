@@ -12,8 +12,11 @@ Those files win over this skill if they disagree.
 
 ## Existing code (reuse it, do not duplicate)
 
-- `creative-ink/internal/compiler/orchestrator.go`: `CompileLaTeX(workdir, filename) (string, error)`,
-  `PDFPath`, `summarize`, `extractTeXErrors`, `validateFilename`, global `compileMu`.
+- `creative-ink/internal/compiler/orchestrator.go`: `CompileLaTeXContext(ctx, workdir, filename)` (and
+  `CompileLaTeX` without cancellation), `PDFPath`, `summarize(output, texLog)`, `readTeXLog`,
+  `teXErrorBlocks` / `extractTeXErrors`, `validateFilename`, global `compileMu`.
+- `creative-ink/internal/compiler/scheduler.go`: background `Scheduler` that calls the compiler
+  (one run at a time, coalesced). Never call `CompileLaTeX` synchronously from a binding.
 - `creative-ink/internal/system/health.go`: `FindBinary(name) (path, ok)` with `fallbackDirs`
   and `fallbackGlobs`. Every binary lookup goes through it.
 - Tests: `internal/compiler/orchestrator_test.go` (unit) plus an opt-in integration test:

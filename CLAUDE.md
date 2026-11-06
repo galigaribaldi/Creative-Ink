@@ -90,3 +90,10 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] Fix: liberación de documentos con `loadingTask.destroy()` + `PDFWorker` compartido (antes cada compilación dejaba vivo un worker y su documento)
   - [x] Retención de página: `currentPageNumber` se conserva entre compilaciones (ajustado a `numPages`)
   - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 6 — Guardado y compilación desacoplados** (deuda técnica #1; código listo, falta validar con `wails dev`)
+  - [x] `internal/compiler/scheduler.go`: `Scheduler` con un solo worker, ráfagas juntadas, `recover` de panics y `Close` con cancelación
+  - [x] `CompileLaTeXContext` (cancelable) y errores leídos primero del `.log`; extractor robusto (no se traga el siguiente `!`, incluye la continuación de `l.<n>`)
+  - [x] `App.SaveContent` → `SaveResult{Saved}` inmediato; eventos `compile:started` y `compile:finished` (`compiler.Result`); `OnShutdown` cancela latexmk
+  - [x] Tests: planificador, fachada (`app_test.go`) y parseo de logs; `go test -race ./...` limpio
+  - [x] Frontend: `App.svelte` escucha los eventos con `EventsOn` (y se da de baja en `onDestroy`); `Editor.svelte` ya no reporta compilación
+  - [ ] Validación del programador: reiniciar `wails dev`
