@@ -19,7 +19,9 @@ Mapa de arquitectura y skills requeridas: @docs/MAP.md
 Un editor LaTeX funcional "al estilo VS Code": explorador de archivos, editor, compilación y vista previa.
 - La compilación usa **latexmk** por defecto, con un motor seleccionable: `pdflatex`, `xelatex` o `lualatex`.
 - La app debe **detectar** los motores instalados (health check en `internal/system/`) y **ofrecer instalarlos** si faltan. La instalación siempre la confirma el usuario.
-- Decisiones **pendientes** (no las asumas, espera instrucciones): componente del editor, visor de PDF, modelo de plugins, migración a TypeScript, licencia y patrón final de IPC.
+- **Editor decidido:** CodeMirror 6 (sin `basicSetup`; las extensiones se eligen a mano en `Editor.svelte`).
+- **Visor PDF provisional:** `<iframe>` servido por el middleware de Go (`preview.go`). Funciona en macOS; en Linux se necesitará PDF.js.
+- Decisiones **pendientes** (no las asumas, espera instrucciones): visor de PDF definitivo, modelo de plugins, migración a TypeScript, licencia y patrón final de IPC.
 
 ## Reglas de trabajo (OBLIGATORIAS)
 Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permiso falte:
@@ -28,6 +30,10 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 3. Sí se permite verificar sin efectos externos: `go build`, `go vet`, `gofmt`, `wails doctor`.
 4. Idioma de comunicación: **español**. Código e identificadores: inglés.
 5. **Mensajes de commit:** NO agregar la línea `Co-Authored-By` ni ninguna otra atribución a Claude en los mensajes de commit que se propongan. Formato: prefijo convencional (`feat`, `fix`, `build`, `chore`…) y mensaje en español.
+
+## Gotchas técnicos
+- **Svelte 5 (runes):** en `<!-- svelte-ignore a, b -->` los códigos se separan con **coma**. Después de un espacio, el compilador trata el resto como comentario.
+- **Template de Wails v2.17.1:** venía con `vite-plugin-svelte@6` (no acepta Vite 8), con `new App()` (Svelte 4) y con un `jsconfig` obsoleto. Ya está corregido.
 
 ## Estado actual (actualizar al cerrar cada sección)
 - [x] **Sección 1 — Infraestructura y puente IPC** (validada por el programador con `wails dev` el 2026-11-04)
@@ -52,4 +58,20 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
     - [x] Tests de tier y de degradación cuando fallan las mediciones
     - [x] `App.svelte`: secciones "Herramientas de LaTeX" y "Recursos de Hardware", con badge de tier
     - [x] Validación del programador: en la UI se ven 48 GB, 12 núcleos, 737.4 GB libres y el tier Avanzado
-- [ ] **Siguiente sección** — pendiente de instrucciones
+- [x] **Sección 3 (Módulos 2 y 4) — Núcleo del editor** (validada por el programador con `wails dev` el 2026-11-05)
+  - [x] Programador: `cd frontend && npm install @codemirror/view @codemirror/state @codemirror/language @codemirror/theme-one-dark @codemirror/commands @codemirror/legacy-modes`
+  - [x] `internal/core/file_manager.go`: `FileManager.SaveDocument(content, path)` con escritura atómica y `LoadDocument`, más tests
+  - [x] `App.SaveContent`, `App.LoadContent` y `App.DocumentPath` → `./workspace/main.tex` (ignorado por git)
+  - [x] `components/Editor.svelte`: CodeMirror 6 + one-dark + stex, debounce de 1 s, guardados en serie, Cmd+S y barra de estado
+  - [x] `components/HealthPanel.svelte`: modal que se abre desde "Ver estado del sistema"
+  - [x] `App.svelte`: editor a la izquierda y espacio para la vista previa PDF a la derecha; ventana de 1280×800
+  - [x] Validación del programador: escribir → "Guardado" y `workspace/main.tex` en disco sin `.tmp` residual
+  - Nota: `npm audit` muestra 2 avisos *low* (`deepmerge` dentro de `@sveltejs/vite-plugin-svelte`). Es una dependencia de desarrollo, no llega al binario y no tiene fix publicado. El aviso de `fsevents` (install scripts) se puede ignorar: es opcional y solo sirve para vigilar archivos en macOS.
+- [ ] **Sección 4 (Módulo 3) — Pipeline de compilación** (código listo; falta que el programador valide con `wails dev`)
+  - [x] `internal/compiler/orchestrator.go`: `CompileLaTeX(workdir, filename) (string, error)`, más tests unitarios y un test de integración opcional
+  - [x] `system.FindBinary` (exportado) para resolver latexmk con las rutas de respaldo
+  - [x] `App.SaveContent` → `SaveResult{Saved, CompileSuccess, CompileLogs}` (compila solo si el guardado salió bien)
+  - [x] `preview.go`: middleware de Wails que sirve `/__preview/document.pdf` (más `preview_test.go`)
+  - [x] `Preview.svelte`: iframe con `?t=pdfTimestamp`, estado y log de errores; mantiene el último PDF válido si hay error
+  - [x] `Editor.svelte`: `onsavestart`/`onsaved` y compilación inicial al cargar
+  - [ ] Validación del programador: reiniciar `wails dev`

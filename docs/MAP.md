@@ -10,20 +10,31 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 └── creative-ink/                 ← app Wails (generada por `wails init`)
     ├── main.go                   ← arranque de Wails: ventana, assets, Bind(&App{})
     ├── app.go                    ← struct App: ÚNICA fachada IPC expuesta al frontend
+    ├── preview.go                ← middleware del AssetServer: sirve el PDF en /__preview/document.pdf
     ├── wails.json                ← configuración del proyecto Wails
+    ├── workspace/main.tex        ← documento provisional (ignorado por git; relativo al directorio de trabajo)
     ├── go.mod
     ├── internal/                 ← lógica Go no importable desde fuera del módulo
-    │   ├── core/                 ← dominio: proyectos, archivos, compilación, (futuro) plugins
+    │   ├── compiler/
+    │   │   └── orchestrator.go   ← CompileLaTeX: latexmk -xelatex con timeout, PATH de TeX y resumen de errores
+    │   ├── core/                 ← dominio: proyectos, archivos, (futuro) plugins
+    │   │   └── file_manager.go   ← FileManager: guardado atómico (tmp + rename) y carga de documentos
     │   └── system/               ← entorno: health check de LaTeX y detección/instalación de motores
+    │       └── health.go         ← HealthStatus: herramientas de LaTeX y perfil de hardware
     ├── build/                    ← iconos y metadatos de empaquetado por SO
     └── frontend/                 ← Svelte 5 + Vite 8
         ├── index.html
         ├── src/
         │   ├── main.js           ← monta App.svelte
-        │   ├── App.svelte        ← shell de la UI
+        │   ├── App.svelte        ← shell: barra superior + editor (izquierda) + vista previa (derecha)
+        │   ├── components/
+        │   │   ├── Editor.svelte      ← CodeMirror 6 (one-dark, stex) + autoguardado con debounce
+        │   │   ├── HealthPanel.svelte ← modal "Estado del sistema"
+        │   │   └── Preview.svelte     ← iframe del PDF + estado y log de compilación
         │   └── style.css         ← estilos globales mínimos
         └── wailsjs/              ← GENERADO por Wails: no editar a mano
             ├── go/main/App.js    ← bindings de los métodos de App
+            ├── go/models.ts      ← tipos TS de los structs de Go (p. ej. system.HealthStatus)
             └── runtime/          ← EventsOn, EventsEmit, etc.
 ```
 
@@ -52,6 +63,10 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 | Tipo    | Nombre                | Dirección  | Firma / payload | Sección |
 |---------|-----------------------|------------|-----------------|---------|
 | Binding | `SystemHealthCheck`   | UI → Go    | `() → system.HealthStatus` = `{ hasXeLaTeX, hasLatexmk, hasBiber: boolean; totalRAMGB, freeDiskSpaceGB: number; cpuCores: number; hardwareTier: string; hardwareTierId: 'basic'\|'advanced'\|'unknown'; warnings: string[] }` | 2 |
+| Binding | `SaveContent`         | UI → Go    | `(content: string) → main.SaveResult` = `{ saved, compileSuccess: boolean; compileLogs: string }`. Guarda en `workspace/main.tex` y luego compila. La promesa solo se rechaza si falla el guardado; un error de compilación es un resultado normal | 4 |
+| HTTP    | `/__preview/document.pdf` | WebView → Go | `GET` → PDF del documento actual (`Cache-Control: no-store`, admite Range; 404 si todavía no existe). La UI agrega `?t=<timestamp>` para forzar la recarga | 4 |
+| Binding | `LoadContent`         | UI → Go    | `() → string` (`""` si el archivo todavía no existe) | 3 |
+| Binding | `DocumentPath`        | UI → Go    | `() → string`: ruta absoluta del documento actual | 3 |
 
 ## 4. Motores LaTeX (requisito de producto)
 - **Detección (`internal/system/health.go`):** primero `exec.LookPath` y, si falla, `fallbackDirs` (`/Library/TeX/texbin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`) más `/usr/local/texlive/*/bin/*`. Motivo: en macOS, una app abierta desde el Finder o el Dock **no hereda el PATH de la shell**.
@@ -63,6 +78,21 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 - `internal/system/health.go` usa `runtime.NumCPU()`, `gopsutil/v3/mem` (RAM total, en GB binarios) y `gopsutil/v3/disk` (espacio libre en `/`, en GB decimales como Finder).
 - **Tier:** si la RAM es menor a 8 GB → `basic` (solo API en la nube); si es de 8 GB o más → `advanced` (IA local tipo Ollama); si no se pudo leer → `unknown`.
 - **Errores:** cada medición es independiente. Si una falla, su campo queda en 0 y se agrega un mensaje en `warnings`; el binding nunca rechaza la promesa por una lectura de hardware.
+
+## 4.2 Editor y autoguardado (Módulos 2 y 4)
+- **CodeMirror 6** con un setup mínimo hecho a mano (sin `basicSetup`): números de línea, historial, `defaultKeymap`, `indentWithTab`, `bracketMatching`, modo `stex` (`@codemirror/legacy-modes`) y tema `one-dark`.
+- **Debounce:** cada cambio solo reinicia un `setTimeout` de 1000 ms; al vencer, el documento se convierte en texto **una sola vez** y se envía con `SaveContent`. Nunca hay más de un guardado en curso: los que llegan mientras tanto se juntan en un único guardado posterior con el contenido más reciente. Cmd/Ctrl+S guarda de inmediato.
+- **Seguridad de datos:** si falla `LoadContent`, el editor **no se monta**, para que el autoguardado no sobrescriba el archivo con un documento vacío.
+- **Pendiente:** el guardado al cerrar la ventana (`OnBeforeClose`) y la ruta del documento cuando la app se abre desde el Finder (el directorio de trabajo es `/`).
+
+## 4.3 Pipeline de compilación (Módulo 3)
+- `internal/compiler.CompileLaTeX(workdir, filename)` ejecuta `latexmk -xelatex -interaction=nonstopmode -halt-on-error <filename>` (sin shell).
+  - **Resolución de binarios:** `system.FindBinary` encuentra latexmk; su directorio se antepone al `PATH` del subproceso para que latexmk encuentre xelatex y biber aunque la app se abra desde el Finder.
+  - **Seguridad:** el nombre de archivo no puede tener directorios ni empezar con `-`. Las ejecuciones van en serie (mutex) y tienen un límite de 60 s.
+  - **Logs:** stdout y stderr van al mismo buffer. Si falla, primero los bloques `! ...` hasta `l.<n>` y luego la cola de la salida (máximo 32 KB).
+- **Flujo:** autoguardado → `SaveContent` → `SaveDocument` → `CompileLaTeX` → `SaveResult` → la UI actualiza `pdfTimestamp` y el iframe recarga.
+- **Visor PDF (decisión provisional):** `<iframe>` nativo del WebView. En macOS, WKWebView muestra PDFs de forma nativa. **En Linux, WebKitGTK no lo hace:** habrá que usar PDF.js antes de dar soporte a Linux.
+- **Test de integración opcional:** `CREATIVE_INK_LATEX_TEST=1 go test ./internal/compiler -run Integration -v` (lo ejecuta el programador).
 
 ## 5. Skills / conocimiento requerido
 
