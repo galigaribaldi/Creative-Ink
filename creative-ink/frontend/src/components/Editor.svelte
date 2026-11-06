@@ -14,6 +14,7 @@
   import { stex } from '@codemirror/legacy-modes/mode/stex'
   import { oneDark } from '@codemirror/theme-one-dark'
   import { DocumentPath, LoadContent, SaveContent } from '../../wailsjs/go/main/App.js'
+  import { registerEditor } from '../lib/actions.js'
 
   // Inactivity window before autosaving. Each successful save also queues a
   // background compilation in Go, reported through Wails events (see App.svelte).
@@ -122,6 +123,8 @@
 
   onMount(() => {
     let destroyed = false
+    /** @type {(() => void) | undefined} */
+    let unregister
 
     ;(async () => {
       try {
@@ -130,6 +133,11 @@
         docPath = path
         createView(content)
         status = 'saved'
+        // Lets the ActionBar save/compile without a reference to CodeMirror.
+        unregister = registerEditor({
+          save: flush,
+          isDirty: () => status === 'dirty' || status === 'saving'
+        })
         // Save once on start so Go compiles what is on disk and the preview is not empty.
         if (content.trim()) flush()
       } catch (err) {
@@ -142,6 +150,7 @@
 
     return () => {
       destroyed = true
+      unregister?.()
       if (timer) flush() // persist edits still inside the debounce window
       view?.destroy()
       view = null
