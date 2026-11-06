@@ -1,4 +1,5 @@
 <script>
+  import CompileLog from './components/CompileLog.svelte'
   import Editor from './components/Editor.svelte'
   import HealthPanel from './components/HealthPanel.svelte'
   import Preview from './components/Preview.svelte'
@@ -22,7 +23,7 @@
       compileState = 'success'
       pdfTimestamp = Date.now()
     } else {
-      // Keep showing the last good PDF (pdfTimestamp unchanged) under the error.
+      // pdfTimestamp is left untouched, so the canvas keeps the last valid PDF.
       compileState = 'error'
     }
   }
@@ -36,10 +37,15 @@
 
   <div class="workspace">
     <section class="pane editor-pane" aria-label="Editor">
-      <Editor {onsavestart} {onsaved} />
+      <div class="editor-host">
+        <Editor {onsavestart} {onsaved} />
+      </div>
+      {#if compileState === 'error' && compileLogs}
+        <CompileLog logs={compileLogs} />
+      {/if}
     </section>
     <section class="pane" aria-label="Vista previa">
-      <Preview state={compileState} {pdfTimestamp} logs={compileLogs} />
+      <Preview {compileState} {pdfTimestamp} />
     </section>
   </div>
 
@@ -98,6 +104,13 @@
   }
 
   .editor-pane {
+    display: flex;
+    flex-direction: column;
     border-right: 1px solid #333;
+  }
+
+  .editor-host {
+    flex: 1;
+    min-height: 0;
   }
 </style>
