@@ -48,9 +48,86 @@ func TestExtractTeXErrors(t *testing.T) {
 	}
 }
 
+// Real xelatex .log fragment for a missing package in nonstopmode: the first
+// error has no "l.<n>", the second has one plus a continuation line.
+const sampleMissingPackage = `(./main.tex
+LaTeX2e <2025-11-01>
+
+! LaTeX Error: File ` + "`foo.sty'" + ` not found.
+
+Type X to quit or <RETURN> to proceed,
+or enter new name. (Default extension: sty)
+
+Enter file name: 
+! Emergency stop.
+<read *> 
+         
+l.3 \usepackage
+               {foo}^^M
+No pages of output.
+`
+
+func TestExtractTeXErrorsMissingPackage(t *testing.T) {
+	blocks := teXErrorBlocks(sampleMissingPackage)
+	got := strings.Join(blocks, "\n")
+
+	if len(blocks) != 2 {
+		t.Fatalf("want 2 blocks, got %d:\n%s", len(blocks), got)
+	}
+	if !strings.HasPrefix(blocks[0], "! LaTeX Error: File `foo.sty' not found.") {
+		t.Errorf("block 1 = %q", blocks[0])
+	}
+	if strings.Contains(blocks[0], "Emergency stop") {
+		t.Errorf("block 1 must not swallow the next error:\n%s", blocks[0])
+	}
+	if !strings.HasPrefix(blocks[1], "! Emergency stop.") ||
+		!strings.Contains(blocks[1], "l.3 \\usepackage") ||
+		!strings.Contains(blocks[1], "{foo}") {
+		t.Errorf("block 2 must end at l.3 with its continuation line, got:\n%s", blocks[1])
+	}
+	if strings.Contains(got, "No pages of output") {
+		t.Errorf("text after the source reference must be excluded:\n%s", got)
+	}
+}
+
+func TestExtractTeXErrorsIgnoresLookalikes(t *testing.T) {
+	// "l." must be followed by digits to count as a source reference.
+	logs := "! Missing $ inserted.\nl.notaline\nl.12 $x^2\n"
+	got := extractTeXErrors(logs)
+	if !strings.HasSuffix(got, "l.12 $x^2") {
+		t.Fatalf("block must end at l.12, got %q", got)
+	}
+}
+
+func TestSummarizePrefersTeXLog(t *testing.T) {
+	// latexmk may skip the rerun after a failure, leaving no "! " in stdout.
+	stdout := "Latexmk: Nothing to do for 'main.tex'.\nLatexmk: Errors, so I did not complete making targets\n"
+	got := summarize(stdout, sampleFailure)
+
+	if !strings.HasPrefix(got, "! Undefined control sequence.\nl.4 \\foo") {
+		t.Fatalf("errors from the .log must come first, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Latexmk: Errors") {
+		t.Errorf("the latexmk output tail must follow for diagnosis")
+	}
+}
+
+func TestReadTeXLog(t *testing.T) {
+	dir := t.TempDir()
+	if got := readTeXLog(dir, "main.tex"); got != "" {
+		t.Fatalf("missing .log must read as empty, got %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.log"), []byte(sampleFailure), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTeXLog(dir, "main.tex"); got != sampleFailure {
+		t.Fatalf("readTeXLog = %q", got)
+	}
+}
+
 func TestSummarizePutsErrorsFirstAndCapsSize(t *testing.T) {
 	huge := strings.Repeat("x", maxLogBytes*2) + "\n" + sampleFailure
-	got := summarize(huge)
+	got := summarize(huge, "")
 
 	if !strings.HasPrefix(got, "! Undefined control sequence.") {
 		t.Errorf("summary must start with the TeX error, got prefix %q", got[:40])

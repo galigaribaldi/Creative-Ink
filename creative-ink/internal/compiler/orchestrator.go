@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +24,8 @@ const (
 	compileTimeout = 60 * time.Second
 	// maxLogBytes caps the log sent through IPC; the tail is what matters.
 	maxLogBytes = 32 * 1024
-	// errorContextLines is how many lines after a "! ..." TeX error are kept.
+	// errorContextLines is how many lines after a "! ..." TeX error are kept
+	// when no "l.<n>" source reference is found.
 	errorContextLines = 6
 )
 
@@ -33,14 +35,19 @@ var ErrLatexmkNotFound = errors.New("latexmk no está instalado o no se encuentr
 // compileMu serialises runs: two latexmk in the same dir corrupt aux files.
 var compileMu sync.Mutex
 
-// CompileLaTeX runs
+// CompileLaTeX compiles without external cancellation (see CompileLaTeXContext).
+func CompileLaTeX(workdir string, filename string) (string, error) {
+	return CompileLaTeXContext(context.Background(), workdir, filename)
+}
+
+// CompileLaTeXContext runs
 //
 //	latexmk -xelatex -interaction=nonstopmode -halt-on-error <filename>
 //
-// inside workdir. On success it returns a short message. On failure it
-// returns the relevant log (TeX errors first, then the output tail) and a
-// non-nil error.
-func CompileLaTeX(workdir string, filename string) (string, error) {
+// inside workdir. Cancelling ctx (e.g. on app shutdown) kills latexmk.
+// On success it returns a short message. On failure it returns the relevant
+// log (TeX errors first, then the output tail) and a non-nil error.
+func CompileLaTeXContext(parent context.Context, workdir string, filename string) (string, error) {
 	if err := validateFilename(filename); err != nil {
 		return "", err
 	}
@@ -53,7 +60,7 @@ func CompileLaTeX(workdir string, filename string) (string, error) {
 	compileMu.Lock()
 	defer compileMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), compileTimeout)
+	ctx, cancel := context.WithTimeout(parent, compileTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, latexmk,
@@ -63,6 +70,8 @@ func CompileLaTeX(workdir string, filename string) (string, error) {
 	// lacks /Library/TeX/texbin on PATH, so prepend the dir where latexmk lives.
 	cmd.Env = append(os.Environ(),
 		"PATH="+filepath.Dir(latexmk)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// Kill-and-wait bound: orphaned children (xelatex, biber) must not keep
+	// the pipes open after latexmk is killed.
 	cmd.WaitDelay = 2 * time.Second
 
 	// Stdout and Stderr share one buffer to keep their original interleaving.
@@ -71,13 +80,17 @@ func CompileLaTeX(workdir string, filename string) (string, error) {
 	cmd.Stderr = &out
 
 	runErr := cmd.Run()
-	logs := out.String()
+	output := out.String()
 
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return summarize(logs), fmt.Errorf("la compilación superó el límite de %s", compileTimeout)
-	}
-	if runErr != nil {
-		return summarize(logs), fmt.Errorf("latexmk falló: %w", runErr)
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return summarize(output, readTeXLog(workdir, filename)),
+			fmt.Errorf("la compilación superó el límite de %s", compileTimeout)
+	case errors.Is(parent.Err(), context.Canceled):
+		return "", fmt.Errorf("compilación cancelada: %w", context.Canceled)
+	case runErr != nil:
+		return summarize(output, readTeXLog(workdir, filename)),
+			fmt.Errorf("latexmk falló: %w", runErr)
 	}
 	return fmt.Sprintf("Compilación exitosa: %s", pdfName(filename)), nil
 }
@@ -89,6 +102,20 @@ func PDFPath(texPath string) string {
 
 func pdfName(filename string) string {
 	return filepath.Base(PDFPath(filename))
+}
+
+// logPath returns the TeX .log written next to the document.
+func logPath(workdir, filename string) string {
+	return filepath.Join(workdir, strings.TrimSuffix(filename, filepath.Ext(filename))+".log")
+}
+
+// readTeXLog returns the engine's .log, or "" if it cannot be read.
+func readTeXLog(workdir, filename string) string {
+	data, err := os.ReadFile(logPath(workdir, filename))
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // validateFilename accepts only a bare file name: no directories and no
@@ -104,23 +131,42 @@ func validateFilename(filename string) error {
 }
 
 // summarize puts the TeX error blocks first (what the user needs) and then
-// the tail of the raw output, capped at maxLogBytes.
-func summarize(logs string) string {
-	tail := logs
+// the tail of latexmk's output, capped at maxLogBytes.
+//
+// Errors come from the engine's .log when it has any: it is complete, while
+// stdout may lack them (e.g. latexmk skipping a rerun after a previous
+// failure). Otherwise they are extracted from latexmk's own output.
+func summarize(output, texLog string) string {
+	tail := output
 	if len(tail) > maxLogBytes {
 		tail = "…\n" + tail[len(tail)-maxLogBytes:]
 	}
-	errs := extractTeXErrors(logs)
+
+	errs := extractTeXErrors(texLog)
+	if errs == "" {
+		errs = extractTeXErrors(output)
+	}
 	if errs == "" {
 		return tail
 	}
 	return errs + "\n\n──── Salida de latexmk ────\n" + tail
 }
 
-// extractTeXErrors collects TeX error blocks: a line starting with "! "
-// plus the following lines up to the "l.<n>" line that points to the source.
+// sourceRefLine matches TeX's source reference, e.g. "l.42 \foo".
+var sourceRefLine = regexp.MustCompile(`^l\.\d+`)
+
+// extractTeXErrors joins the TeX error blocks of logs (see teXErrorBlocks).
 func extractTeXErrors(logs string) string {
-	lines := strings.Split(logs, "\n")
+	return strings.Join(teXErrorBlocks(logs), "\n\n")
+}
+
+// teXErrorBlocks collects TeX error blocks. A block starts at a line
+// beginning with "! " and ends at the "l.<n>" source reference (plus its
+// continuation line, which holds the rest of the offending source line).
+// Without a reference, it keeps up to errorContextLines lines and never
+// swallows the next "! " error.
+func teXErrorBlocks(logs string) []string {
+	lines := strings.Split(strings.ReplaceAll(logs, "\r\n", "\n"), "\n")
 	var blocks []string
 	for i := 0; i < len(lines); i++ {
 		if !strings.HasPrefix(lines[i], "! ") {
@@ -128,13 +174,34 @@ func extractTeXErrors(logs string) string {
 		}
 		block := []string{lines[i]}
 		for j := i + 1; j < len(lines) && j <= i+errorContextLines; j++ {
-			block = append(block, lines[j])
-			if strings.HasPrefix(lines[j], "l.") {
+			line := lines[j]
+			if strings.HasPrefix(line, "! ") {
+				i = j - 1 // let the outer loop start the next block here
+				break
+			}
+			block = append(block, line)
+			if sourceRefLine.MatchString(line) {
+				// TeX splits the source line at the error point: the rest is on
+				// the next, indented line.
+				if next := j + 1; next < len(lines) && strings.HasPrefix(lines[next], " ") &&
+					strings.TrimSpace(lines[next]) != "" {
+					block = append(block, lines[next])
+					j = next
+				}
 				i = j
 				break
 			}
 		}
-		blocks = append(blocks, strings.Join(block, "\n"))
+		blocks = append(blocks, strings.TrimRight(strings.Join(trimBlankEdges(block), "\n"), " "))
 	}
-	return strings.Join(blocks, "\n\n")
+	return blocks
+}
+
+// trimBlankEdges drops trailing blank lines from a block.
+func trimBlankEdges(block []string) []string {
+	end := len(block)
+	for end > 1 && strings.TrimSpace(block[end-1]) == "" {
+		end--
+	}
+	return block[:end]
 }
