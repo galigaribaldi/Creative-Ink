@@ -18,14 +18,15 @@ func main() {
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:  "Creative-ink",
-		Width:  1024,
-		Height: 768,
+		Width:  1280,
+		Height: 800,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:     assets,
+			Middleware: app.previewMiddleware, // serves the compiled PDF (see preview.go)
 		},
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 255},
 		OnStartup:        app.startup,
-		Bind: []interface{}{
+		Bind: []any{
 			app,
 		},
 	})
