@@ -15,15 +15,8 @@
   import { oneDark } from '@codemirror/theme-one-dark'
   import { DocumentPath, LoadContent, SaveContent } from '../../wailsjs/go/main/App.js'
 
-  /**
-   * @type {{
-   *   onsavestart?: () => void,
-   *   onsaved?: (result: import('../../wailsjs/go/models').main.SaveResult) => void
-   * }}
-   */
-  let { onsavestart, onsaved } = $props()
-
-  // Inactivity window before autosaving (each save also triggers latexmk).
+  // Inactivity window before autosaving. Each successful save also queues a
+  // background compilation in Go, reported through Wails events (see App.svelte).
   const SAVE_DELAY_MS = 1000
 
   const LABELS = {
@@ -72,20 +65,16 @@
 
     saving = true
     status = 'saving'
-    onsavestart?.()
     try {
       // The document is serialised once, at save time, not per keystroke.
-      // Go saves, then compiles, and answers { saved, compileSuccess, compileLogs }.
-      const result = await SaveContent(view.state.doc.toString())
+      // Go saves and answers at once with { saved }; it does not wait for latexmk.
+      await SaveContent(view.state.doc.toString())
       // If the user typed during the save, status is already 'dirty': keep it.
       if (status === 'saving') status = 'saved'
       errorMsg = ''
-      onsaved?.(result)
     } catch (err) {
       status = 'error'
       errorMsg = String(err)
-      // Nothing was written, so nothing was compiled: let the preview know.
-      onsaved?.({ saved: false, compileSuccess: false, compileLogs: `No se pudo guardar: ${err}` })
     } finally {
       saving = false
       if (pending) {
@@ -141,7 +130,7 @@
         docPath = path
         createView(content)
         status = 'saved'
-        // Compile what is already on disk so the preview is not empty on start.
+        // Save once on start so Go compiles what is on disk and the preview is not empty.
         if (content.trim()) flush()
       } catch (err) {
         // Never mount an empty editor if loading failed: the first

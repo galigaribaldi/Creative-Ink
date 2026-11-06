@@ -1,32 +1,44 @@
 <script>
+  import { onDestroy } from 'svelte'
+  import { EventsOn } from '../wailsjs/runtime/runtime.js'
   import CompileLog from './components/CompileLog.svelte'
   import Editor from './components/Editor.svelte'
   import HealthPanel from './components/HealthPanel.svelte'
   import Preview from './components/Preview.svelte'
+
+  // Event names emitted by Go (app.go: EventCompileStarted / EventCompileFinished).
+  const COMPILE_STARTED = 'compile:started'
+  const COMPILE_FINISHED = 'compile:finished'
 
   let showHealth = $state(false)
 
   /** @type {'idle' | 'compiling' | 'success' | 'error'} */
   let compileState = $state('idle')
   let compileLogs = $state('')
-  // Bumped after every successful compilation to reload the PDF iframe.
+  // Bumped after every successful compilation to reload the PDF canvas.
   let pdfTimestamp = $state(0)
 
-  function onsavestart() {
-    compileState = 'compiling'
-  }
+  // Subscribed during component init, i.e. before the Editor mounts and
+  // triggers its first save, so no event can be missed.
+  const unsubscribers = [
+    EventsOn(COMPILE_STARTED, () => {
+      compileState = 'compiling'
+    }),
+    /** @param {{ success: boolean, logs: string, durationMs: number }} result */
+    EventsOn(COMPILE_FINISHED, (result) => {
+      compileLogs = result.logs
+      if (result.success) {
+        compileState = 'success'
+        pdfTimestamp = Date.now()
+      } else {
+        // pdfTimestamp is left untouched, so the canvas keeps the last valid PDF.
+        compileState = 'error'
+      }
+    })
+  ]
 
-  /** @param {import('../wailsjs/go/models').main.SaveResult} result */
-  function onsaved(result) {
-    compileLogs = result.compileLogs
-    if (result.saved && result.compileSuccess) {
-      compileState = 'success'
-      pdfTimestamp = Date.now()
-    } else {
-      // pdfTimestamp is left untouched, so the canvas keeps the last valid PDF.
-      compileState = 'error'
-    }
-  }
+  // Without this, every hot reload would stack another set of listeners.
+  onDestroy(() => unsubscribers.forEach((off) => off()))
 </script>
 
 <div class="shell">
@@ -38,7 +50,7 @@
   <div class="workspace">
     <section class="pane editor-pane" aria-label="Editor">
       <div class="editor-host">
-        <Editor {onsavestart} {onsaved} />
+        <Editor />
       </div>
       {#if compileState === 'error' && compileLogs}
         <CompileLog logs={compileLogs} />
