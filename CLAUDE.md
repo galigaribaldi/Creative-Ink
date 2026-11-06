@@ -23,6 +23,9 @@ Un editor LaTeX funcional "al estilo VS Code": explorador de archivos, editor, c
 - **Visor PDF decidido:** PDF.js (`pdfjs-dist`) en `<canvas>`; el PDF lo sirve el middleware de Go (`preview.go`).
 - Decisiones **pendientes** (no las asumas, espera instrucciones): modelo de plugins, migración a TypeScript, licencia y patrón final de IPC.
 
+## Skills del proyecto (`.claude/skills/`)
+- **`ui-svelte-architect`**: diseño de layouts y componentes Svelte 5 (ActionBar, Sidebar, Workspace, paneles) y estado del frontend sin sobrecargar el IPC. Úsala para cualquier trabajo de UI. Para verificar: `node .claude/skills/ui-svelte-architect/scripts/check-svelte.mjs` (solo lectura).
+
 ## Reglas de trabajo (OBLIGATORIAS)
 Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permiso falte:
 1. **Git:** NO ejecutar `git add`, `git rm`, `git commit`, `git push` ni nada que publique ramas o reescriba historia. Solo se permiten `git checkout`/`switch`/`stash`/`branch`, y siempre **con autorización previa**. Lectura (`status`, `diff`, `log`) libre.
