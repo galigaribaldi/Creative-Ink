@@ -40,4 +40,16 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] Fix del template: `@sveltejs/vite-plugin-svelte` subió de `^6` a `^7.3.0` (la v6 no acepta Vite 8 y daba ERESOLVE)
   - [x] Fix del template: en `frontend/jsconfig.json` se quitaron opciones obsoletas de TS 6 (`moduleResolution: Node` → `Bundler`, sin `importsNotUsedAsValues` ni `baseUrl`)
   - [x] Validación del programador: `wails dev` abre la ventana y el botón responde
-- [ ] **Sección 2** — pendiente de instrucciones
+- [x] **Sección 2 (Módulo 1) — Health check real y perfil de hardware** (validada por el programador con `wails dev` el 2026-11-05)
+  - [x] `internal/system/health.go`: `HealthStatus{HasXeLaTeX, HasLatexmk, HasBiber}` con json tags en camelCase, y `CheckHealth()` (LookPath más rutas de respaldo)
+  - [x] `internal/system/health_test.go`: tests unitarios (`go test ./internal/...`)
+  - [x] `App.SystemHealthCheck() system.HealthStatus`
+  - [x] `App.svelte`: tarjetas con ✅ Instalado / ❌ No encontrado y estado de carga
+  - [x] Bindings regenerados (`wailsjs/go/models.ts` existe)
+  - [x] **Parte 2: perfil de hardware**
+    - [x] Programador: `go get github.com/shirou/gopsutil/v3/...` (v3.24.5)
+    - [x] `HealthStatus` + `TotalRAMGB`, `CPUCores`, `FreeDiskSpaceGB`, `HardwareTier`, `HardwareTierID` y `Warnings`
+    - [x] Tests de tier y de degradación cuando fallan las mediciones
+    - [x] `App.svelte`: secciones "Herramientas de LaTeX" y "Recursos de Hardware", con badge de tier
+    - [x] Validación del programador: en la UI se ven 48 GB, 12 núcleos, 737.4 GB libres y el tier Avanzado
+- [ ] **Siguiente sección** — pendiente de instrucciones
