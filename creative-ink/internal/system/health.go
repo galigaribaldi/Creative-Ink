@@ -153,17 +153,24 @@ var fallbackGlobs = []string{
 	"/usr/local/texlive/*/bin/*",
 }
 
-// binaryExists looks the binary up on PATH first and then in fallback dirs.
-func binaryExists(name string) bool {
-	if _, err := exec.LookPath(name); err == nil {
-		return true
+// FindBinary returns the absolute path of an executable, looking it up on
+// PATH first and then in well-known TeX/Homebrew dirs (see fallbackDirs).
+func FindBinary(name string) (string, bool) {
+	if path, err := exec.LookPath(name); err == nil {
+		return path, true
 	}
 	for _, dir := range candidateDirs() {
-		if isExecutable(filepath.Join(dir, name)) {
-			return true
+		path := filepath.Join(dir, name)
+		if isExecutable(path) {
+			return path, true
 		}
 	}
-	return false
+	return "", false
+}
+
+func binaryExists(name string) bool {
+	_, ok := FindBinary(name)
+	return ok
 }
 
 func candidateDirs() []string {
