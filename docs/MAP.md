@@ -99,8 +99,23 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
   - `loadPdf(url)` hace `fetch(url, {cache:'no-store'})` → `getDocument({ data })`. No se usa `getDocument(url)` porque la capa de red de PDF.js (Range/streaming) no es fiable sobre el esquema `wails://`.
   - **Recarga:** `pdfTimestamp` cambia → `$effect` → `reload()`. Cada carga recibe un número de secuencia y las viejas se descartan. La página se dibuja en un canvas fuera de pantalla y se copia al visible de una vez (sin parpadeo). Si algo falla, el canvas conserva el último PDF válido.
   - Al redimensionar el panel, `ResizeObserver` vuelve a dibujar con un debounce de 150 ms. Se tiene en cuenta `devicePixelRatio` para pantallas Retina.
+  - **Ciclo de vida (pdfjs-dist 6, verificado en el código fuente):**
+    - `PDFDocumentProxy` **no tiene `destroy()`** en la v6. Un documento se libera con `doc.loadingTask.destroy()` (es asíncrono); `releasePdf()` lo envuelve sin lanzar errores.
+    - **Un solo `PDFWorker` compartido**, que se pasa en `getDocument({ worker })`. Sin él, cada `getDocument` crea su propio Web Worker. Con él, `loadingTask.destroy()` libera el documento (páginas, fuentes y estado en el worker) pero conserva el hilo.
+    - `disableWorkerRendering: true`, explícito: la v6 intentaría un segundo *renderer worker* por documento.
+    - **Propiedad:** solo existe un documento vivo (`pdfDoc`). Uno nuevo se promueve (y se libera el anterior) o se libera en el `finally`, sin excepción.
+    - Antes de liberar un documento, se cancela su render (`renderTask.cancel()`), como exige PDF.js.
+  - **Retención de página:** `currentPageNumber` (por defecto 1) se conserva entre compilaciones y se ajusta a `numPages` si el PDF nuevo tiene menos páginas. Todavía no hay botones de navegación.
   - **Si WebKitGTK antiguo falla con la build moderna:** usar `pdfjs-dist/legacy/build/pdf.mjs`.
 - **Test de integración opcional:** `CREATIVE_INK_LATEX_TEST=1 go test ./internal/compiler -run Integration -v` (lo ejecuta el programador).
+
+## 4.4 Deuda técnica conocida (análisis del 2026-11-05)
+1. **Guardar y compilar están acoplados en `SaveContent`.** El autoguardado espera a que latexmk termine (hasta 60 s de timeout). Mientras tanto, lo que se escribe no llega al disco, porque el frontend solo permite un guardado en curso.
+   - **Propuesta:** que `SaveContent` solo guarde y responda de inmediato. La compilación se lanzaría en Go de forma asíncrona, juntando las peticiones (si llega otra mientras compila, se ejecuta una sola vez más con el contenido final), y avisaría con eventos de Wails (`compile:started` / `compile:finished`), tal como prevé la regla de capas.
+2. **Se compila con cada pausa de 1 s.** Convendría un debounce propio para la compilación (por ejemplo 2–3 s), además de Cmd+S para compilar al instante.
+3. **No se guarda al cerrar la ventana:** falta `OnBeforeClose` para hacer un flush en Go.
+4. **`workspace/` depende del directorio de trabajo:** si la app se abre desde el Finder, ese directorio es `/`. Se resuelve con "abrir carpeta/archivo".
+5. **El PDF se carga entero en memoria (`fetch` → `data`).** Basta para documentos normales. Para PDFs de cientos de MB habría que usar `PDFDataRangeTransport`.
 
 ## 5. Skills / conocimiento requerido
 

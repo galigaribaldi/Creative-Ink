@@ -1,6 +1,6 @@
 <script>
   import { onMount, untrack } from 'svelte'
-  import { loadPdf } from '../lib/pdf.js'
+  import { loadPdf, releasePdf } from '../lib/pdf.js'
 
   // Served by the Go AssetServer middleware (see preview.go: previewRoute).
   const PREVIEW_URL = '/__preview/document.pdf'
@@ -28,17 +28,22 @@
   /** @type {HTMLCanvasElement} */
   let canvas
 
-  // Non-reactive rendering bookkeeping.
+  // ── Ownership: exactly one live document at a time ───────────────────────
+  // `pdfDoc` is the document currently on screen. A newly loaded document is
+  // either promoted to `pdfDoc` (and the previous one released) or released
+  // itself. Nothing else holds documents, so none can leak.
   /** @type {import('pdfjs-dist').PDFDocumentProxy | null} */
-  let pdfDoc = null // last successfully rendered document
+  let pdfDoc = null
   /** @type {import('pdfjs-dist').RenderTask | null} */
   let renderTask = null
   let loadSeq = 0 // identifies the latest reload; stale ones are discarded
   let renderSeq = 0 // identifies the latest render; stale ones are discarded
   let loading = false
 
-  let hasPage = $state(false)
+  // Page the user is looking at; kept across recompilations (1-based).
+  let currentPageNumber = $state(1)
   let pageCount = $state(0)
+  let hasPage = $state(false)
   let renderError = $state('')
 
   // Every successful compilation bumps pdfTimestamp in App → new URL → reload.
@@ -48,43 +53,59 @@
     untrack(() => reload(url))
   })
 
-  /** Loads the new PDF and swaps it in only once its first page is drawn. */
+  /** Clamps a page number to [1, numPages] (the new PDF may be shorter). */
+  const clampPage = (n, numPages) => Math.min(Math.max(1, n), numPages)
+
+  /**
+   * Loads the new PDF, draws the remembered page and only then swaps it in.
+   * Until that moment the canvas keeps showing the previous document.
+   */
   async function reload(url) {
     const seq = ++loadSeq
     loading = true
+    /** @type {import('pdfjs-dist').PDFDocumentProxy | null} */
+    let doc = null
     try {
-      const doc = await loadPdf(url)
-      if (seq !== loadSeq) return void doc.destroy() // a newer compile won
+      doc = await loadPdf(url)
+      if (seq !== loadSeq) return // a newer compilation won
 
-      const drawn = await renderFirstPage(doc)
-      if (seq !== loadSeq || !drawn) return void doc.destroy()
+      const target = clampPage(currentPageNumber, doc.numPages)
+      const drawn = await renderPage(doc, target)
+      if (seq !== loadSeq || !drawn) return
 
+      // Promote: the new document is now the one on screen.
       const previous = pdfDoc
       pdfDoc = doc
-      pageCount = doc.numPages
+      doc = null // ownership transferred; do not release below
+      currentPageNumber = target
+      pageCount = pdfDoc.numPages
       renderError = ''
-      previous?.destroy()
+      // Its render (if any) was cancelled by renderPage(), so it is safe to free.
+      void releasePdf(previous)
     } catch (err) {
       // The canvas still holds the last valid PDF; only report the problem.
       if (seq === loadSeq) renderError = err?.message ?? String(err)
     } finally {
+      // Any document that was not promoted is released here, on every path.
+      if (doc) void releasePdf(doc)
       if (seq === loadSeq) loading = false
     }
   }
 
   /**
-   * Renders page 1 into an offscreen canvas, then blits it onto the visible
-   * one in a single step: the previous page stays on screen until the new
-   * one is complete (no blank frame, no flicker).
+   * Renders one page into an offscreen canvas, then blits it onto the visible
+   * one in a single step (no blank frame, no flicker).
    *
    * @param {import('pdfjs-dist').PDFDocumentProxy} doc
+   * @param {number} pageNumber 1-based
    * @returns {Promise<boolean>} false if superseded or cancelled
    */
-  async function renderFirstPage(doc) {
+  async function renderPage(doc, pageNumber) {
     const seq = ++renderSeq
+    // Never let two renders run: cancel the previous one before starting.
     renderTask?.cancel()
 
-    const page = await doc.getPage(1)
+    const page = await doc.getPage(pageNumber)
     if (seq !== renderSeq) return false
 
     const dpr = window.devicePixelRatio || 1
@@ -96,14 +117,15 @@
     offscreen.width = Math.floor(viewport.width)
     offscreen.height = Math.floor(viewport.height)
 
-    renderTask = page.render({ canvas: offscreen, viewport })
+    const task = page.render({ canvas: offscreen, viewport })
+    renderTask = task
     try {
-      await renderTask.promise
+      await task.promise
     } catch (err) {
       if (err?.name === 'RenderingCancelledException') return false
       throw err
     } finally {
-      if (seq === renderSeq) renderTask = null
+      if (renderTask === task) renderTask = null
     }
     if (seq !== renderSeq) return false
 
@@ -112,19 +134,23 @@
     canvas.style.width = `${offscreen.width / dpr}px`
     canvas.style.height = `${offscreen.height / dpr}px`
     canvas.getContext('2d').drawImage(offscreen, 0, 0)
+    // Free the offscreen backing store now instead of waiting for GC.
+    offscreen.width = offscreen.height = 0
     hasPage = true
     return true
   }
 
   onMount(() => {
-    // Re-render the current document at the new width when the pane resizes.
+    // Re-render the current page at the new width when the pane resizes.
     let timer
     const observer = new ResizeObserver(() => {
       clearTimeout(timer)
       timer = setTimeout(() => {
         // An in-flight reload will render at the new width by itself.
         if (pdfDoc && !loading) {
-          renderFirstPage(pdfDoc).catch((err) => (renderError = err?.message ?? String(err)))
+          renderPage(pdfDoc, currentPageNumber).catch(
+            (err) => (renderError = err?.message ?? String(err))
+          )
         }
       }, RESIZE_DEBOUNCE_MS)
     })
@@ -133,9 +159,9 @@
     return () => {
       clearTimeout(timer)
       observer.disconnect()
-      loadSeq++ // invalidate in-flight loads
-      renderTask?.cancel()
-      pdfDoc?.destroy()
+      loadSeq++ // in-flight loads become stale and release their own document
+      renderTask?.cancel() // cancel before destroying, as PDF.js requires
+      void releasePdf(pdfDoc)
       pdfDoc = null
     }
   })
@@ -145,13 +171,13 @@
   <header class="bar">
     <span>
       Vista previa PDF
-      {#if pageCount}<span class="pages">· página 1 de {pageCount}</span>{/if}
+      {#if pageCount}<span class="pages">· página {currentPageNumber} de {pageCount}</span>{/if}
     </span>
     <span class="state-{compileState}">{LABELS[compileState]}</span>
   </header>
 
   <div class="viewer" bind:this={viewer}>
-    <canvas bind:this={canvas} class:hidden={!hasPage} aria-label="Primera página del PDF compilado"
+    <canvas bind:this={canvas} class:hidden={!hasPage} aria-label="Página {currentPageNumber} del PDF compilado"
     ></canvas>
     {#if !hasPage}
       <p class="placeholder">

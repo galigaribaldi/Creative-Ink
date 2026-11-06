@@ -34,6 +34,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 ## Gotchas técnicos
 - **Svelte 5 (runes):** en `<!-- svelte-ignore a, b -->` los códigos se separan con **coma**. Después de un espacio, el compilador trata el resto como comentario.
 - **Svelte 5:** no llames `state` (ni `props`, `derived`, `effect`) a una prop o variable si usas la runa correspondiente: `$state` se interpretaría como un *store*.
+- **pdfjs-dist 6:** `PDFDocumentProxy.destroy()` **no existe**. Se libera con `doc.loadingTask.destroy()` (vía `releasePdf()` en `src/lib/pdf.js`). Usa siempre el `PDFWorker` compartido: sin él, cada documento crea un Web Worker nuevo.
 - **Template de Wails v2.17.1:** venía con `vite-plugin-svelte@6` (no acepta Vite 8), con `new App()` (Svelte 4) y con un `jsconfig` obsoleto. Ya está corregido.
 
 ## Estado actual (actualizar al cerrar cada sección)
@@ -81,4 +82,6 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] `src/lib/pdf.js`: worker local con `?url` y `loadPdf(url)` (fetch → `getDocument({data})`)
   - [x] `Preview.svelte`: página 1 en `<canvas>`, doble buffer, cargas con secuencia, `ResizeObserver` y soporte HiDPI
   - [x] `CompileLog.svelte`: log de LaTeX debajo del editor; se vuelve a abrir con cada error nuevo
+  - [x] Fix: liberación de documentos con `loadingTask.destroy()` + `PDFWorker` compartido (antes cada compilación dejaba vivo un worker y su documento)
+  - [x] Retención de página: `currentPageNumber` se conserva entre compilaciones (ajustado a `numPages`)
   - [ ] Validación del programador: reiniciar `wails dev`
