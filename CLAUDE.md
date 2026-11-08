@@ -1,6 +1,6 @@
 # Creative-ink — Contexto para Claude
 
-Editor LaTeX de escritorio, nativo, ultraligero y modular, para **macOS y Linux**.
+Editor LaTeX de escritorio, nativo, ultraligero y modular, para **macOS, Linux y Windows** (Windows entró en el alcance el 2026-11-07).
 Este repositorio es el **"Repo 1" (Core)**. Los plugins vivirán en repos externos más adelante.
 
 Mapa de arquitectura y skills requeridas: @docs/MAP.md
@@ -20,6 +20,7 @@ Un editor LaTeX funcional "al estilo VS Code": explorador de archivos, editor, c
 - La compilación usa **latexmk** por defecto, con un motor seleccionable: `pdflatex`, `xelatex` o `lualatex`.
 - La app debe **detectar** los motores instalados (health check en `internal/system/`) y **ofrecer instalarlos** si faltan. La instalación siempre la confirma el usuario.
 - **Editor decidido:** CodeMirror 6 (sin `basicSetup`; las extensiones se eligen a mano en `Editor.svelte`).
+- **Repositorio central** `My Creative Ink Repository`: en el **primer arranque** el usuario elige "Solo para mí" (sus Documentos) o "Para todos los usuarios" (Documentos compartidos; no existe en Linux). Go calcula la ruta según el sistema operativo y guarda la elección en la configuración del usuario.
 - **Un solo archivo activo** (sin pestañas, por minimalismo); se compila el `.tex` activo.
 - **Visor PDF decidido:** PDF.js (`pdfjs-dist`) en `<canvas>`; el PDF lo sirve el middleware de Go (`preview.go`).
 - Decisiones **pendientes** (no las asumas, espera instrucciones): modelo de plugins, migración a TypeScript, licencia y patrón final de IPC.
@@ -110,4 +111,14 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] Eventos `compile:*` con `file`; diálogos inyectables; documento inicial en `./workspace` si falta
   - [x] Frontend: `lib/workspace.svelte.js`, `FileTreeItem.svelte`, explorador, botones Abrir carpeta y Guardar como, ⌘O y ⇧⌘S
   - [x] `Editor` cambia de archivo con `setState` sin desmontarse; guarda en el archivo anterior antes de cambiar
+  - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 9 — Repositorio central multiplataforma** (deuda técnica #4; código listo, falta validar con `wails dev`)
+  - [x] `core.PrepareRepository(dir, starter, shared)`: `MkdirAll 0755` (`0777` + sticky en modo compartido, salvo Windows), `main.tex` inicial con `O_EXCL` solo si no hay `.tex`
+  - [x] `system/platform.go` + `documents_{darwin,linux,windows,other}.go`: sistema operativo y Documentos reales (macOS `~/Documents` y `/Users/Shared`; Linux XDG `user-dirs.dirs`; Windows Known Folders `FOLDERID_Documents` y `FOLDERID_PublicDocuments`), más avisos de iCloud y OneDrive
+  - [x] `core/settings.go`: elección guardada en `<UserConfigDir>/creative-ink/settings.json`
+  - [x] `App`: sin `./workspace`. Sin configuración → `GetWorkspace` devuelve `needsSetup` y no crea nada. Bindings `GetRepositoryOptions` y `SetupRepository(scope)`; el diagnóstico incluye `repository`
+  - [x] Frontend: `RepositorySetup.svelte` (primer arranque) y sección "Sistema y repositorio" en `HealthPanel`
+  - [x] `go vet` con `GOOS=linux` y `GOOS=windows` limpio
+  - [x] Tests con `HOME` temporal y `t.Chdir` (simula el arranque desde el Finder); `go test -race ./...` limpio
+  - [x] `.gitignore` raíz: `*.pdf`, `*.aux`, `*.log`, `*.fls`, `*.fdb_latexmk`, `*.xdv`, `*.synctex.gz` y demás auxiliares de LaTeX
   - [ ] Validación del programador: reiniciar `wails dev`

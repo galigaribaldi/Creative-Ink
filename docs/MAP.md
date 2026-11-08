@@ -15,7 +15,6 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     ├── app.go                    ← struct App: ÚNICA fachada IPC expuesta al frontend
     ├── preview.go                ← middleware del AssetServer: sirve el PDF en /__preview/document.pdf
     ├── wails.json                ← configuración del proyecto Wails
-    ├── workspace/main.tex        ← carpeta abierta por defecto al iniciar (ignorada por git); se crea un documento inicial si falta
     ├── go.mod
     ├── internal/                 ← lógica Go no importable desde fuera del módulo
     │   ├── compiler/
@@ -23,9 +22,12 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     │   │   └── scheduler.go      ← Scheduler: compilación en segundo plano, una a la vez, juntando ráfagas
     │   ├── core/                 ← dominio: proyectos, archivos, (futuro) plugins
     │   │   ├── file_manager.go   ← FileManager: guardado atómico (tmp + rename) y carga de documentos
-    │   │   └── workspace.go      ← ScanTree (árbol con límites), ResolveInFolder (rutas dentro de la carpeta), DefaultTeXFile
+    │   │   ├── workspace.go      ← ScanTree, ResolveInFolder, DefaultTeXFile, PrepareRepository
+    │   │   └── settings.go       ← elección del primer arranque en <UserConfigDir>/creative-ink/settings.json
     │   └── system/               ← entorno: health check de LaTeX y detección/instalación de motores
-    │       └── health.go         ← HealthStatus: herramientas de LaTeX y perfil de hardware
+    │       ├── health.go         ← HealthStatus: herramientas de LaTeX, hardware y repositorio
+    │       ├── platform.go       ← RepositoryOptions por SO, parser de XDG user-dirs
+    │       └── documents_<os>.go ← Documentos reales: darwin, linux (XDG), windows (Known Folders), other
     ├── build/                    ← iconos y metadatos de empaquetado por SO
     └── frontend/                 ← Svelte 5 + Vite 8
         ├── index.html
@@ -39,7 +41,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   │   ├── Workspace.svelte   ← Editor | Preview (+ CompileLog bajo el editor); solo layout
         │   │   ├── Editor.svelte      ← CodeMirror 6 (one-dark, stex) + autoguardado con debounce
         │   │   ├── CompileLog.svelte  ← panel de errores de LaTeX debajo del editor
-        │   │   ├── HealthPanel.svelte ← modal "Estado del sistema"
+        │   │   ├── HealthPanel.svelte ← modal "Estado del sistema" (incluye "Sistema y repositorio")
+        │   │   ├── RepositorySetup.svelte ← primer arranque: "Solo para mí" / "Para todos los usuarios"
         │   │   └── Preview.svelte     ← PDF.js en <canvas>, doble buffer, conserva la página al recargar
         │   ├── lib/
         │   │   ├── ui.svelte.js          ← estado visual ($state): sidebarOpen, activeTool, healthOpen. Nunca va a Go
@@ -53,6 +56,23 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
             ├── go/models.ts      ← tipos TS de los structs de Go (p. ej. system.HealthStatus)
             └── runtime/          ← EventsOn, EventsEmit, etc.
 ```
+
+**Fuera del repo, en el sistema operativo del usuario:**
+
+El repositorio central `My Creative Ink Repository` se crea **la primera vez que se abre la app**. Una pantalla de bienvenida (`RepositorySetup.svelte`) muestra el sistema detectado y las rutas propuestas, y el usuario elige el ámbito:
+
+| SO | "Solo para mí" (`user`) | "Para todos los usuarios" (`shared`) | Cómo se calcula |
+|----|-------------------------|--------------------------------------|-----------------|
+| macOS | `~/Documents/My Creative Ink Repository` | `/Users/Shared/My Creative Ink Repository` | Rutas fijas del sistema |
+| Linux | `<XDG_DOCUMENTS_DIR>/My Creative Ink Repository` (p. ej. `~/Documentos/…`) | **No disponible** (no hay una carpeta compartida estándar sin `sudo`) | `$XDG_CONFIG_HOME/user-dirs.dirs`; si falta, `~/Documents` |
+| Windows | `<FOLDERID_Documents>\My Creative Ink Repository` (puede estar en OneDrive) | `<FOLDERID_PublicDocuments>\My Creative Ink Repository` (normalmente `C:\Users\Public\Documents`) | Known Folders (`golang.org/x/sys/windows`), nunca `%USERPROFILE%` a mano |
+
+- **Avisos del diagnóstico:** en macOS, si Documentos se sincroniza con iCloud; en Windows, si Documentos está en OneDrive (cada compilación subiría `.aux`/`.pdf`). En Linux, cuando la carpeta XDG no es `~/Documents`.
+- **Por qué en el primer arranque y no en el instalador:** Wails v2 solo genera instalador en Windows (NSIS); en macOS es un `.app` y en Linux un binario. El primer arranque funciona igual en los tres sistemas.
+- **La ruta la decide Go:** el frontend solo envía `"user"` o `"shared"` a `SetupRepository`; los ámbitos desconocidos o no disponibles se rechazan.
+- **Creación:** `core.PrepareRepository` con `MkdirAll(…, 0755)`. En modo compartido, la carpeta pasa a `0777` + sticky (como `/Users/Shared`: todos pueden crear documentos y solo su dueño puede borrarlos); en Windows mandan las ACL de Documentos públicos. Lleva un `main.tex` inicial con `O_EXCL` solo si no hay ningún `.tex`: **nunca sobrescribe**.
+- **Elección guardada** por usuario en `<os.UserConfigDir()>/creative-ink/settings.json` (macOS `~/Library/Application Support`, Linux `~/.config`, Windows `%AppData%`). Si el archivo está corrupto, se vuelve a preguntar.
+- El usuario puede abrir cualquier otra carpeta con ⌘O; el repositorio central es solo el punto de partida.
 
 ## 2. Reglas de capas
 
@@ -78,8 +98,10 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 
 | Tipo    | Nombre                | Dirección  | Firma / payload | Sección |
 |---------|-----------------------|------------|-----------------|---------|
-| Binding | `SystemHealthCheck`   | UI → Go    | `() → system.HealthStatus` = `{ hasXeLaTeX, hasLatexmk, hasBiber: boolean; totalRAMGB, freeDiskSpaceGB: number; cpuCores: number; hardwareTier: string; hardwareTierId: 'basic'\|'advanced'\|'unknown'; warnings: string[] }` | 2 |
-| Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ canceled, folderPath, filePath, tree: core.FileNode, truncated }`. Carpeta abierta (al inicio, `./workspace`), documento activo y árbol | 8 |
+| Binding | `SystemHealthCheck`   | UI → Go    | `() → system.HealthStatus` = `{ hasXeLaTeX, hasLatexmk, hasBiber: boolean; totalRAMGB, freeDiskSpaceGB: number; cpuCores: number; hardwareTier: string; hardwareTierId: 'basic'\|'advanced'\|'unknown'; repository: system.RepositoryOptions; warnings: string[] }`. Incluye el SO y el repositorio (actual y rutas propuestas) | 2, 9 |
+| Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ canceled, folderPath, filePath, tree: core.FileNode, truncated }`. Carpeta abierta (al inicio, el repositorio central guardado), documento activo y árbol. **`needsSetup: true`** en el primer arranque, sin crear nada en disco | 9 |
+| Binding | `GetRepositoryOptions` | UI → Go   | `() → system.RepositoryOptions` = `{ os, osName, user, shared: RepositoryOption; warnings: string[]; currentScope, currentPath }`, con `RepositoryOption` = `{ scope, path, available, reason }`. Rutas propuestas para este SO | 9 |
+| Binding | `SetupRepository`     | UI → Go    | `(scope: 'user'\|'shared') → main.WorkspaceState`. Crea el repositorio en la ruta que calcula Go, guarda la elección y lo abre. Rechaza ámbitos desconocidos o no disponibles | 9 |
 | Binding | `RefreshWorkspace`    | UI → Go    | `() → main.WorkspaceState`: vuelve a escanear la carpeta abierta | 8 |
 | Binding | `OpenFolderDialog`    | UI → Go    | `() → main.WorkspaceState`. Diálogo nativo; `canceled: true` si se cierra. Abre la carpeta y elige `main.tex` o el primer `.tex` | 8 |
 | Binding | `OpenFile`            | UI → Go    | `(path) → main.OpenedFile` = `{ path, content }`. Solo `.tex` dentro de la carpeta abierta. Lo hace documento activo y encola su compilación | 8 |
@@ -105,7 +127,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 - **CodeMirror 6** con un setup mínimo hecho a mano (sin `basicSetup`): números de línea, historial, `defaultKeymap`, `indentWithTab`, `bracketMatching`, modo `stex` (`@codemirror/legacy-modes`) y tema `one-dark`.
 - **Debounce:** cada cambio solo reinicia un `setTimeout` de 1000 ms; al vencer, el documento se convierte en texto **una sola vez** y se envía con `SaveContent`. Nunca hay más de un guardado en curso: los que llegan mientras tanto se juntan en un único guardado posterior con el contenido más reciente. Cmd/Ctrl+S guarda de inmediato.
 - **Seguridad de datos:** si falla `LoadContent`, el editor **no se monta**, para que el autoguardado no sobrescriba el archivo con un documento vacío.
-- **Pendiente:** el guardado al cerrar la ventana (`OnBeforeClose`) y la ruta del documento cuando la app se abre desde el Finder (el directorio de trabajo es `/`).
+- **Pendiente:** el guardado al cerrar la ventana (`OnBeforeClose`). La ruta del documento ya no depende del directorio de trabajo (ver deuda técnica #4).
 
 ## 4.3 Pipeline de compilación (Módulo 3)
 - `internal/compiler.CompileLaTeXContext(ctx, workdir, filename)` ejecuta `latexmk -xelatex -interaction=nonstopmode -halt-on-error <filename>` (sin shell). `CompileLaTeX` es el mismo sin cancelación externa.
@@ -142,7 +164,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 1. ~~**Guardar y compilar están acoplados en `SaveContent`.**~~ **Resuelto el 2026-11-06:** `SaveContent` responde de inmediato y la compilación va por el `Scheduler` con eventos (ver §4.3).
 2. **Se compila con cada pausa de 1 s.** Convendría un debounce propio para la compilación (por ejemplo 2–3 s), además de Cmd+S para compilar al instante.
 3. **No se guarda al cerrar la ventana:** falta `OnBeforeClose` para hacer un flush en Go.
-4. **La carpeta *inicial* depende del directorio de trabajo** (`./workspace`). Desde el Finder ese directorio es `/`. Ya se puede abrir cualquier carpeta; falta recordar la última abierta en lugar de usar `./workspace`.
+4. ~~**La carpeta *inicial* depende del directorio de trabajo** (`./workspace`).~~ **Resuelto el 2026-11-07:** la app abre un repositorio central en `~/Documents/My Creative Ink Repository`, una ruta **absoluta** construida con `os.UserHomeDir()` y `filepath.Join` (válida en macOS y Linux). Se crea con `MkdirAll(0755)` si no existe y lleva un `main.tex` inicial si no hay ningún `.tex`, sin sobrescribir nunca. Funciona igual desde `wails dev` y desde el Finder. **Ampliado el mismo día:** la ruta depende del SO y de la elección del primer arranque ("Solo para mí" o "Para todos los usuarios"); en Linux se respeta XDG (`~/Documentos`) y en Windows, Known Folders (ver §1). *Pendiente menor:* recordar la última carpeta abierta y permitir cambiar el repositorio desde la UI (hoy hay que borrar `settings.json`).
 5. **El PDF se carga entero en memoria (`fetch` → `data`).** Basta para documentos normales. Para PDFs de cientos de MB habría que usar `PDFDataRangeTransport`.
 6. **Proyectos de varios archivos:** se compila el `.tex` **activo**. Si editas un capítulo que se incluye con `\input`, se compila el capítulo y no el documento principal. Falta definir un "archivo principal" por carpeta.
 7. **El árbol no se actualiza solo** (no hay `fsnotify`): se refresca al abrir carpeta, al usar Guardar como o con el botón Actualizar.
@@ -155,7 +177,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 | Go | `context`, `os/exec` con cancelación, streaming de stdout/stderr, `fsnotify` (futuro), errores envueltos, `internal/` |
 | Svelte 5 + Vite | Runes (`$state`, `$derived`, `$effect`), eventos `onclick`, `mount()`, import de bindings desde `../wailsjs/go/main/App.js` |
 | LaTeX toolchain | `latexmk` (`-pdf/-xelatex/-lualatex`, `-interaction=nonstopmode`, `-synctex=1`, `-outdir`), parseo del `.log`, `kpsewhich`, `tlmgr` |
-| Multiplataforma | macOS: WKWebView y Xcode CLT. Linux: WebKitGTK (`libwebkit2gtk-4.0` o `4.1` con el tag `webkit2_41`) |
+| Multiplataforma | macOS: WKWebView y Xcode CLT. Linux: WebKitGTK (`libwebkit2gtk-4.0` o `4.1` con el tag `webkit2_41`), XDG user dirs. Windows: WebView2, Known Folders, instalador NSIS. Archivos `_<os>.go` con build tags; verificar con `GOOS=<os> go vet ./...` |
 
 ## 6. Comandos que ejecuta el PROGRAMADOR (nunca Claude)
 
