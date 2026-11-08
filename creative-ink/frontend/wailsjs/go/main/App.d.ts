@@ -3,6 +3,8 @@
 import {system} from '../models';
 import {main} from '../models';
 
+export function ConfirmClose(arg1:boolean):Promise<void>;
+
 export function GetRepositoryOptions():Promise<system.RepositoryOptions>;
 
 export function GetWorkspace():Promise<main.WorkspaceState>;
