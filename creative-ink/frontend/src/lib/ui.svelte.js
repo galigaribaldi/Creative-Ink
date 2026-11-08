@@ -17,7 +17,9 @@ export const ui = $state({
   /** @type {BottomTab} */
   bottomTab: 'problems',
   /** Opened by a compile error (not by the user): closes again on success. */
-  bottomAutoOpened: false
+  bottomAutoOpened: false,
+  /** Start screen reopened by the user while a project is open. */
+  startOpen: false
 })
 
 /**

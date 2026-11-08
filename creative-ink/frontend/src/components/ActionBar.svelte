@@ -17,6 +17,12 @@
 
 <nav class="actionbar" aria-label="Barra de acciones">
   <div class="group">
+    <button onclick={() => (ui.startOpen = true)} aria-label="Inicio" title="Inicio: proyectos y documentos rápidos">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 11l8-7 8 7M6 9.5V20h12V9.5" />
+      </svg>
+    </button>
+
     <button
       class:active={explorerActive}
       onclick={() => toggleTool('explorer')}

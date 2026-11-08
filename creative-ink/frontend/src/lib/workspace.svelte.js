@@ -7,7 +7,7 @@
 
 /**
  * @typedef {{ name: string, path: string, isDir: boolean, editable: boolean, children?: FileNode[] }} FileNode
- * @typedef {{ needsSetup: boolean, canceled: boolean, folderPath: string, filePath: string, mainFilePath: string, tree: FileNode, truncated: boolean }} WorkspaceState
+ * @typedef {{ needsSetup: boolean, needsStart: boolean, repositoryPath: string, canceled: boolean, folderPath: string, filePath: string, mainFilePath: string, tree: FileNode, truncated: boolean }} WorkspaceState
  */
 
 export const workspace = $state({
@@ -28,6 +28,10 @@ export const workspace = $state({
   truncated: false,
   /** First run: the user has not chosen where the central repository lives. */
   needsSetup: false,
+  /** No project open yet: the start screen must be shown. */
+  needsStart: false,
+  /** Absolute path of My-Creative-Ink-Repository (the launcher). */
+  repositoryPath: '',
   /** Last workspace error (dialogs, scan), shown in the explorer. */
   error: ''
 })
@@ -35,6 +39,8 @@ export const workspace = $state({
 /** Applies a WorkspaceState returned by Go. */
 export function applyWorkspace(/** @type {WorkspaceState} */ state) {
   workspace.needsSetup = state.needsSetup
+  workspace.needsStart = state.needsStart
+  workspace.repositoryPath = state.repositoryPath
   workspace.currentFolderPath = state.folderPath
   workspace.fileTree = state.tree
   workspace.truncated = state.truncated
