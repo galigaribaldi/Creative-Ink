@@ -26,7 +26,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     │   │   ├── settings.go       ← elección del primer arranque en <UserConfigDir>/creative-ink/settings.json
     │   │   ├── project_meta.go   ← <carpeta>/.creative-ink-meta: archivo principal del proyecto (ruta relativa)
     │   │   ├── watcher.go        ← FolderWatcher (fsnotify): cambios externos con debounce; TreeSignature
-    │   │   └── pdf_snapshots.go  ← PDFSnapshots: copias inmutables y versionadas del PDF para la vista previa
+    │   │   ├── pdf_snapshots.go  ← PDFSnapshots: copias inmutables y versionadas del PDF para la vista previa
+    │   │   └── terminal*.go      ← ExecuteCommand(Context): sh -c / cmd /c, 30 s, sin stdin, grupo de procesos, salida limitada
     │   └── system/               ← entorno: health check de LaTeX y detección/instalación de motores
     │       ├── health.go         ← HealthStatus: herramientas de LaTeX, hardware y repositorio
     │       ├── platform.go       ← RepositoryOptions por SO, parser de XDG user-dirs
@@ -43,7 +44,9 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   │   ├── FileTreeItem.svelte ← nodo recursivo del árbol; solo los `.tex` se pueden abrir
         │   │   ├── Workspace.svelte   ← Editor | Preview (+ CompileLog bajo el editor); solo layout
         │   │   ├── Editor.svelte      ← CodeMirror 6 (one-dark, stex) + autoguardado con debounce
-        │   │   ├── CompileLog.svelte  ← panel de errores de LaTeX debajo del editor
+        │   │   ├── BottomPanel.svelte ← panel inferior con pestañas "Errores LaTeX" | "Terminal" (siempre montado)
+        │   │   ├── CompileLog.svelte  ← contenido de la pestaña de errores de LaTeX
+        │   │   ├── TerminalPanel.svelte ← terminal integrada: historial, entrada, ↑/↓, Ctrl+C
         │   │   ├── HealthPanel.svelte ← modal "Estado del sistema" (incluye "Sistema y repositorio")
         │   │   ├── RepositorySetup.svelte ← primer arranque: "Solo para mí" / "Para todos los usuarios"
         │   │   └── Preview.svelte     ← PDF.js en <canvas>, doble buffer, conserva la página al recargar
@@ -52,6 +55,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   │   ├── compilation.svelte.js ← reflejo de los eventos compile:* (status, logs, pdfTimestamp)
         │   │   ├── workspace.svelte.js   ← reflejo de Go: currentFolderPath, currentFilePath, fileTree
         │   │   ├── actions.js            ← acciones globales (abrir carpeta/archivo, guardar, guardar como, compilar)
+        │   │   ├── terminal.svelte.js    ← entradas y historial de la terminal (sobreviven al cambio de pestaña)
         │   │   └── pdf.js        ← configuración de PDF.js (worker local) y loadPdf(url)
         │   └── style.css         ← estilos globales mínimos
         └── wailsjs/              ← GENERADO por Wails: no editar a mano
@@ -94,7 +98,7 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 
 - `app.go` es la **única** puerta de entrada desde el frontend. Los métodos públicos de `App` se exponen como bindings.
 - `internal/*` **no importa** `github.com/wailsapp/wails`. Para emitir eventos recibe una interfaz o callback inyectado desde `App`.
-- El frontend **nunca** toca el disco ni lanza procesos. Todo pasa por Go.
+- El frontend **nunca** toca el disco ni lanza procesos. Todo pasa por Go. La única puerta a comandos arbitrarios es `RunTerminalCommand` (terminal integrada), y solo con lo que el usuario escribe en ella (ver §4.3.4).
 - `frontend/wailsjs/` se regenera con `wails dev` o `wails build` (el programador los ejecuta).
 
 ## 3. Contrato IPC (vivo: actualizar con cada método o evento nuevo)
@@ -112,6 +116,8 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 | Binding | `SaveAsDialog`        | UI → Go    | `(content) → main.WorkspaceState`. Diálogo nativo (filtro `*.tex`; agrega `.tex` si falta). Si el destino está fuera de la carpeta, su directorio pasa a ser la carpeta abierta. Lo hace documento activo y compila | 8 |
 | Binding | `SetMainFile`         | UI → Go    | `(path) → main.WorkspaceState`. `.tex` existente dentro de la carpeta, o `""` para quitarlo. Se guarda (ruta relativa) en `<carpeta>/.creative-ink-meta` y se recompila el nuevo objetivo | 10 |
 | Binding | `RequestCompile`      | UI → Go    | `() → boolean`: encola una compilación del **objetivo** (principal o activo) sin guardar. Es **el único disparador al editar**: inactividad de 3 s, Cmd/Ctrl+S, botones Guardar y Compilar. `false` solo durante el cierre | 7, 12 |
+| Binding | `RunTerminalCommand`  | UI → Go    | `(cmd) → main.TerminalResult` = `{ command, folder, output, exitCode, timedOut, canceled, durationMs }`. Ejecuta `cmd` con `sh -c` (macOS/Linux) o `cmd /c` (Windows) en la carpeta abierta, sin stdin, con límite de 30 s y PATH ampliado con TeX y Homebrew. Un código distinto de 0, el timeout o la cancelación son resultados normales; rechaza si no hay carpeta, si el comando está vacío o si ya hay otro en curso. **Ejecución arbitraria por diseño:** solo con texto que escribió el usuario | 15 |
+| Binding | `CancelTerminalCommand` | UI → Go  | `() → void`: detiene el comando en curso (mata su grupo de procesos) | 15 |
 | Binding | `ConfirmClose`        | UI → Go    | `(saved: boolean) → void`: respuesta a `app:before-close` cuando la UI ya volcó CodeMirror a disco. Si `saved` es `false`, Go pregunta con un diálogo nativo antes de cerrar | 12 |
 | Evento  | `compile:started`     | Go → UI    | `main.CompileStartedEvent` = `{ file }`: el **objetivo de compilación** (principal o activo). La UI ignora los eventos de otro objetivo | 8, 10 |
 | Evento  | `compile:finished`    | Go → UI    | `main.CompileFinishedEvent` = `{ file, success, logs, durationMs, pdfVersion, pdfModTime }`. `pdfVersion` es la instantánea publicada (0 si falló la compilación o la copia); **si el PDF no cambió** (mismo `ModTime` y tamaño), Go **reutiliza la versión anterior** sin copiarla. `pdfModTime` es el `ModTime` del PDF en ms Unix. No se emite después del cierre | 8, 13, 14 |
@@ -192,6 +198,18 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 - **Ciclo de vida:** `App.restartWatcher()` al cambiar de carpeta (vigila siempre la carpeta *actual*, aunque dos cambios coincidan), `stopWatching()` en `OnShutdown`. Los callbacks de un watcher viejo se descartan. En los tests, `watchFolder` se inyecta.
 - **Límites:** como mucho 256 carpetas vigiladas (`maxWatchedDirs`) y 6 niveles. En macOS, kqueue abre un descriptor por carpeta **y por archivo** vigilado; Go ≥ 1.19 sube el límite blando de descriptores al duro al arrancar.
 - **Frontend:** `listenWorkspaceEvents()` (en `actions.js`, se da de baja en `onDestroy`) → `refreshWorkspace()`, con un solo refresco en curso y los demás juntados en uno. `applyTree()` no cambia el archivo abierto: un refresco durante un cambio de archivo no puede devolver el editor al archivo anterior.
+
+## 4.3.4 Terminal integrada (Sección 15)
+- **Backend:** `core.ExecuteCommand(cmd, workdir)` / `ExecuteCommandContext(ctx, …, extraEnv)`:
+  - **`sh -c` en macOS/Linux y `cmd /c` en Windows.** Es la **única excepción** a la regla de "nunca usar un shell" de la skill `latex-toolchain-orchestrator`: una terminal existe precisamente para ejecutar lo que escribe el usuario. latexmk y cualquier otro proceso interno siguen sin shell.
+  - Límite de **30 s**; un timeout o una cancelación matan el **grupo de procesos** entero (`Setpgid` + `kill(-pid)`), no solo el `sh`. En Windows, `cmd.exe` se lanza sin ventana (`CREATE_NO_WINDOW`) y con la línea de órdenes sin reescapar (`CmdLine`); *límite conocido:* allí los nietos pueden sobrevivir (haría falta un Job Object).
+  - **No interactivo:** sin stdin (EOF inmediato), `TERM=dumb`, `NO_COLOR`, `PAGER`/`GIT_PAGER=cat`, `GIT_TERMINAL_PROMPT=0` y `GIT_EDITOR=true` (un `git commit` sin `-m` se aborta en lugar de quedarse esperando). `sudo` y los editores no funcionan.
+  - **PATH:** `system.ToolPATH()` añade al final las rutas de TeX y Homebrew que faltan (una app abierta desde el Finder no las tiene), así `tlmgr` y `git` de Homebrew se encuentran.
+  - Salida combinada (stdout+stderr) limitada a **256 KB**, con un aviso de truncado.
+- **Fachada:** `RunTerminalCommand` ejecuta en la carpeta abierta, **un comando a la vez** (`termMu`), y devuelve `TerminalResult`. `CancelTerminalCommand` lo detiene; `OnShutdown` también. El binding puede tardar hasta 30 s: no bloquea otros bindings (Wails atiende cada llamada en su propia goroutine), y la UI muestra "Ejecutando…".
+- **Frontend:** `BottomPanel.svelte` bajo el editor, con pestañas **"Errores LaTeX" | "Terminal"**, siempre montado. Un error de compilación lo abre en su pestaña solo si estaba cerrado (si no, un punto rojo en la pestaña), y lo cierra al compilar bien si lo había abierto él. `TerminalPanel.svelte`: Enter ejecuta, ↑/↓ recorre el historial, Ctrl+C o "Detener" cancela, `clear`/`cls` limpia la vista. Atajos: **Ctrl+`** o **⌘J / Ctrl+J**, y botón en la ActionBar.
+- **Seguridad:** `RunTerminalCommand` es **ejecución arbitraria de comandos por diseño**. Si alguna vez se ejecutara JavaScript ajeno en el WebView (por ejemplo, por una vulnerabilidad de PDF.js con un PDF malicioso), podría usarla. Reglas: la UI **solo** le pasa lo que el usuario escribió en la terminal, **nunca** texto derivado de documentos, logs o nombres de archivo; mantener `pdfjs-dist` actualizado; y no renderizar HTML que no sea nuestro (`{@html}` está prohibido con contenido externo).
+- **Pendiente:** salida en streaming (eventos) en lugar de esperar al final, PTY real y `xterm.js` (requiere instalar dependencias), y Job Objects en Windows.
 
 ## 4.4 Deuda técnica conocida (análisis del 2026-11-05)
 1. ~~**Guardar y compilar están acoplados en `SaveContent`.**~~ **Resuelto el 2026-11-06:** `SaveContent` responde de inmediato y la compilación va por el `Scheduler` con eventos (ver §4.3).

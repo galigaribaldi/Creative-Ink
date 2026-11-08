@@ -37,6 +37,8 @@ Those files win over this skill if they disagree.
    `exec: "latexmk": executable file not found`.
 2. **Secure execution.** Run latexmk directly with `exec.CommandContext(ctx, absPath, args...)`.
    NEVER use `sh -c` / `bash -c` and never build a command line by concatenating strings.
+   (The integrated terminal, `core.ExecuteCommand`, is the only exception: it runs what the user
+   types. Never route LaTeX tooling through it.)
    Validate file names: bare names only (no directories) and no leading `-`, which latexmk would read as an option.
 3. **Flags.** Base command:
    `latexmk -<engine> -interaction=nonstopmode -halt-on-error <filename>`

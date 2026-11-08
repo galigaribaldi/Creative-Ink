@@ -54,7 +54,10 @@ Those files win over this skill if they disagree.
      result struct with `json` tags (`{ success: false, logs: "…" }`, `warnings: []`). Never panic.
    - Wrap errors with context: `fmt.Errorf("write %q: %w", path, err)`. Use sentinel errors for
      cases the caller checks (`errors.Is`).
-6. **Contract discipline.** Every new binding, event or HTTP route goes into the table in
+6. **Arbitrary execution is fenced.** `RunTerminalCommand` (integrated terminal) runs shell commands by
+   design. Never add another binding that executes processes from JS-provided strings, and never let
+   the UI build terminal commands from documents, logs or file names.
+7. **Contract discipline.** Every new binding, event or HTTP route goes into the table in
    `docs/MAP.md` §3 in the same change. Event names follow `domain:action` (`compile:finished`),
    and payloads are structs with camelCase `json` tags.
 

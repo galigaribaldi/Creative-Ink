@@ -44,6 +44,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 - **pdfjs-dist 6:** `PDFDocumentProxy.destroy()` **no existe**. Se libera con `doc.loadingTask.destroy()` (vía `releasePdf()` en `src/lib/pdf.js`). Usa siempre el `PDFWorker` compartido: sin él, cada documento crea un Web Worker nuevo.
 - **fsnotify en macOS (kqueue):** abre un descriptor por carpeta **y por archivo** vigilado, y no es recursivo. Respeta `maxWatchedDirs` y los filtros de `isIgnoredEntry`; nunca vigiles carpetas de build ni `node_modules`.
 - **pdfjs-dist 6 por rangos:** `disableAutoFetch: true` **exige** `disableStream: true`. Sirve siempre instantáneas inmutables (`?v=`), nunca el `<doc>.pdf` que latexmk reescribe. En Linux sin `-tags webkit2_41`, Wails no pasa cabeceras: no hay rangos (se descarga entero).
+- **Terminal integrada (`RunTerminalCommand`):** es la **única** excepción a "nunca `sh -c`" y es ejecución arbitraria por diseño. Pásale solo lo que el usuario escribió en la terminal; nunca construyas comandos a partir de documentos, logs o nombres de archivo, y nunca uses `{@html}` con contenido externo.
 - **Template de Wails v2.17.1:** venía con `vite-plugin-svelte@6` (no acepta Vite 8), con `new App()` (Svelte 4) y con un `jsconfig` obsoleto. Ya está corregido.
 
 ## Estado actual (actualizar al cerrar cada sección)
@@ -152,4 +153,9 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] `compilation.svelte.js`: `autoCompileDelayMs = max(3000, 2 × durationMs)` y `autoCompilePaused` si `durationMs > 10000`, por objetivo y en memoria; aviso en la barra de estado del editor
   - [x] `Editor.svelte`: lee el retraso al programar cada compilación; no programa nada mientras esté pausado
   - [x] `App.publishPreview`: `os.Stat` del PDF tras compilar; reutiliza `pdfVersion` si `ModTime` y tamaño no cambiaron (sin copia ni recarga); `compile:finished.pdfModTime`
+  - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 15 — Terminal integrada** (código listo, falta validar con `wails dev`)
+  - [x] `core/terminal{,_unix,_windows}.go`: `ExecuteCommand(cmd, workdir)` con `sh -c` / `cmd /c`, 30 s, sin stdin, entorno no interactivo, grupo de procesos, salida limitada a 256 KB; tests (incluye que el timeout mata a los hijos)
+  - [x] `system.ToolPATH()`; bindings `RunTerminalCommand` (uno a la vez) y `CancelTerminalCommand`; se cancela al cerrar la app
+  - [x] Frontend: `BottomPanel` (pestañas Errores LaTeX | Terminal), `TerminalPanel`, `terminal.svelte.js`; Ctrl+` y ⌘J/Ctrl+J; botón en la ActionBar
   - [ ] Validación del programador: reiniciar `wails dev`
