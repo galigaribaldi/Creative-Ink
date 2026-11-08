@@ -44,7 +44,7 @@
   <div class="panel" role="dialog" aria-modal="true" aria-labelledby="setup-title" aria-describedby="setup-desc">
     <h1 id="setup-title">Bienvenido a Creative-ink</h1>
     <p id="setup-desc" class="lead">
-      Elige dónde vivirá tu repositorio central <strong>My Creative Ink Repository</strong>.
+      Elige dónde vivirá tu repositorio central <strong>My-Creative-Ink-Repository</strong>.
       {#if options}Sistema detectado: <strong>{options.osName}</strong>.{/if}
     </p>
 

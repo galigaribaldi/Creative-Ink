@@ -3,6 +3,7 @@
   import ActionBar from './components/ActionBar.svelte'
   import HealthPanel from './components/HealthPanel.svelte'
   import RepositorySetup from './components/RepositorySetup.svelte'
+  import StartScreen from './components/StartScreen.svelte'
   import Sidebar from './components/Sidebar.svelte'
   import Workspace from './components/Workspace.svelte'
   import {
@@ -86,6 +87,9 @@
 <!-- First run only: choose where the central repository lives. -->
 {#if workspace.needsSetup}
   <RepositorySetup />
+{:else if workspace.needsStart || ui.startOpen}
+  <!-- Every session: new project, quick document, or an existing one. -->
+  <StartScreen />
 {/if}
 
 <style>

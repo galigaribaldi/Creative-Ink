@@ -4,8 +4,11 @@
 // CodeMirror and without prop drilling.
 import {
   ConfirmClose,
+  CreateProject,
+  CreateQuickDocument,
   GetWorkspace,
   OpenFolderDialog,
+  OpenProject,
   RefreshWorkspace,
   RequestCompile,
   SaveAsDialog,
@@ -13,6 +16,7 @@ import {
   SetupRepository
 } from '../../wailsjs/go/main/App.js'
 import { EventsOn } from '../../wailsjs/runtime/runtime.js'
+import { ui } from './ui.svelte.js'
 import { applyTree, applyWorkspace, compileTarget, workspace } from './workspace.svelte.js'
 
 // Events emitted by Go (app.go).
@@ -71,7 +75,10 @@ export async function openFolder() {
   if (!(await persistPendingEdits())) return
   try {
     const state = await OpenFolderDialog()
-    if (!state.canceled) applyWorkspace(state)
+    if (!state.canceled) {
+      applyWorkspace(state)
+      ui.startOpen = false
+    }
   } catch (err) {
     report(err)
   }
@@ -96,6 +103,36 @@ export async function setupRepository(scope) {
 // At most one RefreshWorkspace in flight; requests meanwhile collapse into one more.
 let refreshing = false
 let refreshPending = false
+
+/**
+ * Start screen actions. Each saves pending edits first (the folder changes)
+ * and closes the start screen on success. They return an error message or ''.
+ */
+async function switchProject(/** @type {() => Promise<import('./workspace.svelte.js').WorkspaceState>} */ open) {
+  if (!(await persistPendingEdits())) return 'No se pudieron guardar los cambios del archivo abierto.'
+  try {
+    applyWorkspace(await open())
+    ui.startOpen = false
+    return ''
+  } catch (err) {
+    return String(err)
+  }
+}
+
+/** Creates <repo>/<name normalized with "-">/ from the template and opens it. */
+export function createProject(/** @type {string} */ name) {
+  return switchProject(() => CreateProject(name))
+}
+
+/** Creates tmp-Workspaces/unnamed-tmp<N>/ and opens it. */
+export function createQuickDocument() {
+  return switchProject(() => CreateQuickDocument())
+}
+
+/** Opens a project, quick document or recent folder listed by the start screen. */
+export function openProject(/** @type {string} */ path) {
+  return switchProject(() => OpenProject(path))
+}
 
 /** Rescans the open folder and updates the explorer (never the open file). */
 export async function refreshWorkspace() {
