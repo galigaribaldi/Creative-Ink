@@ -18,7 +18,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     ├── go.mod
     ├── internal/                 ← lógica Go no importable desde fuera del módulo
     │   ├── compiler/
-    │   │   ├── orchestrator.go   ← CompileLaTeXContext: latexmk -xelatex con timeout/cancelación, PATH de TeX, errores del .log
+    │   │   ├── orchestrator.go   ← CompileLaTeXContext: latexmk -xelatex -synctex=1 con timeout/cancelación, PATH de TeX, errores del .log
+    │   │   ├── synctex.go        ← SyncTeXForward/Backward: CLI synctex view/edit y parseo de su salida
     │   │   └── scheduler.go      ← Scheduler: compilación en segundo plano, una a la vez, juntando ráfagas
     │   ├── core/                 ← dominio: proyectos, archivos, (futuro) plugins
     │   │   ├── file_manager.go   ← FileManager: guardado atómico (tmp + rename) y carga de documentos
@@ -56,6 +57,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   │   ├── workspace.svelte.js   ← reflejo de Go: currentFolderPath, currentFilePath, fileTree
         │   │   ├── actions.js            ← acciones globales (abrir carpeta/archivo, guardar, guardar como, compilar)
         │   │   ├── terminal.svelte.js    ← entradas y historial de la terminal (sobreviven al cambio de pestaña)
+        │   │   ├── synctex.svelte.js     ← SyncTeX: highlight (Editor → PDF) y reveal (PDF → Editor)
         │   │   └── pdf.js        ← configuración de PDF.js (worker local) y loadPdf(url)
         │   └── style.css         ← estilos globales mínimos
         └── wailsjs/              ← GENERADO por Wails: no editar a mano
@@ -116,6 +118,8 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 | Binding | `SaveAsDialog`        | UI → Go    | `(content) → main.WorkspaceState`. Diálogo nativo (filtro `*.tex`; agrega `.tex` si falta). Si el destino está fuera de la carpeta, su directorio pasa a ser la carpeta abierta. Lo hace documento activo y compila | 8 |
 | Binding | `SetMainFile`         | UI → Go    | `(path) → main.WorkspaceState`. `.tex` existente dentro de la carpeta, o `""` para quitarlo. Se guarda (ruta relativa) en `<carpeta>/.creative-ink-meta` y se recompila el nuevo objetivo | 10 |
 | Binding | `RequestCompile`      | UI → Go    | `() → boolean`: encola una compilación del **objetivo** (principal o activo) sin guardar. Es **el único disparador al editar**: inactividad de 3 s, Cmd/Ctrl+S, botones Guardar y Compilar. `false` solo durante el cierre | 7, 12 |
+| Binding | `SyncTexForward`      | UI → Go    | `(line, file) → main.SyncTexForwardResult` = `{ found, page, x, y, width, height, reason }`. Dónde aparece la línea de `file` (`.tex` del proyecto) en el PDF del objetivo de compilación, en puntos PDF desde la esquina superior izquierda. Sin datos → `found: false` y `reason`, nunca error | 16 |
+| Binding | `SyncTexBackward`     | UI → Go    | `(page, x, y) → main.SyncTexBackwardResult` = `{ found, file, line, reason }`. Qué `.tex` del proyecto y qué línea (desde 1) generaron ese punto. Los archivos fuera del proyecto (p. ej. `article.cls`) dan `found: false` | 16 |
 | Binding | `RunTerminalCommand`  | UI → Go    | `(cmd) → main.TerminalResult` = `{ command, folder, output, exitCode, timedOut, canceled, durationMs }`. Ejecuta `cmd` con `sh -c` (macOS/Linux) o `cmd /c` (Windows) en la carpeta abierta, sin stdin, con límite de 30 s y PATH ampliado con TeX y Homebrew. Un código distinto de 0, el timeout o la cancelación son resultados normales; rechaza si no hay carpeta, si el comando está vacío o si ya hay otro en curso. **Ejecución arbitraria por diseño:** solo con texto que escribió el usuario | 15 |
 | Binding | `CancelTerminalCommand` | UI → Go  | `() → void`: detiene el comando en curso (mata su grupo de procesos) | 15 |
 | Binding | `ConfirmClose`        | UI → Go    | `(saved: boolean) → void`: respuesta a `app:before-close` cuando la UI ya volcó CodeMirror a disco. Si `saved` es `false`, Go pregunta con un diálogo nativo antes de cerrar | 12 |
@@ -150,7 +154,7 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
   - Un segundo clic en ✕ mientras se vuelca se ignora. `quit` y `confirmQuit` se inyectan para los tests.
 
 ## 4.3 Pipeline de compilación (Módulo 3)
-- `internal/compiler.CompileLaTeXContext(ctx, workdir, filename)` ejecuta `latexmk -xelatex -interaction=nonstopmode -halt-on-error <filename>` (sin shell). `CompileLaTeX` es el mismo sin cancelación externa.
+- `internal/compiler.CompileLaTeXContext(ctx, workdir, filename)` ejecuta `latexmk -xelatex -interaction=nonstopmode -halt-on-error -synctex=1 <filename>` (sin shell). `-synctex=1` (desde la Sección 16) escribe `<doc>.synctex.gz` para SyncTeX. `CompileLaTeX` es el mismo sin cancelación externa.
   - **Resolución de binarios:** `system.FindBinary` encuentra latexmk; su directorio se antepone al `PATH` del subproceso para que latexmk encuentre xelatex y biber aunque la app se abra desde el Finder.
   - **Seguridad:** el nombre de archivo no puede tener directorios ni empezar con `-`. Las ejecuciones van en serie (mutex) y tienen un límite de 60 s.
   - **Logs:** stdout y stderr van al mismo buffer. Si falla, los bloques `! ...` hasta `l.<n>` (más su línea de continuación) salen primero de `<doc>.log` y, si el `.log` no tiene errores, de stdout. Después va la cola de la salida (máximo 32 KB). Un bloque sin `l.<n>` se corta a las 6 líneas o en el siguiente `! `.
@@ -210,6 +214,17 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 - **Frontend:** `BottomPanel.svelte` bajo el editor, con pestañas **"Errores LaTeX" | "Terminal"**, siempre montado. Un error de compilación lo abre en su pestaña solo si estaba cerrado (si no, un punto rojo en la pestaña), y lo cierra al compilar bien si lo había abierto él. `TerminalPanel.svelte`: Enter ejecuta, ↑/↓ recorre el historial, Ctrl+C o "Detener" cancela, `clear`/`cls` limpia la vista. Atajos: **Ctrl+`** o **⌘J / Ctrl+J**, y botón en la ActionBar.
 - **Seguridad:** `RunTerminalCommand` es **ejecución arbitraria de comandos por diseño**. Si alguna vez se ejecutara JavaScript ajeno en el WebView (por ejemplo, por una vulnerabilidad de PDF.js con un PDF malicioso), podría usarla. Reglas: la UI **solo** le pasa lo que el usuario escribió en la terminal, **nunca** texto derivado de documentos, logs o nombres de archivo; mantener `pdfjs-dist` actualizado; y no renderizar HTML que no sea nuestro (`{@html}` está prohibido con contenido externo).
 - **Pendiente:** salida en streaming (eventos) en lugar de esperar al final, PTY real y `xterm.js` (requiere instalar dependencias), y Job Objects en Windows.
+
+## 4.3.5 SyncTeX: navegación bidireccional (Sección 16)
+- **Compilación:** latexmk lleva ahora `-synctex=1` (escribe `<doc>.synctex.gz` junto al PDF). `<doc>.synctex(busy)`, que existe solo mientras TeX escribe, se filtra del explorador y del watcher.
+- **Backend (`internal/compiler/synctex.go`):** `system.FindBinary("synctex")`, sin shell, con límite de 5 s y en la carpeta del PDF.
+  - Hacia delante: `synctex view -i <línea>:0:<archivo> -o <pdf>`. Toma el **primer** registro; `h`/`v` son el borde izquierdo y la línea base, `W`/`H` el ancho y el alto, así que la caja empieza en `v − H`.
+  - Hacia atrás: `synctex edit -o <página>:<x>:<y>:<pdf>`. `Input` puede venir relativo a la carpeta del PDF: se convierte en absoluto, se limpia y se valida dentro del proyecto.
+  - **Errores silenciosos:** sin `.synctex.gz`, sin binario, con la salida vacía o con un código distinto de 0 → `found: false` (se registra en el log), nunca un error de JavaScript. La UI muestra un aviso discreto en la barra de la vista previa ("compila con ⌘S…").
+  - Se usa el PDF del **objetivo de compilación**: con archivo principal, hacia delante desde un capítulo salta al lugar correcto del documento completo.
+- **Hacia delante (código → PDF):** ⌘-clic (Ctrl-clic en Linux y Windows) en una línea del editor, o **⌘⌥J / Ctrl+Alt+J** desde la línea del cursor → `sync.highlight` → `Preview` cambia a esa página si hace falta, dibuja un recuadro ámbar que se desvanece (1,8 s) y lo centra con un scroll.
+- **Hacia atrás (PDF → código):** doble clic en el `<canvas>`. La posición en CSS se divide por `rendered.cssScale` (píxeles CSS por punto PDF, guardado en cada render) → `SyncTexBackward` → `sync.reveal` + `workspace.currentFilePath`. Si es otro archivo, el `Editor` lo carga (guardando antes el actual) y luego selecciona la línea y la centra.
+- **Limitaciones:** las coordenadas suponen un `MediaBox` con origen 0,0 (lo normal en LaTeX); usa los datos de la **última** compilación, así que tras editar puede desviarse unas líneas hasta compilar de nuevo. Solo se muestra una página: la vista previa salta de página, no hace scroll continuo.
 
 ## 4.4 Deuda técnica conocida (análisis del 2026-11-05)
 1. ~~**Guardar y compilar están acoplados en `SaveContent`.**~~ **Resuelto el 2026-11-06:** `SaveContent` responde de inmediato y la compilación va por el `Scheduler` con eventos (ver §4.3).

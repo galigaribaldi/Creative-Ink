@@ -41,7 +41,8 @@ Those files win over this skill if they disagree.
    types. Never route LaTeX tooling through it.)
    Validate file names: bare names only (no directories) and no leading `-`, which latexmk would read as an option.
 3. **Flags.** Base command:
-   `latexmk -<engine> -interaction=nonstopmode -halt-on-error <filename>`
+   `latexmk -<engine> -interaction=nonstopmode -halt-on-error -synctex=1 <filename>`
+   (`-synctex=1` was added on the user's request for SyncTeX; `internal/compiler/synctex.go` reads its output)
    - The engine is **selectable**: `-xelatex` (default), `-pdf` (pdflatex) or `-lualatex`. Map it from
      an enum/whitelist, never pass user text through as a flag.
    - Do not add or remove flags (e.g. `-synctex=1`, `-file-line-error`, `-outdir`, `-shell-escape`)

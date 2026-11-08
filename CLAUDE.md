@@ -159,3 +159,9 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] `system.ToolPATH()`; bindings `RunTerminalCommand` (uno a la vez) y `CancelTerminalCommand`; se cancela al cerrar la app
   - [x] Frontend: `BottomPanel` (pestañas Errores LaTeX | Terminal), `TerminalPanel`, `terminal.svelte.js`; Ctrl+` y ⌘J/Ctrl+J; botón en la ActionBar
   - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 16 — SyncTeX bidireccional** (código listo, falta validar con `wails dev`)
+  - [x] latexmk con `-synctex=1`; `<doc>.synctex(busy)` filtrado del explorador y del watcher
+  - [x] `compiler/synctex.go`: `synctex view` / `synctex edit` sin shell, 5 s, parseo del primer registro; sin datos → `found: false` silencioso
+  - [x] Bindings `SyncTexForward(line, file)` y `SyncTexBackward(page, x, y)` (solo `.tex` del proyecto), sobre el PDF del objetivo de compilación
+  - [x] Frontend: `lib/synctex.svelte.js`; ⌘-clic / Ctrl-clic y ⌘⌥J / Ctrl+Alt+J en el editor → salto de página y recuadro en el PDF; doble clic en el PDF → abre el `.tex` y selecciona la línea
+  - [ ] Validación del programador: reiniciar `wails dev` y compilar una vez (para generar `.synctex.gz`)
