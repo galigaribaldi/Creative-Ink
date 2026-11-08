@@ -23,7 +23,7 @@
   <section class="pane" aria-label="Vista previa">
     <Preview
       compileState={compilation.status}
-      pdfTimestamp={compilation.pdfTimestamp}
+      pdfVersion={compilation.pdfVersion}
       documentKey={compileTarget()}
     />
   </section>

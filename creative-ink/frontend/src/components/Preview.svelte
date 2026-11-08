@@ -11,11 +11,11 @@
   /**
    * @type {{
    *   compileState: 'idle' | 'compiling' | 'success' | 'error',
-   *   pdfTimestamp: number,
+   *   pdfVersion: number,
    *   documentKey: string
    * }}
    */
-  let { compileState, pdfTimestamp, documentKey } = $props()
+  let { compileState, pdfVersion, documentKey } = $props()
 
   // Which PDF is shown (the main file's when the project has one).
   let pdfName = $derived(
@@ -73,10 +73,12 @@
     })
   })
 
-  // Every successful compilation bumps pdfTimestamp → new URL → reload.
+  // Every successful compilation publishes a new immutable snapshot in Go
+  // (pdfVersion) → new URL → reload. PDF.js then fetches only the byte ranges
+  // it needs from that snapshot, even while latexmk rewrites the live PDF.
   $effect(() => {
-    if (!pdfTimestamp) return
-    const url = `${PREVIEW_URL}?t=${pdfTimestamp}`
+    if (!pdfVersion) return
+    const url = `${PREVIEW_URL}?v=${pdfVersion}`
     untrack(() => reload(url))
   })
 

@@ -15,8 +15,9 @@ export const compilation = $state({
   status: 'idle',
   logs: '',
   durationMs: 0,
-  // Bumped after every successful compilation to reload the PDF canvas.
-  pdfTimestamp: 0
+  // Immutable PDF snapshot to show (Go's pdfVersion). A new version reloads
+  // the canvas; 0 = nothing compiled yet for this target.
+  pdfVersion: 0
 })
 
 /**
@@ -33,7 +34,7 @@ export function listenCompileEvents() {
       if (event.file !== compileTarget()) return
       compilation.status = 'compiling'
     }),
-    /** @param {{ file: string, success: boolean, logs: string, durationMs: number }} result */
+    /** @param {{ file: string, success: boolean, logs: string, durationMs: number, pdfVersion: number }} result */
     EventsOn(COMPILE_FINISHED, (result) => {
       // A result for another document (e.g. the file that was active before
       // a switch) must not touch the preview: it is not the PDF shown.
@@ -42,9 +43,10 @@ export function listenCompileEvents() {
       compilation.durationMs = result.durationMs
       if (result.success) {
         compilation.status = 'success'
-        compilation.pdfTimestamp = Date.now()
+        // 0 means Go could not snapshot the PDF: keep showing the last one.
+        if (result.pdfVersion) compilation.pdfVersion = result.pdfVersion
       } else {
-        // pdfTimestamp is left untouched, so the canvas keeps the last valid PDF.
+        // pdfVersion is left untouched, so the canvas keeps the last valid PDF.
         compilation.status = 'error'
       }
     })

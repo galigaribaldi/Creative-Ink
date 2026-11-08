@@ -33,12 +33,25 @@ if (import.meta.hot) {
   })
 }
 
+// Bytes per HTTP Range request (PDF.js' default, made explicit).
+const RANGE_CHUNK_SIZE = 65536
+
 /**
- * Loads a PDF served by the Go AssetServer middleware.
+ * Opens a PDF served by the Go AssetServer middleware, loading it lazily
+ * with HTTP Range requests: PDF.js downloads only the chunks needed for the
+ * page being rendered, so a 200 MB thesis does not land in RAM at once.
  *
- * The bytes are fetched explicitly and handed to `getDocument({ data })`:
- * Wails serves the app from a custom scheme (wails://), where PDF.js' own
- * range/streaming network layer is unreliable.
+ * - `disableAutoFetch` stops background pre-fetching of the rest of the
+ *   file. Per the pdfjs-dist 6 docs it only works together with
+ *   `disableStream: true` (streaming would download the whole file anyway).
+ * - Transport: on macOS/Linux the app runs on wails://, which is not
+ *   http(s), so PDF.js uses XMLHttpRequest (PDFNetworkStream); on Windows
+ *   (http://wails.localhost) it uses fetch. Wails forwards the Range header
+ *   and the 206 answer on macOS, Windows and Linux with WebKitGTK ≥ 2.36
+ *   (webkit2_41 tag). On older WebKitGTK no headers cross the bridge: PDF.js
+ *   sees no Accept-Ranges and falls back to one full download.
+ * - The URL carries `?v=<pdfVersion>`: an immutable snapshot, so ranges read
+ *   later always belong to the same PDF.
  *
  * The caller owns the returned document and must pass it to releasePdf().
  *
@@ -46,14 +59,11 @@ if (import.meta.hot) {
  * @returns {Promise<import('pdfjs-dist').PDFDocumentProxy>}
  */
 export async function loadPdf(url) {
-  const response = await fetch(url, { cache: 'no-store' })
-  if (!response.ok) {
-    throw new Error(`No se pudo leer el PDF (HTTP ${response.status})`)
-  }
-  const data = new Uint8Array(await response.arrayBuffer())
-
   const task = getDocument({
-    data,
+    url,
+    rangeChunkSize: RANGE_CHUNK_SIZE,
+    disableAutoFetch: true,
+    disableStream: true,
     worker: getSharedWorker(),
     // Explicit main-thread rendering: v6 would otherwise try a second
     // "renderer worker" per document when GlobalWorkerOptions.rendererSrc is set.
@@ -62,7 +72,7 @@ export async function loadPdf(url) {
   try {
     return await task.promise
   } catch (err) {
-    // A corrupt/partial PDF still allocated worker-side state: free it.
+    // Aborts pending range requests and frees worker-side state.
     await task.destroy().catch(() => {})
     throw err
   }
