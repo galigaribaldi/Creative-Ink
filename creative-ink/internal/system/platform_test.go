@@ -56,8 +56,8 @@ func TestRepositoryOptionsPerOS(t *testing.T) {
 	if got.OSName != "macOS" || !got.User.Available || !got.Shared.Available {
 		t.Fatalf("options = %+v", got)
 	}
-	if got.User.Path != "/Users/ana/Documents/My Creative Ink Repository" ||
-		got.Shared.Path != "/Users/Shared/My Creative Ink Repository" {
+	if got.User.Path != "/Users/ana/Documents/My-Creative-Ink-Repository" ||
+		got.Shared.Path != "/Users/Shared/My-Creative-Ink-Repository" {
 		t.Fatalf("paths = %q, %q", got.User.Path, got.Shared.Path)
 	}
 	if len(got.Warnings) != 1 {

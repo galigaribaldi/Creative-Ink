@@ -23,6 +23,22 @@ type Settings struct {
 	// (`ci config autocompile on|off`). A pointer so that a missing field,
 	// e.g. in an older settings.json, means "on" instead of "off".
 	AutoCompile *bool `json:"autoCompile,omitempty"`
+	// RecentFolders are the last opened project folders, newest first.
+	RecentFolders []string `json:"recentFolders,omitempty"`
+}
+
+// maxRecentFolders bounds Settings.RecentFolders.
+const maxRecentFolders = 10
+
+// AddRecentFolder puts folder first in RecentFolders, without duplicates.
+func (s *Settings) AddRecentFolder(folder string) {
+	recent := []string{folder}
+	for _, f := range s.RecentFolders {
+		if f != folder && len(recent) < maxRecentFolders {
+			recent = append(recent, f)
+		}
+	}
+	s.RecentFolders = recent
 }
 
 // AutoCompileEnabled is AutoCompile with its default (on).
