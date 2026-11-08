@@ -21,7 +21,7 @@ Un editor LaTeX funcional "al estilo VS Code": explorador de archivos, editor, c
 - La app debe **detectar** los motores instalados (health check en `internal/system/`) y **ofrecer instalarlos** si faltan. La instalación siempre la confirma el usuario.
 - **Editor decidido:** CodeMirror 6 (sin `basicSetup`; las extensiones se eligen a mano en `Editor.svelte`).
 - **Repositorio central** `My Creative Ink Repository`: en el **primer arranque** el usuario elige "Solo para mí" (sus Documentos) o "Para todos los usuarios" (Documentos compartidos; no existe en Linux). Go calcula la ruta según el sistema operativo y guarda la elección en la configuración del usuario.
-- **Un solo archivo activo** (sin pestañas, por minimalismo); se compila el `.tex` activo.
+- **Un solo archivo activo** (sin pestañas, por minimalismo). Se compila el **archivo principal** del proyecto si está definido (`.creative-ink-meta`); si no, el `.tex` activo.
 - **Visor PDF decidido:** PDF.js (`pdfjs-dist`) en `<canvas>`; el PDF lo sirve el middleware de Go (`preview.go`).
 - Decisiones **pendientes** (no las asumas, espera instrucciones): modelo de plugins, migración a TypeScript, licencia y patrón final de IPC.
 
@@ -121,4 +121,10 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] `go vet` con `GOOS=linux` y `GOOS=windows` limpio
   - [x] Tests con `HOME` temporal y `t.Chdir` (simula el arranque desde el Finder); `go test -race ./...` limpio
   - [x] `.gitignore` raíz: `*.pdf`, `*.aux`, `*.log`, `*.fls`, `*.fdb_latexmk`, `*.xdv`, `*.synctex.gz` y demás auxiliares de LaTeX
+  - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 10 — Archivo principal para proyectos de varios archivos** (deuda técnica #6; código listo, falta validar con `wails dev`)
+  - [x] `core/project_meta.go`: `.creative-ink-meta` con `mainFile` relativo; se ignora si es inválido o no existe
+  - [x] `App.mainFile` (bajo `mu`, se recarga al cambiar de carpeta), `compileTarget()` para el Scheduler, `preview.go` y los eventos; guardar cualquier `.tex` recompila el principal
+  - [x] Binding `SetMainFile(path)` (`""` lo quita); `WorkspaceState.mainFilePath`
+  - [x] Frontend: `compileTarget()` en `workspace.svelte.js`; insignia `★ MAIN` y botón ☆/★ al pasar el ratón en `FileTreeItem`; la vista previa muestra el nombre del PDF
   - [ ] Validación del programador: reiniciar `wails dev`

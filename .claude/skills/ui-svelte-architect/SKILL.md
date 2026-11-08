@@ -27,7 +27,8 @@ Those files win over anything in this skill if they disagree.
   - `components/Preview.svelte`: PDF.js on `<canvas>`, driven by `pdfTimestamp`; keeps `currentPageNumber`.
   - `components/CompileLog.svelte`, `components/HealthPanel.svelte`.
   - State modules: `lib/ui.svelte.js` (visual state), `lib/workspace.svelte.js` (mirror of Go:
-    folder, active file, tree), `lib/compilation.svelte.js` (`compile:*` events, filtered by `file`),
+    folder, active file, main file, tree; `compileTarget()` = main file or active file, the key for
+    the Preview and the filter for `compile:*` events), `lib/compilation.svelte.js` (`compile:*` events, filtered by `file`),
     `lib/actions.js` (global actions: open folder/file, save, save as, compile).
   - `lib/pdf.js`: PDF.js worker and document lifecycle (`loadPdf`, `releasePdf`).
 - Backend calls only through `frontend/wailsjs/go/main/App.js` (generated; never edit by hand).

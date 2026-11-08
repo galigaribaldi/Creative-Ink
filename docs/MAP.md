@@ -23,7 +23,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     │   ├── core/                 ← dominio: proyectos, archivos, (futuro) plugins
     │   │   ├── file_manager.go   ← FileManager: guardado atómico (tmp + rename) y carga de documentos
     │   │   ├── workspace.go      ← ScanTree, ResolveInFolder, DefaultTeXFile, PrepareRepository
-    │   │   └── settings.go       ← elección del primer arranque en <UserConfigDir>/creative-ink/settings.json
+    │   │   ├── settings.go       ← elección del primer arranque en <UserConfigDir>/creative-ink/settings.json
+    │   │   └── project_meta.go   ← <carpeta>/.creative-ink-meta: archivo principal del proyecto (ruta relativa)
     │   └── system/               ← entorno: health check de LaTeX y detección/instalación de motores
     │       ├── health.go         ← HealthStatus: herramientas de LaTeX, hardware y repositorio
     │       ├── platform.go       ← RepositoryOptions por SO, parser de XDG user-dirs
@@ -99,18 +100,19 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 | Tipo    | Nombre                | Dirección  | Firma / payload | Sección |
 |---------|-----------------------|------------|-----------------|---------|
 | Binding | `SystemHealthCheck`   | UI → Go    | `() → system.HealthStatus` = `{ hasXeLaTeX, hasLatexmk, hasBiber: boolean; totalRAMGB, freeDiskSpaceGB: number; cpuCores: number; hardwareTier: string; hardwareTierId: 'basic'\|'advanced'\|'unknown'; repository: system.RepositoryOptions; warnings: string[] }`. Incluye el SO y el repositorio (actual y rutas propuestas) | 2, 9 |
-| Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ canceled, folderPath, filePath, tree: core.FileNode, truncated }`. Carpeta abierta (al inicio, el repositorio central guardado), documento activo y árbol. **`needsSetup: true`** en el primer arranque, sin crear nada en disco | 9 |
+| Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ needsSetup, canceled, folderPath, filePath, mainFilePath, tree: core.FileNode, truncated }`. `mainFilePath` es el archivo principal del proyecto (`""` si no hay, o si se borró). Carpeta abierta (al inicio, el repositorio central guardado), documento activo y árbol. **`needsSetup: true`** en el primer arranque, sin crear nada en disco | 9 |
 | Binding | `GetRepositoryOptions` | UI → Go   | `() → system.RepositoryOptions` = `{ os, osName, user, shared: RepositoryOption; warnings: string[]; currentScope, currentPath }`, con `RepositoryOption` = `{ scope, path, available, reason }`. Rutas propuestas para este SO | 9 |
 | Binding | `SetupRepository`     | UI → Go    | `(scope: 'user'\|'shared') → main.WorkspaceState`. Crea el repositorio en la ruta que calcula Go, guarda la elección y lo abre. Rechaza ámbitos desconocidos o no disponibles | 9 |
 | Binding | `RefreshWorkspace`    | UI → Go    | `() → main.WorkspaceState`: vuelve a escanear la carpeta abierta | 8 |
 | Binding | `OpenFolderDialog`    | UI → Go    | `() → main.WorkspaceState`. Diálogo nativo; `canceled: true` si se cierra. Abre la carpeta y elige `main.tex` o el primer `.tex` | 8 |
 | Binding | `OpenFile`            | UI → Go    | `(path) → main.OpenedFile` = `{ path, content }`. Solo `.tex` dentro de la carpeta abierta. Lo hace documento activo y encola su compilación | 8 |
-| Binding | `SaveContent`         | UI → Go    | `(path, content) → main.SaveResult` = `{ saved }`. Responde de inmediato. `path` (absoluto, `.tex`, dentro de la carpeta) viaja con cada guardado; **solo compila si `path` es el documento activo**. Rechaza la promesa si la ruta no es válida o falla la escritura | 8 |
+| Binding | `SaveContent`         | UI → Go    | `(path, content) → main.SaveResult` = `{ saved }`. Responde de inmediato. `path` (absoluto, `.tex`, dentro de la carpeta) viaja con cada guardado. Compila si `path` es el documento activo o, **si hay archivo principal, al guardar cualquier `.tex`** (un capítulo con `\input` cambia el PDF del principal). Rechaza la promesa si la ruta no es válida o falla la escritura | 8 |
 | Binding | `SaveAsDialog`        | UI → Go    | `(content) → main.WorkspaceState`. Diálogo nativo (filtro `*.tex`; agrega `.tex` si falta). Si el destino está fuera de la carpeta, su directorio pasa a ser la carpeta abierta. Lo hace documento activo y compila | 8 |
+| Binding | `SetMainFile`         | UI → Go    | `(path) → main.WorkspaceState`. `.tex` existente dentro de la carpeta, o `""` para quitarlo. Se guarda (ruta relativa) en `<carpeta>/.creative-ink-meta` y se recompila el nuevo objetivo | 10 |
 | Binding | `RequestCompile`      | UI → Go    | `() → boolean`: encola una compilación del documento activo **sin guardar**; `false` solo durante el cierre | 7 |
-| Evento  | `compile:started`     | Go → UI    | `main.CompileStartedEvent` = `{ file }`. La UI ignora los eventos de un archivo que ya no está activo | 8 |
+| Evento  | `compile:started`     | Go → UI    | `main.CompileStartedEvent` = `{ file }`: el **objetivo de compilación** (principal o activo). La UI ignora los eventos de otro objetivo | 8, 10 |
 | Evento  | `compile:finished`    | Go → UI    | `main.CompileFinishedEvent` = `{ file, success, logs, durationMs }`. No se emite después del cierre | 8 |
-| HTTP    | `/__preview/document.pdf` | WebView → Go | `GET` → PDF del **documento activo** (`Cache-Control: no-store`, admite Range; 404 si todavía no existe). La UI agrega `?t=<timestamp>` para forzar la recarga | 4 |
+| HTTP    | `/__preview/document.pdf` | WebView → Go | `GET` → PDF del **objetivo de compilación** (el del archivo principal si existe; si no, el del activo) (`Cache-Control: no-store`, admite Range; 404 si todavía no existe). La UI agrega `?t=<timestamp>` para forzar la recarga | 4 |
 
 ## 4. Motores LaTeX (requisito de producto)
 - **Detección (`internal/system/health.go`):** primero `exec.LookPath` y, si falla, `fallbackDirs` (`/Library/TeX/texbin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`) más `/usr/local/texlive/*/bin/*`. Motivo: en macOS, una app abierta desde el Finder o el Dock **no hereda el PATH de la shell**.
@@ -160,13 +162,20 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 - **Diálogos inyectables** (`pickFolder`, `pickSavePath`), igual que `emit`, para testear sin el runtime de Wails.
 - **Decisión de diseño:** un solo archivo activo a la vez, sin pestañas.
 
+## 4.3.2 Proyectos de varios archivos: archivo principal (Sección 10)
+- **Objetivo de compilación** = archivo principal si el proyecto tiene uno **y existe en disco**; si no, el documento activo. `App.compileTarget()` lo decide para el Scheduler (`compilingDoc` se toma al empezar cada compilación), para `preview.go` (qué PDF se sirve) y para el `file` de los eventos.
+- **Persistencia:** `<carpeta>/.creative-ink-meta` (JSON: `{ version, mainFile }`), con `mainFile` **relativo y con `/`**, así el proyecto se puede mover o compartir entre sistemas. Es un archivo oculto, así que no aparece en el explorador. Se recarga cada vez que cambia la carpeta abierta. Si es inválido (fuera de la carpeta, no `.tex`, borrado), se ignora y se compila el activo.
+- **Guardar cualquier `.tex`** de la carpeta recompila el principal (el Scheduler junta las ráfagas).
+- **Frontend:** `compileTarget()` en `workspace.svelte.js` (`mainFilePath || currentFilePath`) es la clave del `Preview` y el filtro de los eventos `compile:*`. Al saltar entre capítulos, el objetivo no cambia: el PDF, la página y el log se conservan.
+- **UI:** insignia `★ MAIN` en el árbol. Al pasar el ratón por un `.tex` aparece ☆ ("Establecer como principal"); en el principal, ★ lo quita. La vista previa muestra qué PDF se ve (`· main.pdf`).
+
 ## 4.4 Deuda técnica conocida (análisis del 2026-11-05)
 1. ~~**Guardar y compilar están acoplados en `SaveContent`.**~~ **Resuelto el 2026-11-06:** `SaveContent` responde de inmediato y la compilación va por el `Scheduler` con eventos (ver §4.3).
 2. **Se compila con cada pausa de 1 s.** Convendría un debounce propio para la compilación (por ejemplo 2–3 s), además de Cmd+S para compilar al instante.
 3. **No se guarda al cerrar la ventana:** falta `OnBeforeClose` para hacer un flush en Go.
 4. ~~**La carpeta *inicial* depende del directorio de trabajo** (`./workspace`).~~ **Resuelto el 2026-11-07:** la app abre un repositorio central en `~/Documents/My Creative Ink Repository`, una ruta **absoluta** construida con `os.UserHomeDir()` y `filepath.Join` (válida en macOS y Linux). Se crea con `MkdirAll(0755)` si no existe y lleva un `main.tex` inicial si no hay ningún `.tex`, sin sobrescribir nunca. Funciona igual desde `wails dev` y desde el Finder. **Ampliado el mismo día:** la ruta depende del SO y de la elección del primer arranque ("Solo para mí" o "Para todos los usuarios"); en Linux se respeta XDG (`~/Documentos`) y en Windows, Known Folders (ver §1). *Pendiente menor:* recordar la última carpeta abierta y permitir cambiar el repositorio desde la UI (hoy hay que borrar `settings.json`).
 5. **El PDF se carga entero en memoria (`fetch` → `data`).** Basta para documentos normales. Para PDFs de cientos de MB habría que usar `PDFDataRangeTransport`.
-6. **Proyectos de varios archivos:** se compila el `.tex` **activo**. Si editas un capítulo que se incluye con `\input`, se compila el capítulo y no el documento principal. Falta definir un "archivo principal" por carpeta.
+6. ~~**Proyectos de varios archivos:** se compila el `.tex` **activo**.~~ **Resuelto el 2026-11-07:** cada carpeta puede tener un **archivo principal** (`SetMainFile`, guardado en `.creative-ink-meta`). Se compila y se muestra ese archivo mientras se edita cualquier capítulo (ver §4.3.2). Texto original: Si editas un capítulo que se incluye con `\input`, se compila el capítulo y no el documento principal. Falta definir un "archivo principal" por carpeta.
 7. **El árbol no se actualiza solo** (no hay `fsnotify`): se refresca al abrir carpeta, al usar Guardar como o con el botón Actualizar.
 
 ## 5. Skills / conocimiento requerido
