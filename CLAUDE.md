@@ -136,3 +136,9 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] Frontend: `listenWorkspaceEvents()` → `refreshWorkspace()` (uno en curso, los demás juntados) y `applyTree()`, que no toca el archivo abierto
   - [x] `go vet`, `go test`, `go test -race` y `GOOS=linux/windows go vet` limpios; tests del watcher estables (5 repeticiones)
   - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 12 — Atajos, debounce de compilación y cierre seguro** (deudas técnicas #2 y #3; código listo, falta validar con `wails dev`)
+  - [x] Cmd+S / Ctrl+S global en `App.svelte` (`preventDefault`): guardar al instante y compilar; se quitó `Mod-s` del keymap de CodeMirror
+  - [x] `Editor.svelte`: guardar a 1 s y compilar a 3 s de inactividad (`saveAndCompile` → `RequestCompile`); `SaveContent` ya no compila
+  - [x] `OnBeforeClose` → `App.beforeClose`: evento `app:before-close`, binding `ConfirmClose(saved)`, límite de 2 s y diálogo nativo si el guardado falló
+  - [x] Tests del protocolo de cierre (confirmación, timeout, cancelar, duplicados); `go test -race` y `GOOS=linux/windows go vet` limpios
+  - [ ] Validación del programador: reiniciar `wails dev`

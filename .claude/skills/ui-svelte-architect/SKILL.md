@@ -113,6 +113,7 @@ replace testing in the real app.
 - **`svelte-ignore`.** In runes mode, codes are comma-separated:
   `<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->`.
 - **Accessibility.** Icon-only buttons need `aria-label` and `title`. Modals need `role="dialog"`,
-  `aria-modal` and closing with Escape. Keep keyboard shortcuts consistent (Mod-s saves).
+  `aria-modal` and closing with Escape. Global shortcuts live in `App.svelte` (`<svelte:window onkeydown>`):
+  Mod-s save + compile, Mod-Shift-s save as, Mod-o open folder, Mod-b sidebar. Do not rebind them in CodeMirror's keymap.
 - **Project rules.** You cannot run `npm install`, `npm run`, `wails dev` or `wails build`.
   If a component needs a new dependency, stop and give the user the exact command.
