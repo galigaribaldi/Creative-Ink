@@ -3,6 +3,7 @@ module creative-ink
 go 1.26.0
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/wailsapp/wails/v2 v2.17.1
 	golang.org/x/sys v0.48.0

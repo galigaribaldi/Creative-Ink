@@ -104,10 +104,7 @@ func (s *treeScanner) children(dir string, depth int) []FileNode {
 	var nodes []FileNode
 	for _, e := range entries {
 		name := e.Name()
-		switch {
-		case strings.HasPrefix(name, "."), e.Type()&fs.ModeSymlink != 0:
-			continue
-		case e.IsDir() && skippedDirs[name], !e.IsDir() && isBuildArtifact(name):
+		if e.Type()&fs.ModeSymlink != 0 || isIgnoredEntry(name, e.IsDir()) {
 			continue
 		}
 		if s.count >= maxTreeEntries {
