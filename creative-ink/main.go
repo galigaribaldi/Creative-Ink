@@ -27,6 +27,8 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 255},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
+		// Flush CodeMirror to disk before the window closes (see App.beforeClose).
+		OnBeforeClose: app.beforeClose,
 		Bind: []any{
 			app,
 		},

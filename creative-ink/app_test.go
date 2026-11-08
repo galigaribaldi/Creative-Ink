@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,7 +80,22 @@ func expectCompileOf(t *testing.T, events chan emittedEvent, file string) {
 	}
 }
 
-func TestSaveContentReturnsBeforeCompilationEnds(t *testing.T) {
+func TestSaveContentSavesWithoutCompiling(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	_, doc := a.workspace()
+
+	res, err := a.SaveContent(doc, "nuevo")
+	if err != nil || !res.Saved {
+		t.Fatalf("SaveContent = %+v, %v", res, err)
+	}
+	if data, _ := os.ReadFile(doc); string(data) != "nuevo" {
+		t.Fatalf("file = %q", data)
+	}
+	// Compiling is the UI's call (3 s idle or Cmd/Ctrl+S → RequestCompile).
+	expectNoEvent(t, events)
+}
+
+func TestRequestCompileDoesNotBlock(t *testing.T) {
 	release := make(chan struct{})
 	a, events := newTestApp(t, func(ctx context.Context, workdir, filename string) (string, error) {
 		<-release // a slow latexmk
@@ -87,24 +103,15 @@ func TestSaveContentReturnsBeforeCompilationEnds(t *testing.T) {
 	})
 	_, doc := a.workspace()
 
-	done := make(chan SaveResult, 1)
-	go func() {
-		res, err := a.SaveContent(doc, "nuevo")
-		if err != nil {
-			t.Errorf("SaveContent: %v", err)
-		}
-		done <- res
-	}()
+	done := make(chan bool, 1)
+	go func() { done <- a.RequestCompile() }()
 	select {
-	case res := <-done:
-		if !res.Saved {
-			t.Fatalf("SaveResult = %+v", res)
+	case ok := <-done:
+		if !ok {
+			t.Fatal("RequestCompile rejected")
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("SaveContent blocked on the compilation")
-	}
-	if data, _ := os.ReadFile(doc); string(data) != "nuevo" {
-		t.Fatalf("file = %q", data)
+		t.Fatal("RequestCompile blocked on the compilation")
 	}
 	close(release)
 	expectCompileOf(t, events, doc)
@@ -131,7 +138,7 @@ func TestSaveContentValidatesPath(t *testing.T) {
 	expectNoEvent(t, events)
 }
 
-func TestSaveContentCompilesOnlyTheActiveDocument(t *testing.T) {
+func TestSaveContentOfAnotherFile(t *testing.T) {
 	a, events := newTestApp(t, okCompile)
 	folder, _ := a.workspace()
 	other := filepath.Join(folder, "chapter.tex")
@@ -413,10 +420,13 @@ func TestSetMainFileCompilesMainWhileEditingAChapter(t *testing.T) {
 	}
 	expectCompileOf(t, events, mainTex)
 
-	// Saving the chapter recompiles the main document, not the chapter.
+	// Saving the chapter does not compile; the UI's RequestCompile then
+	// compiles the main document, not the chapter.
 	if _, err := a.SaveContent(chapter, "capítulo 2"); err != nil {
 		t.Fatal(err)
 	}
+	expectNoEvent(t, events)
+	a.RequestCompile()
 	expectCompileOf(t, events, mainTex)
 	if a.pdfPath() != filepath.Join(folder, "main.pdf") {
 		t.Fatalf("preview must show the main PDF, got %q", a.pdfPath())
@@ -551,5 +561,98 @@ func TestWorkspaceChangedOnlyWhenTheTreeChanges(t *testing.T) {
 	a.stopWatching()
 	if !watchers[1].closed {
 		t.Fatal("shutdown must close the watcher")
+	}
+}
+
+// newClosingApp records quits and before-close events.
+func newClosingApp(t *testing.T) (*App, chan emittedEvent, *atomic.Int32) {
+	t.Helper()
+	a, events := newTestApp(t, okCompile)
+	var quits atomic.Int32
+	a.quit = func() {
+		quits.Add(1)
+		// runtime.Quit re-enters OnBeforeClose, which must now allow it.
+		if a.beforeClose(nil) {
+			t.Error("beforeClose must allow the close after it was confirmed")
+		}
+	}
+	a.closeTimeout = time.Hour // tests opt in to the timeout
+	return a, events, &quits
+}
+
+func TestBeforeCloseWaitsForTheUIFlush(t *testing.T) {
+	a, events, quits := newClosingApp(t)
+
+	if !a.beforeClose(nil) {
+		t.Fatal("the first close request must be prevented")
+	}
+	if ev := nextEvent(t, events); ev.name != EventAppBeforeClose {
+		t.Fatalf("event = %+v, want %s", ev, EventAppBeforeClose)
+	}
+	if !a.beforeClose(nil) {
+		t.Fatal("a second close while flushing must still be prevented")
+	}
+	expectNoEvent(t, events) // no duplicate request to the UI
+	if quits.Load() != 0 {
+		t.Fatal("must not quit before the UI confirms")
+	}
+
+	a.ConfirmClose(true)
+	if quits.Load() != 1 {
+		t.Fatalf("quits = %d, want 1", quits.Load())
+	}
+	a.ConfirmClose(true) // late duplicate: ignored
+	if quits.Load() != 1 {
+		t.Fatal("must quit only once")
+	}
+}
+
+func TestBeforeCloseTimeoutQuitsAnyway(t *testing.T) {
+	a, _, quits := newClosingApp(t)
+	a.closeTimeout = 30 * time.Millisecond
+
+	a.beforeClose(nil) // the UI never answers
+	deadline := time.Now().Add(2 * time.Second)
+	for quits.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if quits.Load() != 1 {
+		t.Fatal("the timeout must quit when the UI does not confirm")
+	}
+	a.ConfirmClose(true) // too late: ignored
+	if quits.Load() != 1 {
+		t.Fatal("must quit only once")
+	}
+}
+
+func TestConfirmCloseWithUnsavedEditsAsksFirst(t *testing.T) {
+	a, events, quits := newClosingApp(t)
+	var asked int
+	a.confirmQuit = func(string) bool { asked++; return false } // "Cancelar"
+
+	a.beforeClose(nil)
+	nextEvent(t, events)
+	a.ConfirmClose(false)
+	if asked != 1 || quits.Load() != 0 {
+		t.Fatalf("asked=%d quits=%d: declining must keep the window open", asked, quits.Load())
+	}
+
+	// The next close request starts over and asks the UI again.
+	if !a.beforeClose(nil) {
+		t.Fatal("must prevent again after a cancelled close")
+	}
+	nextEvent(t, events)
+	a.confirmQuit = func(string) bool { return true } // "Cerrar sin guardar"
+	a.ConfirmClose(false)
+	if quits.Load() != 1 {
+		t.Fatal("accepting must quit")
+	}
+}
+
+func TestConfirmCloseWithoutCloseInProgressIsIgnored(t *testing.T) {
+	a, _, quits := newClosingApp(t)
+	a.ConfirmClose(true)
+	if quits.Load() != 0 {
+		t.Fatal("ConfirmClose must not quit unless a close was requested")
 	}
 }

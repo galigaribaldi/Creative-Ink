@@ -27,6 +27,9 @@ const (
 	EventCompileStarted = "compile:started"
 	// EventCompileFinished carries a CompileFinishedEvent.
 	EventCompileFinished = "compile:finished"
+	// EventAppBeforeClose has no payload: the window is closing, the UI must
+	// flush pending edits and answer with ConfirmClose.
+	EventAppBeforeClose = "app:before-close"
 	// EventWorkspaceChanged carries a WorkspaceChangedEvent: files or folders
 	// were created, removed or renamed outside the app.
 	EventWorkspaceChanged = "workspace:changed"
@@ -34,6 +37,16 @@ const (
 
 // shutdownTimeout bounds how long closing the app waits for latexmk to die.
 const shutdownTimeout = 3 * time.Second
+
+// closeFlushTimeout bounds how long closing the window waits for the UI to
+// flush CodeMirror to disk before quitting anyway (a hung UI must not keep
+// the app open forever).
+const closeFlushTimeout = 2 * time.Second
+
+const (
+	closeAnywayButton = "Cerrar sin guardar"
+	cancelCloseButton = "Cancelar"
+)
 
 var (
 	errNoDocument = errors.New("no hay ningún documento .tex abierto")
@@ -67,6 +80,16 @@ type App struct {
 	// from <folder>/.creative-ink-meta whenever the folder changes. When set,
 	// it is compiled instead of the active document.
 	mainFile string
+
+	// Safe-close protocol (see beforeClose). quit and confirmQuit are
+	// injected: the real ones need a Wails context.
+	closeMu      sync.Mutex
+	closing      bool // waiting for the UI to flush
+	closeAllowed bool // the next OnBeforeClose lets the window close
+	closeTimer   *time.Timer
+	closeTimeout time.Duration
+	quit         func()
+	confirmQuit  func(message string) bool
 
 	// watchFolder starts a filesystem watcher (nil in tests = no watching).
 	watchFolder func(root string, onChange func()) (io.Closer, error)
@@ -142,6 +165,8 @@ func NewApp() *App {
 	a.watchFolder = func(root string, onChange func()) (io.Closer, error) {
 		return core.WatchFolder(root, core.WatchDebounce, onChange)
 	}
+	a.quit = a.quitWails
+	a.confirmQuit = a.dialogConfirmQuit
 	return a
 }
 
@@ -152,8 +177,11 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 		folder:  folder,
 		docPath: docPath,
 		emit:    func(string, ...any) {},
+		quit:    func() {},
 		// Overridden by tests; production detects the host OS.
-		repoOptions: system.DetectRepositoryOptions,
+		repoOptions:  system.DetectRepositoryOptions,
+		closeTimeout: closeFlushTimeout,
+		confirmQuit:  func(string) bool { return true },
 	}
 	if folder != "" {
 		a.mainFile = loadMainFile(folder)
@@ -357,20 +385,17 @@ func (a *App) OpenFile(path string) (OpenedFile, error) {
 
 // SaveContent writes content to path (a .tex inside the open folder) and
 // returns immediately. The path travels with every save so a late autosave
-// can never land in another file. Only saving the active document queues a
-// compilation (progress arrives as events). A failure rejects the promise.
+// can never land in another file. It does NOT compile: the UI calls
+// RequestCompile after 3 s without typing or on Cmd/Ctrl+S, so typing does
+// not keep the compile worker busy. A failure rejects the promise.
 func (a *App) SaveContent(path string, content string) (SaveResult, error) {
-	folder, active := a.workspace()
+	folder, _ := a.workspace()
 	clean, err := a.validateTeXPath(folder, path)
 	if err != nil {
 		return SaveResult{}, err
 	}
 	if err := a.files.SaveDocument(content, clean); err != nil {
 		return SaveResult{}, err
-	}
-	// A chapter included with \input changes the main document's PDF too.
-	if clean == active || a.hasMainFile() {
-		a.compiles.Request()
 	}
 	return SaveResult{Saved: true}, nil
 }
@@ -457,11 +482,103 @@ func (a *App) SetMainFile(path string) (WorkspaceState, error) {
 	return a.workspaceState()
 }
 
+// ConfirmClose is the UI's answer to EventAppBeforeClose: it has flushed
+// CodeMirror, and saved reports whether everything reached the disk. If not,
+// a native dialog asks before discarding the edits.
+func (a *App) ConfirmClose(saved bool) {
+	a.closeMu.Lock()
+	if !a.closing || a.closeAllowed {
+		a.closeMu.Unlock()
+		return // no close in progress, or the timeout already quit
+	}
+	if a.closeTimer != nil && !a.closeTimer.Stop() {
+		a.closeMu.Unlock()
+		return // the timeout fired meanwhile and is quitting
+	}
+	a.closeMu.Unlock()
+
+	if !saved && !a.confirmQuit("Hay cambios que no se pudieron guardar. ¿Cerrar de todos modos y perderlos?") {
+		a.closeMu.Lock()
+		a.closing = false // stay open; the next close request starts over
+		a.closeMu.Unlock()
+		return
+	}
+	a.allowCloseAndQuit()
+}
+
 // RequestCompile queues a background compilation of the active document as
 // it is on disk, without saving. It returns at once and reports false only
 // while the app is shutting down.
 func (a *App) RequestCompile() bool {
 	return a.compiles.Request()
+}
+
+// ── Safe close ─────────────────────────────────────────────────────────────
+
+// beforeClose is Wails' OnBeforeClose. The unsaved text lives in CodeMirror,
+// so Go cannot flush it alone. Protocol, without blocking (on Windows this
+// runs on the UI thread):
+//  1. First call: prevent the close, emit EventAppBeforeClose and arm a
+//     timeout (closeTimeout).
+//  2. The UI flushes and calls ConfirmClose → closeAllowed → runtime.Quit,
+//     which calls beforeClose again: now it returns false and the app quits.
+//  3. If the UI never answers, the timeout quits anyway.
+func (a *App) beforeClose(_ context.Context) (prevent bool) {
+	a.closeMu.Lock()
+	switch {
+	case a.closeAllowed:
+		a.closeMu.Unlock()
+		return false
+	case a.closing:
+		a.closeMu.Unlock()
+		return true // already waiting for the UI (e.g. a second click on ✕)
+	}
+	a.closing = true
+	a.closeTimer = time.AfterFunc(a.closeTimeout, func() {
+		log.Printf("[close] la interfaz no confirmó el guardado en %s; se cierra igualmente", a.closeTimeout)
+		a.allowCloseAndQuit()
+	})
+	a.closeMu.Unlock()
+
+	a.emit(EventAppBeforeClose)
+	return true
+}
+
+// allowCloseAndQuit lets the next OnBeforeClose pass and quits (once).
+func (a *App) allowCloseAndQuit() {
+	a.closeMu.Lock()
+	if a.closeAllowed {
+		a.closeMu.Unlock()
+		return
+	}
+	a.closeAllowed = true
+	a.closeMu.Unlock()
+	a.quit()
+}
+
+func (a *App) quitWails() {
+	if a.ctx != nil {
+		runtime.Quit(a.ctx) // re-enters beforeClose, which now allows it
+	}
+}
+
+func (a *App) dialogConfirmQuit(message string) bool {
+	if a.ctx == nil {
+		return true
+	}
+	answer, err := runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
+		Type:          runtime.QuestionDialog,
+		Title:         "Cambios sin guardar",
+		Message:       message,
+		Buttons:       []string{closeAnywayButton, cancelCloseButton},
+		DefaultButton: cancelCloseButton,
+		CancelButton:  cancelCloseButton,
+	})
+	if err != nil {
+		return true // never trap the user in an app that cannot close
+	}
+	// Windows ignores custom buttons and answers "Yes"/"No".
+	return answer == closeAnywayButton || answer == "Yes"
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -576,8 +693,6 @@ func (a *App) effectiveMainFile() string {
 	}
 	return main
 }
-
-func (a *App) hasMainFile() bool { return a.effectiveMainFile() != "" }
 
 // compileTarget is what gets compiled and previewed: the main file when the
 // project has one, otherwise the active document.
