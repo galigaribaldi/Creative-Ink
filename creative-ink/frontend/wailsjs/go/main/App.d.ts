@@ -3,6 +3,8 @@
 import {system} from '../models';
 import {main} from '../models';
 
+export function CancelTerminalCommand():Promise<void>;
+
 export function ConfirmClose(arg1:boolean):Promise<void>;
 
 export function GetRepositoryOptions():Promise<system.RepositoryOptions>;
@@ -17,6 +19,8 @@ export function RefreshWorkspace():Promise<main.WorkspaceState>;
 
 export function RequestCompile():Promise<boolean>;
 
+export function RunTerminalCommand(arg1:string):Promise<main.TerminalResult>;
+
 export function SaveAsDialog(arg1:string):Promise<main.WorkspaceState>;
 
 export function SaveContent(arg1:string,arg2:string):Promise<main.SaveResult>;
@@ -24,5 +28,9 @@ export function SaveContent(arg1:string,arg2:string):Promise<main.SaveResult>;
 export function SetMainFile(arg1:string):Promise<main.WorkspaceState>;
 
 export function SetupRepository(arg1:string):Promise<main.WorkspaceState>;
+
+export function SyncTexBackward(arg1:number,arg2:number,arg3:number):Promise<main.SyncTexBackwardResult>;
+
+export function SyncTexForward(arg1:number,arg2:string):Promise<main.SyncTexForwardResult>;
 
 export function SystemHealthCheck():Promise<system.HealthStatus>;

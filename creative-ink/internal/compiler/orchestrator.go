@@ -42,9 +42,10 @@ func CompileLaTeX(workdir string, filename string) (string, error) {
 
 // CompileLaTeXContext runs
 //
-//	latexmk -xelatex -interaction=nonstopmode -halt-on-error <filename>
+//	latexmk -xelatex -interaction=nonstopmode -halt-on-error -synctex=1 <filename>
 //
-// inside workdir. Cancelling ctx (e.g. on app shutdown) kills latexmk.
+// inside workdir. -synctex=1 writes <doc>.synctex.gz, needed for SyncTeX
+// (PDF ↔ source navigation, see synctex.go). Cancelling ctx (e.g. on app shutdown) kills latexmk.
 // On success it returns a short message. On failure it returns the relevant
 // log (TeX errors first, then the output tail) and a non-nil error.
 func CompileLaTeXContext(parent context.Context, workdir string, filename string) (string, error) {
@@ -64,7 +65,7 @@ func CompileLaTeXContext(parent context.Context, workdir string, filename string
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, latexmk,
-		"-xelatex", "-interaction=nonstopmode", "-halt-on-error", filename)
+		"-xelatex", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", filename)
 	cmd.Dir = workdir
 	// latexmk invokes xelatex/biber by name. A GUI app launched from Finder
 	// lacks /Library/TeX/texbin on PATH, so prepend the dir where latexmk lives.

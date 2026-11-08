@@ -168,6 +168,31 @@ type TerminalResult struct {
 // errTerminalBusy rejects a second command while one is running.
 var errTerminalBusy = errors.New("ya hay un comando en ejecución; espera o cancélalo")
 
+// SyncTexForwardResult is where a source line appears in the PDF of the
+// compile target: 1-based page and a box in PDF points from the page's
+// top-left corner. Found is false (no error) when SyncTeX has no answer;
+// Reason then says why, for a subtle hint in the UI.
+type SyncTexForwardResult struct {
+	Found  bool    `json:"found"`
+	Page   int     `json:"page"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+	Reason string  `json:"reason,omitempty"`
+}
+
+// SyncTexBackwardResult is the source of a point of the PDF: a .tex inside
+// the open folder (absolute) and a 1-based line.
+type SyncTexBackwardResult struct {
+	Found  bool   `json:"found"`
+	File   string `json:"file"`
+	Line   int    `json:"line"`
+	Reason string `json:"reason,omitempty"`
+}
+
+const syncTexNoData = "Sin datos de SyncTeX: compila el documento (⌘S) e inténtalo de nuevo."
+
 // CompileStartedEvent is the payload of EventCompileStarted.
 type CompileStartedEvent struct {
 	File string `json:"file"`
@@ -665,6 +690,52 @@ func (a *App) CancelTerminalCommand() {
 	if a.termCancel != nil {
 		a.termCancel()
 	}
+}
+
+// SyncTexForward (source → PDF): where line of file (a .tex inside the open
+// folder, possibly a chapter) appears in the compile target's PDF. It reads
+// the .synctex.gz of the last compilation, so recent edits may be slightly
+// off until the next compile.
+func (a *App) SyncTexForward(line int, file string) (SyncTexForwardResult, error) {
+	folder, _ := a.workspace()
+	clean, err := a.validateTeXPath(folder, file)
+	if err != nil {
+		return SyncTexForwardResult{}, err
+	}
+	target := a.compileTarget()
+	if target == "" {
+		return SyncTexForwardResult{Reason: syncTexNoData}, nil
+	}
+	box, found := compiler.SyncTeXForward(context.Background(), compiler.PDFPath(target), clean, line)
+	if !found {
+		return SyncTexForwardResult{Reason: syncTexNoData}, nil
+	}
+	return SyncTexForwardResult{
+		Found: true, Page: box.Page, X: box.X, Y: box.Y, Width: box.Width, Height: box.Height,
+	}, nil
+}
+
+// SyncTexBackward (PDF → source): which .tex line produced the point (x, y)
+// of page, in PDF points from the page's top-left corner. Only files inside
+// the open folder are returned (not e.g. article.cls from the TeX tree).
+func (a *App) SyncTexBackward(page int, x float64, y float64) (SyncTexBackwardResult, error) {
+	target := a.compileTarget()
+	if target == "" {
+		return SyncTexBackwardResult{Reason: syncTexNoData}, nil
+	}
+	src, found := compiler.SyncTeXBackward(context.Background(), compiler.PDFPath(target), page, x, y)
+	if !found {
+		return SyncTexBackwardResult{Reason: syncTexNoData}, nil
+	}
+	folder, _ := a.workspace()
+	clean, err := a.validateTeXPath(folder, src.File)
+	if err != nil {
+		return SyncTexBackwardResult{Reason: "Ese punto viene de un archivo fuera del proyecto."}, nil
+	}
+	if info, err := os.Stat(clean); err != nil || !info.Mode().IsRegular() {
+		return SyncTexBackwardResult{Reason: "El archivo de origen ya no existe."}, nil
+	}
+	return SyncTexBackwardResult{Found: true, File: clean, Line: src.Line}, nil
 }
 
 // RequestCompile queues a background compilation of the active document as

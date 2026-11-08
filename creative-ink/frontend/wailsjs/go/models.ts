@@ -69,6 +69,72 @@ export namespace main {
 	        this.saved = source["saved"];
 	    }
 	}
+	export class SyncTexBackwardResult {
+	    found: boolean;
+	    file: string;
+	    line: number;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SyncTexBackwardResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.found = source["found"];
+	        this.file = source["file"];
+	        this.line = source["line"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class SyncTexForwardResult {
+	    found: boolean;
+	    page: number;
+	    x: number;
+	    y: number;
+	    width: number;
+	    height: number;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SyncTexForwardResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.found = source["found"];
+	        this.page = source["page"];
+	        this.x = source["x"];
+	        this.y = source["y"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class TerminalResult {
+	    command: string;
+	    folder: string;
+	    output: string;
+	    exitCode: number;
+	    timedOut: boolean;
+	    canceled: boolean;
+	    durationMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TerminalResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.command = source["command"];
+	        this.folder = source["folder"];
+	        this.output = source["output"];
+	        this.exitCode = source["exitCode"];
+	        this.timedOut = source["timedOut"];
+	        this.canceled = source["canceled"];
+	        this.durationMs = source["durationMs"];
+	    }
+	}
 	export class WorkspaceState {
 	    needsSetup: boolean;
 	    canceled: boolean;

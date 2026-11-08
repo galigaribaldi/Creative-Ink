@@ -729,3 +729,25 @@ func TestRunTerminalCommandNeedsAFolder(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNoFolder", err)
 	}
 }
+
+func TestSyncTexBindingsWithoutDataAreSilent(t *testing.T) {
+	a, _ := newTestApp(t, okCompile)
+	folder, doc := a.workspace()
+
+	fwd, err := a.SyncTexForward(3, doc)
+	if err != nil || fwd.Found || fwd.Reason == "" {
+		t.Fatalf("forward = %+v, %v; want not found with a reason", fwd, err)
+	}
+	back, err := a.SyncTexBackward(1, 100, 100)
+	if err != nil || back.Found || back.Reason == "" {
+		t.Fatalf("backward = %+v, %v; want not found with a reason", back, err)
+	}
+
+	// Paths are validated like every other file binding.
+	if _, err := a.SyncTexForward(1, filepath.Join(t.TempDir(), "x.tex")); !errors.Is(err, core.ErrOutsideFolder) {
+		t.Errorf("outside folder: err = %v", err)
+	}
+	if _, err := a.SyncTexForward(1, filepath.Join(folder, "notes.txt")); !errors.Is(err, core.ErrNotTeX) {
+		t.Errorf("not .tex: err = %v", err)
+	}
+}

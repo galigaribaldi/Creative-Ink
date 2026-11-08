@@ -53,7 +53,9 @@ func IsTeXFile(name string) bool {
 }
 
 func isBuildArtifact(name string) bool {
-	if strings.HasSuffix(name, ".synctex.gz") || strings.HasSuffix(name, ".run.xml") {
+	// <doc>.synctex(busy) exists only while TeX writes the SyncTeX file.
+	if strings.HasSuffix(name, ".synctex.gz") || strings.HasSuffix(name, ".synctex(busy)") ||
+		strings.HasSuffix(name, ".synctex") || strings.HasSuffix(name, ".run.xml") {
 		return true
 	}
 	return buildArtifacts[strings.ToLower(filepath.Ext(name))]
