@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte'
   import ActionBar from './components/ActionBar.svelte'
   import HealthPanel from './components/HealthPanel.svelte'
+  import RepositorySetup from './components/RepositorySetup.svelte'
   import Sidebar from './components/Sidebar.svelte'
   import Workspace from './components/Workspace.svelte'
   import { initWorkspace, openFolder, saveAs } from './lib/actions.js'
@@ -60,6 +61,11 @@
 
 {#if ui.healthOpen}
   <HealthPanel onclose={() => (ui.healthOpen = false)} />
+{/if}
+
+<!-- First run only: choose where the central repository lives. -->
+{#if workspace.needsSetup}
+  <RepositorySetup />
 {/if}
 
 <style>

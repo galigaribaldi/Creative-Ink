@@ -17,6 +17,8 @@
   let loading = $state(false)
   let error = $state('')
 
+  const SCOPE_LABELS = { user: 'Solo para mí', shared: 'Para todos los usuarios' }
+
   // A failed Go probe reports 0; show "No disponible" instead of a fake 0.
   const fmt = (value, unit) => (value > 0 ? `${value} ${unit}` : 'No disponible')
 
@@ -96,6 +98,39 @@
           <span class="badge tier-{status.hardwareTierId}">{status.hardwareTier}</span>
         </section>
       </div>
+
+      <section class="repository">
+        <h2>Sistema y repositorio</h2>
+        <ul class="list">
+          <li class="card">
+            <span>Sistema operativo</span>
+            <span class="value">{status.repository.osName}</span>
+          </li>
+          <li class="card">
+            <span>Repositorio actual</span>
+            <span class="value path" title={status.repository.currentPath}>
+              {status.repository.currentPath
+                ? `${SCOPE_LABELS[status.repository.currentScope] ?? ''} · ${status.repository.currentPath}`
+                : 'Sin configurar'}
+            </span>
+          </li>
+          {#each [status.repository.user, status.repository.shared] as option (option.scope)}
+            <li class="card" class:missing={!option.available}>
+              <span>Propuesta: {SCOPE_LABELS[option.scope]}</span>
+              <span class="value path" title={option.path || option.reason}>
+                {option.available ? option.path : option.reason}
+              </span>
+            </li>
+          {/each}
+        </ul>
+        {#if status.repository.warnings.length}
+          <ul class="warnings">
+            {#each status.repository.warnings as warning}
+              <li>⚠️ {warning}</li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
 
       {#if status.warnings.length}
         <ul class="warnings">
@@ -264,6 +299,24 @@
     color: #9d9d9d;
     border-color: #6b6b6b;
     background: rgba(157, 157, 157, 0.1);
+  }
+
+  .repository {
+    width: auto;
+    max-width: 624px;
+  }
+
+  .path {
+    max-width: 380px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl; /* keep the end of long paths visible */
+    text-align: left;
+  }
+
+  .card.missing .path {
+    color: #9d9d9d;
   }
 
   .warnings {

@@ -7,7 +7,7 @@
 
 /**
  * @typedef {{ name: string, path: string, isDir: boolean, editable: boolean, children?: FileNode[] }} FileNode
- * @typedef {{ canceled: boolean, folderPath: string, filePath: string, tree: FileNode, truncated: boolean }} WorkspaceState
+ * @typedef {{ needsSetup: boolean, canceled: boolean, folderPath: string, filePath: string, tree: FileNode, truncated: boolean }} WorkspaceState
  */
 
 export const workspace = $state({
@@ -21,12 +21,15 @@ export const workspace = $state({
   /** @type {FileNode | null} */
   fileTree: null,
   truncated: false,
+  /** First run: the user has not chosen where the central repository lives. */
+  needsSetup: false,
   /** Last workspace error (dialogs, scan), shown in the explorer. */
   error: ''
 })
 
 /** Applies a WorkspaceState returned by Go. */
 export function applyWorkspace(/** @type {WorkspaceState} */ state) {
+  workspace.needsSetup = state.needsSetup
   workspace.currentFolderPath = state.folderPath
   workspace.fileTree = state.tree
   workspace.truncated = state.truncated

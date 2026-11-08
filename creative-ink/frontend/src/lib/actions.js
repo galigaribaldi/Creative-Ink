@@ -7,7 +7,8 @@ import {
   OpenFolderDialog,
   RefreshWorkspace,
   RequestCompile,
-  SaveAsDialog
+  SaveAsDialog,
+  SetupRepository
 } from '../../wailsjs/go/main/App.js'
 import { applyWorkspace, workspace } from './workspace.svelte.js'
 
@@ -65,6 +66,22 @@ export async function openFolder() {
     if (!state.canceled) applyWorkspace(state)
   } catch (err) {
     report(err)
+  }
+}
+
+/**
+ * First run: creates the central repository for the chosen scope and opens
+ * it. Go computes the path for this OS; only the scope is sent.
+ * @param {'user' | 'shared'} scope
+ * @returns {Promise<boolean>} true on success
+ */
+export async function setupRepository(scope) {
+  try {
+    applyWorkspace(await SetupRepository(scope))
+    return true
+  } catch (err) {
+    report(err)
+    return false
   }
 }
 
