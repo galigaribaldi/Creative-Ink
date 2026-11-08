@@ -19,6 +19,9 @@ Those files win over this skill if they disagree.
   (one run at a time, coalesced). Never call `CompileLaTeX` synchronously from a binding.
 - `creative-ink/internal/system/health.go`: `FindBinary(name) (path, ok)` with `fallbackDirs`
   and `fallbackGlobs`. Every binary lookup goes through it.
+- `creative-ink/internal/compiler/manual.go`: `RunPasses` (manual tool sequences such as `ci compile`) and
+  `WithCompileLock`. Any TeX run or aux-file cleanup outside the Scheduler MUST go through them.
+- `creative-ink/internal/ci/ci.go`: the hybrid terminal's `ci` commands (Makefile translations).
 - Tests: `internal/compiler/orchestrator_test.go` (unit) plus an opt-in integration test:
   `CREATIVE_INK_LATEX_TEST=1 go test ./internal/compiler -run Integration -v` (the user runs it).
 

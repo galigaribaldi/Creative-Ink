@@ -165,3 +165,9 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] Bindings `SyncTexForward(line, file)` y `SyncTexBackward(page, x, y)` (solo `.tex` del proyecto), sobre el PDF del objetivo de compilación
   - [x] Frontend: `lib/synctex.svelte.js`; ⌘-clic / Ctrl-clic y ⌘⌥J / Ctrl+Alt+J en el editor → salto de página y recuadro en el PDF; doble clic en el PDF → abre el `.tex` y selecciona la línea
   - [ ] Validación del programador: reiniciar `wails dev` y compilar una vez (para generar `.synctex.gz`)
+- [ ] **Sección 17 — Terminal híbrida con comandos `ci`** (código listo, falta validar con `wails dev`)
+  - [x] `internal/ci`: `ci help`, `ci config autocompile [on|off]`, `ci compile rapido|borrador|completo|solo <cap>`, `ci clean tikz|all` (traducción del Makefile, sin shell ni make). `ci check` se quitó: las herramientas propias de un proyecto llegarán como plugins
+  - [x] `compiler.RunPasses` / `WithCompileLock`: los builds manuales y la copia de la instantánea comparten el candado con latexmk; 10 min de límite
+  - [x] `RunTerminalCommand` enruta `ci …` a Go; los builds emiten `compile:started`/`compile:finished`; `settings.json.autoCompile` + `WorkspaceState.autoCompile`
+  - [ ] Pendiente de decisión (propuesta en `docs/MAP.md` §4.6): servicio de configuración por capas, confianza de carpetas para `.latexmkrc`, registro de comandos `ci` y host de plugins. Hasta entonces la UI no respeta `autoCompile`, y `--shell-escape` no se ofrece
+  - [ ] Validación del programador: reiniciar `wails dev` y probar `ci help` en la terminal

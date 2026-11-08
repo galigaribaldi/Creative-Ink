@@ -17,14 +17,17 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     ├── wails.json                ← configuración del proyecto Wails
     ├── go.mod
     ├── internal/                 ← lógica Go no importable desde fuera del módulo
+    │   ├── ci/
+    │   │   └── ci.go             ← comandos internos `ci` de la terminal híbrida (traducción del Makefile, sin shell ni make)
     │   ├── compiler/
     │   │   ├── orchestrator.go   ← CompileLaTeXContext: latexmk -xelatex -synctex=1 con timeout/cancelación, PATH de TeX, errores del .log
     │   │   ├── synctex.go        ← SyncTeXForward/Backward: CLI synctex view/edit y parseo de su salida
+    │   │   ├── manual.go         ← RunPasses: secuencias de herramientas (xelatex, bibtex…) con el candado de compilación
     │   │   └── scheduler.go      ← Scheduler: compilación en segundo plano, una a la vez, juntando ráfagas
     │   ├── core/                 ← dominio: proyectos, archivos, (futuro) plugins
     │   │   ├── file_manager.go   ← FileManager: guardado atómico (tmp + rename) y carga de documentos
     │   │   ├── workspace.go      ← ScanTree, ResolveInFolder, DefaultTeXFile, PrepareRepository
-    │   │   ├── settings.go       ← elección del primer arranque en <UserConfigDir>/creative-ink/settings.json
+    │   │   ├── settings.go       ← <UserConfigDir>/creative-ink/settings.json: repositorio y autoCompile (UpdateSettings no pisa otros campos)
     │   │   ├── project_meta.go   ← <carpeta>/.creative-ink-meta: archivo principal del proyecto (ruta relativa)
     │   │   ├── watcher.go        ← FolderWatcher (fsnotify): cambios externos con debounce; TreeSignature
     │   │   ├── pdf_snapshots.go  ← PDFSnapshots: copias inmutables y versionadas del PDF para la vista previa
@@ -108,7 +111,7 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 | Tipo    | Nombre                | Dirección  | Firma / payload | Sección |
 |---------|-----------------------|------------|-----------------|---------|
 | Binding | `SystemHealthCheck`   | UI → Go    | `() → system.HealthStatus` = `{ hasXeLaTeX, hasLatexmk, hasBiber: boolean; totalRAMGB, freeDiskSpaceGB: number; cpuCores: number; hardwareTier: string; hardwareTierId: 'basic'\|'advanced'\|'unknown'; repository: system.RepositoryOptions; warnings: string[] }`. Incluye el SO y el repositorio (actual y rutas propuestas) | 2, 9 |
-| Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ needsSetup, canceled, folderPath, filePath, mainFilePath, tree: core.FileNode, truncated }`. `mainFilePath` es el archivo principal del proyecto (`""` si no hay, o si se borró). Carpeta abierta (al inicio, el repositorio central guardado), documento activo y árbol. **`needsSetup: true`** en el primer arranque, sin crear nada en disco | 9 |
+| Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ needsSetup, canceled, folderPath, filePath, mainFilePath, autoCompile, tree: core.FileNode, truncated }`. `autoCompile` es el ajuste de `ci config autocompile` (por defecto `true`). `mainFilePath` es el archivo principal del proyecto (`""` si no hay, o si se borró). Carpeta abierta (al inicio, el repositorio central guardado), documento activo y árbol. **`needsSetup: true`** en el primer arranque, sin crear nada en disco | 9 |
 | Binding | `GetRepositoryOptions` | UI → Go   | `() → system.RepositoryOptions` = `{ os, osName, user, shared: RepositoryOption; warnings: string[]; currentScope, currentPath }`, con `RepositoryOption` = `{ scope, path, available, reason }`. Rutas propuestas para este SO | 9 |
 | Binding | `SetupRepository`     | UI → Go    | `(scope: 'user'\|'shared') → main.WorkspaceState`. Crea el repositorio en la ruta que calcula Go, guarda la elección y lo abre. Rechaza ámbitos desconocidos o no disponibles | 9 |
 | Binding | `RefreshWorkspace`    | UI → Go    | `() → main.WorkspaceState`: vuelve a escanear la carpeta abierta. La UI solo aplica el árbol y el archivo principal (`applyTree`), **nunca** `filePath` | 8, 11 |
@@ -120,7 +123,7 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 | Binding | `RequestCompile`      | UI → Go    | `() → boolean`: encola una compilación del **objetivo** (principal o activo) sin guardar. Es **el único disparador al editar**: inactividad de 3 s, Cmd/Ctrl+S, botones Guardar y Compilar. `false` solo durante el cierre | 7, 12 |
 | Binding | `SyncTexForward`      | UI → Go    | `(line, file) → main.SyncTexForwardResult` = `{ found, page, x, y, width, height, reason }`. Dónde aparece la línea de `file` (`.tex` del proyecto) en el PDF del objetivo de compilación, en puntos PDF desde la esquina superior izquierda. Sin datos → `found: false` y `reason`, nunca error | 16 |
 | Binding | `SyncTexBackward`     | UI → Go    | `(page, x, y) → main.SyncTexBackwardResult` = `{ found, file, line, reason }`. Qué `.tex` del proyecto y qué línea (desde 1) generaron ese punto. Los archivos fuera del proyecto (p. ej. `article.cls`) dan `found: false` | 16 |
-| Binding | `RunTerminalCommand`  | UI → Go    | `(cmd) → main.TerminalResult` = `{ command, folder, output, exitCode, timedOut, canceled, durationMs }`. Ejecuta `cmd` con `sh -c` (macOS/Linux) o `cmd /c` (Windows) en la carpeta abierta, sin stdin, con límite de 30 s y PATH ampliado con TeX y Homebrew. Un código distinto de 0, el timeout o la cancelación son resultados normales; rechaza si no hay carpeta, si el comando está vacío o si ya hay otro en curso. **Ejecución arbitraria por diseño:** solo con texto que escribió el usuario | 15 |
+| Binding | `RunTerminalCommand`  | UI → Go    | `(cmd) → main.TerminalResult` = `{ command, folder, output, exitCode, timedOut, canceled, durationMs }`. **Terminal híbrida:** si la primera palabra es `ci`, la resuelve Go por dentro (§4.3.6, sin shell, sin carpeta obligatoria); si no, ejecuta `cmd` con `sh -c` (macOS/Linux) o `cmd /c` (Windows) en la carpeta abierta, sin stdin, con límite de 30 s y PATH ampliado con TeX y Homebrew. Un código distinto de 0, el timeout o la cancelación son resultados normales; rechaza si no hay carpeta, si el comando está vacío o si ya hay otro en curso. **Ejecución arbitraria por diseño:** solo con texto que escribió el usuario | 15 |
 | Binding | `CancelTerminalCommand` | UI → Go  | `() → void`: detiene el comando en curso (mata su grupo de procesos) | 15 |
 | Binding | `ConfirmClose`        | UI → Go    | `(saved: boolean) → void`: respuesta a `app:before-close` cuando la UI ya volcó CodeMirror a disco. Si `saved` es `false`, Go pregunta con un diálogo nativo antes de cerrar | 12 |
 | Evento  | `compile:started`     | Go → UI    | `main.CompileStartedEvent` = `{ file }`: el **objetivo de compilación** (principal o activo). La UI ignora los eventos de otro objetivo | 8, 10 |
@@ -225,6 +228,82 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 - **Hacia delante (código → PDF):** ⌘-clic (Ctrl-clic en Linux y Windows) en una línea del editor, o **⌘⌥J / Ctrl+Alt+J** desde la línea del cursor → `sync.highlight` → `Preview` cambia a esa página si hace falta, dibuja un recuadro ámbar que se desvanece (1,8 s) y lo centra con un scroll.
 - **Hacia atrás (PDF → código):** doble clic en el `<canvas>`. La posición en CSS se divide por `rendered.cssScale` (píxeles CSS por punto PDF, guardado en cada render) → `SyncTexBackward` → `sync.reveal` + `workspace.currentFilePath`. Si es otro archivo, el `Editor` lo carga (guardando antes el actual) y luego selecciona la línea y la centra.
 - **Limitaciones:** las coordenadas suponen un `MediaBox` con origen 0,0 (lo normal en LaTeX); usa los datos de la **última** compilación, así que tras editar puede desviarse unas líneas hasta compilar de nuevo. Solo se muestra una página: la vista previa salta de página, no hace scroll continuo.
+
+## 4.3.6 Terminal híbrida: comandos internos `ci` (Sección 17)
+La terminal integrada es **híbrida**. `RunTerminalCommand` mira la primera palabra de la línea (sin contar los espacios iniciales):
+- **`ci …` (palabra reservada, *Creative Ink*):** la resuelve `internal/ci` en Go, **sin shell del sistema ni `make`**. Las herramientas (`xelatex`, `bibtex`, `latexmk`) se ejecutan directamente con `os/exec`, resueltas con `system.FindBinary` y con `system.ToolPATH()`; los archivos se borran con `os.Remove` y `filepath.Glob`. Funciona aunque no haya una carpeta abierta (por ejemplo, `ci help` o `ci config`).
+- **Cualquier otra línea:** se ejecuta en la shell del sistema (`sh -c` / `cmd /c`), como en §4.3.4.
+
+Los comandos se aplican al **archivo principal (★)** o, si no hay, al `.tex` abierto, y se ejecutan en la carpeta de ese archivo. Son la traducción del Makefile de la tesis:
+
+| Comando | Equivale a (Makefile) | Qué hace |
+|---------|-----------------------|----------|
+| `ci help` | `make ayuda` | Lista los comandos |
+| `ci config autocompile [on\|off]` | — | Muestra o guarda `autoCompile` en `settings.json` (`core.UpdateSettings`) |
+| `ci compile rapido` | `make rapido` | `xelatex -interaction=nonstopmode -synctex=1 <doc>.tex` (una pasada) |
+| `ci compile borrador` | `make borrador` | Dos pasadas de `xelatex … "\def\borrador{}\input{<doc>}"` (la primera puede fallar). Requiere que el preámbulo use `\borrador` |
+| `ci compile solo <capítulo>` | `make solo CAP=…` | Dos pasadas de `xelatex -jobname=<doc>_<carpeta> "\def\SoloCapitulo{<capítulo>}\input{<doc>}"` → `<doc>_<carpeta>.pdf` |
+| `ci compile completo` | `make pdf` | XeLaTeX → BibTeX → XeLaTeX → XeLaTeX (las XeLaTeX intermedias pueden fallar, como `\|\| true`) |
+| `ci clean tikz` | `make tikz-clean` | Borra `*.pdf`, `*.md5`, `*.log` y `*.dpth` de `Figures/TiKz_Libraries/externalized/` |
+| `ci clean all` | `make limpiar-todo` | `latexmk -C <doc>.tex` y los restos (`.brf`, `.run.xml`, `.idx`, `.ilg`, `.ind`, `.blg`, `.bbl`, `.xdv`). Borra también el PDF |
+
+**Diferencias deliberadas con el Makefile:**
+- **`ci compile solo` usa `-jobname`.** El Makefile compila sobre `tesis.pdf` y luego lo renombra, así que **borra el PDF completo**. Con `-jobname`, el capítulo sale en un PDF aparte, con sus propios `.aux`, y el documento completo no se toca.
+- **Sin `--shell-escape`**, que el Makefile usa para externalizar TikZ: permitiría al documento ejecutar comandos del sistema. Si la caché de TikZ ya existe funciona igual; si no, haría falta una opción explícita (pendiente de decisión del usuario).
+- **Se añade `-synctex=1`** a cada XeLaTeX para que SyncTeX siga funcionando tras una compilación manual.
+- **`<capítulo>` se valida** (`^[A-Za-z0-9_][A-Za-z0-9_./-]*$`, sin `..`) porque se inserta en código TeX y en `-jobname`.
+- **Sin `ci check` ni `ci formatear`:** dependen de scripts propios del proyecto (`tools/*.py`). El núcleo solo incluye comandos nativos de LaTeX, del sistema o de Go; esas funciones llegarán como **plugins** (§4.6).
+
+**Integración con el resto de la app:**
+- **Mismo candado que latexmk:** `ci compile` y `ci clean` corren con `compiler.RunPasses` / `WithCompileLock`, así que nunca se solapan con la compilación automática (que esperará). La copia de la instantánea del PDF también se hace con el candado tomado, tanto desde el worker como desde `ci compile`.
+- **Límites:** `ci compile` y `ci clean` tienen 10 min (`ManualBuildTimeout`, no los 30 s de la shell). "Detener" o Ctrl+C los cancelan.
+- **Vista previa:** `rapido`, `borrador` y `completo` emiten `compile:started` / `compile:finished` (con `pdfVersion` y la duración real), así que la vista previa se actualiza sin cambios en Svelte y el disparador adaptativo aprende el coste real. Un fallo también emite `compile:finished` (`success: false`). `solo` no toca la vista previa (genera otro PDF).
+- **Salida compacta:** una línea por pasada (`▶ …`, `✓ 3.2 s` / `✗ falló`), con los errores de TeX o las últimas 15 líneas si algo falla.
+
+**Pendiente:** la UI todavía **no respeta** `autoCompile` (el temporizador vive en `Editor.svelte`; se expone en `WorkspaceState.autoCompile` para conectarlo). Tampoco hay autocompletado de `ci` en el panel.
+
+**Seguridad (riesgo previo, no introducido por `ci`):** latexmk lee el **`.latexmkrc` del proyecto**, que es código Perl. Abrir una carpeta ajena con la compilación automática activa equivale a ejecutar ese código. No se desactiva (`-norc`) porque hay proyectos, como la tesis, que dependen de él. Opción futura: confirmar antes de compilar una carpeta nueva que tenga `.latexmkrc`.
+
+## 4.6 Configuración, confianza y extensibilidad (propuesta del 2026-11-08, pendiente de decisión)
+
+> **Solo análisis, nada implementado.** Resuelve tres problemas abiertos con una sola base: (1) `ci config autocompile` se guarda pero la UI no lo respeta; (2) el `.latexmkrc` de un proyecto ajeno es código Perl que latexmk ejecuta; (3) los plugins futuros necesitarán aportar comandos y ajustes.
+
+### Diagnóstico
+- **No hay una fuente única de configuración.** Hoy hay ajustes en tres sitios sin un contrato común: `settings.json` (usuario: repositorio, `autoCompile`), `.creative-ink-meta` (proyecto: archivo principal) y constantes del código (motor `-xelatex`, límites de tiempo, debounces). La terminal escribe en un archivo que la UI no escucha.
+- **Go no puede hacer cumplir `autoCompile`.** `RequestCompile()` no distingue un disparo automático de ⌘S.
+- **No hay noción de confianza.** Cualquier carpeta abierta se compila de inmediato con su `.latexmkrc`; lo mismo pasará con los plugins y con un futuro `shell-escape`.
+- **`ci` tiene sus comandos fijos en un `switch`.** Un plugin no podría añadir `ci check bib` sin tocar el núcleo, y la ayuda no se puede generar.
+- **El requisito del MVP "motor seleccionable" (pdflatex/xelatex/lualatex) sigue sin implementar** y necesita esta misma base.
+
+### Propuesta en 4 fases
+**Fase 1 — Servicio de configuración (base de todo lo demás).**
+- `internal/config`, sin Wails: un **registro de claves tipadas** declaradas en código (`id`, tipo, valor por defecto, ámbitos permitidos, descripción, si requiere confianza). Claves iniciales: `compile.auto` (bool), `compile.engine` (`xelatex`\|`pdflatex`\|`lualatex`), `compile.autoDelayMs`, `compile.shellEscape` (requiere confianza).
+- **Capas con precedencia:** valores por defecto < **usuario** (`settings.json`) < **proyecto** (`<carpeta>/.creative-ink/settings.json`) < sesión (memoria). Es el modelo de VS Code (*User* / *Workspace*).
+- **Una sola API para todos:** bindings `GetConfig()` / `SetConfig(key, value, scope)` y el evento `config:changed {key, value, scope}`. La terminal (`ci config list | get <k> | set <k> <v> [--user|--project]`), la UI y los plugins pasan por el mismo camino; nadie lee `settings.json` directamente.
+- **`autoCompile` con dos cerrojos:** la UI refleja `config:changed` en un store y no programa el temporizador; además Go rechaza las peticiones automáticas: `RequestCompile(trigger)` con `trigger: "auto" | "manual"` (cambio de contrato). Así un plugin o un frontend con fallos no puede saltárselo.
+- **Recomendación:** `compile.auto` por **proyecto** (la tesis pesada sí, un documento corto no), con el valor del usuario como respaldo.
+
+**Fase 2 — Confianza de carpetas (*workspace trust*).**
+- **Almacén de confianza** del usuario (en `settings.json`): ruta real de la carpeta + **hash del `.latexmkrc`**. Si alguien modifica el archivo (por ejemplo, tras un `git pull`), se vuelve a preguntar.
+- **Carpeta sin confianza y con `latexmkrc`/`.latexmkrc`:** se compila en **modo restringido** con `latexmk -norc` (más los rc del sistema y del usuario de forma explícita, con `-r`), sin compilación automática hasta decidir, y `compile.shellEscape` bloqueado. Una franja discreta en la UI ofrece "Confiar en esta carpeta"; en la terminal, `ci trust` / `ci trust status` / `ci untrust`.
+- **Sin `.latexmkrc`:** no se pregunta nada (no hay código del proyecto que ejecutar).
+- La misma confianza se aplicará a los plugins que pertenezcan al proyecto.
+
+**Fase 3 — Registro de comandos `ci`.**
+- Cada comando se registra con su nombre, uso, descripción, argumentos (una lista cerrada o un validador), si es largo y si **requiere confianza**. `ci help` se genera del registro, y un binding `ListTerminalCommands()` permitirá autocompletar en el panel.
+- **Salida en streaming:** evento `terminal:output {runId, chunk}` en lugar de devolver todo al final. Hace falta para builds largos y para plugins.
+
+**Fase 4 — Host de plugins (requiere la decisión pendiente del modelo de plugins).**
+- **Recomendación inicial (se mantiene):** procesos externos que hablan JSON-RPC por stdin/stdout, al estilo LSP. Son aislados, pueden escribirse en cualquier lenguaje y se pueden matar con timeout.
+- Un **manifiesto** declara sus **contribuciones** (comandos `ci <plugin> …` o subcomandos como `ci check bib`, claves de configuración `plugin.<id>.*`) y sus **capacidades** (leer o escribir dentro del proyecto, ejecutar herramientas, red). El host las hace cumplir y pide confianza.
+- `ci check` y `ci formatear` (los scripts `tools/*.py` de la tesis) serían el primer plugin de ejemplo.
+
+### Decisiones que necesita el usuario
+1. **Ámbito de `compile.auto`:** por proyecto con respaldo del usuario (recomendado) o solo por usuario.
+2. **Ubicación de la configuración del proyecto:** carpeta `<proyecto>/.creative-ink/` (recomendado; deja espacio para plugins y absorbería `.creative-ink-meta`) o ampliar `.creative-ink-meta`.
+3. **Carpeta sin confianza con `.latexmkrc`:** modo restringido con `-norc` y sin compilación automática hasta confiar (recomendado), o solo avisar.
+4. **Modelo de plugins:** confirmar procesos externos con JSON-RPC por stdio.
+5. **Orden de implementación:** Fase 1 → 2 → 3 → 4 (recomendado: la 1 desbloquea `autoCompile` y el motor seleccionable).
 
 ## 4.4 Deuda técnica conocida (análisis del 2026-11-05)
 1. ~~**Guardar y compilar están acoplados en `SaveContent`.**~~ **Resuelto el 2026-11-06:** `SaveContent` responde de inmediato y la compilación va por el `Scheduler` con eventos (ver §4.3).
