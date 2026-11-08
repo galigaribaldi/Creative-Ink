@@ -11,7 +11,11 @@ import {
   SetMainFile,
   SetupRepository
 } from '../../wailsjs/go/main/App.js'
-import { applyWorkspace, workspace } from './workspace.svelte.js'
+import { EventsOn } from '../../wailsjs/runtime/runtime.js'
+import { applyTree, applyWorkspace, workspace } from './workspace.svelte.js'
+
+// Event emitted by Go when files or folders change outside the app (app.go).
+export const WORKSPACE_CHANGED = 'workspace:changed'
 
 /**
  * @typedef {{
@@ -86,13 +90,40 @@ export async function setupRepository(scope) {
   }
 }
 
-/** Rescans the open folder. */
+// At most one RefreshWorkspace in flight; requests meanwhile collapse into one more.
+let refreshing = false
+let refreshPending = false
+
+/** Rescans the open folder and updates the explorer (never the open file). */
 export async function refreshWorkspace() {
+  if (refreshing) {
+    refreshPending = true
+    return
+  }
+  refreshing = true
   try {
-    applyWorkspace(await RefreshWorkspace())
+    applyTree(await RefreshWorkspace())
   } catch (err) {
     report(err)
+  } finally {
+    refreshing = false
+    if (refreshPending) {
+      refreshPending = false
+      void refreshWorkspace()
+    }
   }
+}
+
+/**
+ * Refreshes the explorer when Go reports external changes (already
+ * debounced and de-duplicated in Go). Call once during App init and call
+ * the returned function on destroy.
+ * @returns {() => void} unsubscribe
+ */
+export function listenWorkspaceEvents() {
+  return EventsOn(WORKSPACE_CHANGED, (/** @type {{ folder: string }} */ event) => {
+    if (event.folder === workspace.currentFolderPath) void refreshWorkspace()
+  })
 }
 
 /**

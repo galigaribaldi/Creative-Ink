@@ -44,6 +44,19 @@ export function applyWorkspace(/** @type {WorkspaceState} */ state) {
 }
 
 /**
+ * Applies only the folder contents of a WorkspaceState (tree, truncation,
+ * main file). Used by refreshes, automatic or manual: they must never touch
+ * currentFilePath, or a refresh landing during a file switch would send the
+ * editor back to the previous file.
+ */
+export function applyTree(/** @type {WorkspaceState} */ state) {
+  if (state.folderPath !== workspace.currentFolderPath) return // folder changed meanwhile
+  workspace.fileTree = state.tree
+  workspace.truncated = state.truncated
+  workspace.mainFilePath = state.mainFilePath
+}
+
+/**
  * What Go compiles and previews: the main file if the project has one,
  * otherwise the file being edited. Reactive when read inside $derived/$effect.
  */

@@ -5,7 +5,7 @@
   import RepositorySetup from './components/RepositorySetup.svelte'
   import Sidebar from './components/Sidebar.svelte'
   import Workspace from './components/Workspace.svelte'
-  import { initWorkspace, openFolder, saveAs } from './lib/actions.js'
+  import { initWorkspace, listenWorkspaceEvents, openFolder, saveAs } from './lib/actions.js'
   import { listenCompileEvents, resetCompilation } from './lib/compilation.svelte.js'
   import { toggleSidebar, ui } from './lib/ui.svelte.js'
   import { compileTarget, workspace } from './lib/workspace.svelte.js'
@@ -16,6 +16,8 @@
   // Subscribed during init, before the first file is opened (opening a file
   // queues its compilation), so no compile event can be missed.
   onDestroy(listenCompileEvents())
+  // External changes (a pasted image, a new chapter) refresh the explorer.
+  onDestroy(listenWorkspaceEvents())
   void initWorkspace()
 
   // A different compile target (another file, or the main file changed): the
