@@ -21,11 +21,14 @@ Those files win over anything in this skill if they disagree.
 - Current layout (`frontend/src/`), already migrated to the target layout below:
   - `App.svelte`: CSS Grid shell `[ActionBar | Sidebar | Workspace]`, `HealthPanel` modal, Cmd/Ctrl+B.
   - `components/ActionBar.svelte`, `Sidebar.svelte` (always mounted, `inert` when closed), `Workspace.svelte`.
-  - `components/Editor.svelte`: CodeMirror 6 + autosave debounce; registers `save`/`isDirty` in `lib/actions.js`.
+  - `components/Editor.svelte`: CodeMirror 6 + autosave debounce. Reacts to `workspace.currentFilePath`
+    (saves the old file, then `setState` with the new one) and registers its commands in `lib/actions.js`.
+  - `components/FileTreeItem.svelte`: recursive explorer node (only `.tex` are openable).
   - `components/Preview.svelte`: PDF.js on `<canvas>`, driven by `pdfTimestamp`; keeps `currentPageNumber`.
   - `components/CompileLog.svelte`, `components/HealthPanel.svelte`.
-  - State modules: `lib/ui.svelte.js` (visual state), `lib/compilation.svelte.js` (mirror of the
-    `compile:*` Go events), `lib/actions.js` (global save/compile actions).
+  - State modules: `lib/ui.svelte.js` (visual state), `lib/workspace.svelte.js` (mirror of Go:
+    folder, active file, tree), `lib/compilation.svelte.js` (`compile:*` events, filtered by `file`),
+    `lib/actions.js` (global actions: open folder/file, save, save as, compile).
   - `lib/pdf.js`: PDF.js worker and document lifecycle (`loadPdf`, `releasePdf`).
 - Backend calls only through `frontend/wailsjs/go/main/App.js` (generated; never edit by hand).
 

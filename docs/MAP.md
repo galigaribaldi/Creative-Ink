@@ -15,14 +15,15 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     ├── app.go                    ← struct App: ÚNICA fachada IPC expuesta al frontend
     ├── preview.go                ← middleware del AssetServer: sirve el PDF en /__preview/document.pdf
     ├── wails.json                ← configuración del proyecto Wails
-    ├── workspace/main.tex        ← documento provisional (ignorado por git; relativo al directorio de trabajo)
+    ├── workspace/main.tex        ← carpeta abierta por defecto al iniciar (ignorada por git); se crea un documento inicial si falta
     ├── go.mod
     ├── internal/                 ← lógica Go no importable desde fuera del módulo
     │   ├── compiler/
     │   │   ├── orchestrator.go   ← CompileLaTeXContext: latexmk -xelatex con timeout/cancelación, PATH de TeX, errores del .log
     │   │   └── scheduler.go      ← Scheduler: compilación en segundo plano, una a la vez, juntando ráfagas
     │   ├── core/                 ← dominio: proyectos, archivos, (futuro) plugins
-    │   │   └── file_manager.go   ← FileManager: guardado atómico (tmp + rename) y carga de documentos
+    │   │   ├── file_manager.go   ← FileManager: guardado atómico (tmp + rename) y carga de documentos
+    │   │   └── workspace.go      ← ScanTree (árbol con límites), ResolveInFolder (rutas dentro de la carpeta), DefaultTeXFile
     │   └── system/               ← entorno: health check de LaTeX y detección/instalación de motores
     │       └── health.go         ← HealthStatus: herramientas de LaTeX y perfil de hardware
     ├── build/                    ← iconos y metadatos de empaquetado por SO
@@ -33,7 +34,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   ├── App.svelte        ← shell en CSS Grid: [ActionBar | Sidebar | Workspace], atajo Cmd/Ctrl+B
         │   ├── components/
         │   │   ├── ActionBar.svelte   ← barra vertical de 44 px: Explorador, Guardar, Compilar, Estado del sistema
-        │   │   ├── Sidebar.svelte     ← cajón de 240 px (siempre montado, `inert` si está cerrado)
+        │   │   ├── Sidebar.svelte     ← explorador: cajón de 240 px (siempre montado, `inert` si está cerrado)
+        │   │   ├── FileTreeItem.svelte ← nodo recursivo del árbol; solo los `.tex` se pueden abrir
         │   │   ├── Workspace.svelte   ← Editor | Preview (+ CompileLog bajo el editor); solo layout
         │   │   ├── Editor.svelte      ← CodeMirror 6 (one-dark, stex) + autoguardado con debounce
         │   │   ├── CompileLog.svelte  ← panel de errores de LaTeX debajo del editor
@@ -42,7 +44,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   ├── lib/
         │   │   ├── ui.svelte.js          ← estado visual ($state): sidebarOpen, activeTool, healthOpen. Nunca va a Go
         │   │   ├── compilation.svelte.js ← reflejo de los eventos compile:* (status, logs, pdfTimestamp)
-        │   │   ├── actions.js            ← acciones globales (guardar, compilar); el Editor registra sus comandos
+        │   │   ├── workspace.svelte.js   ← reflejo de Go: currentFolderPath, currentFilePath, fileTree
+        │   │   ├── actions.js            ← acciones globales (abrir carpeta/archivo, guardar, guardar como, compilar)
         │   │   └── pdf.js        ← configuración de PDF.js (worker local) y loadPdf(url)
         │   └── style.css         ← estilos globales mínimos
         └── wailsjs/              ← GENERADO por Wails: no editar a mano
@@ -76,13 +79,16 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 | Tipo    | Nombre                | Dirección  | Firma / payload | Sección |
 |---------|-----------------------|------------|-----------------|---------|
 | Binding | `SystemHealthCheck`   | UI → Go    | `() → system.HealthStatus` = `{ hasXeLaTeX, hasLatexmk, hasBiber: boolean; totalRAMGB, freeDiskSpaceGB: number; cpuCores: number; hardwareTier: string; hardwareTierId: 'basic'\|'advanced'\|'unknown'; warnings: string[] }` | 2 |
-| Binding | `SaveContent`         | UI → Go    | `(content: string) → main.SaveResult` = `{ saved: boolean }`. Guarda en `workspace/main.tex`, **responde de inmediato** y encola una compilación en segundo plano. La promesa solo se rechaza si falla el guardado (y entonces no se compila) | 6 |
-| Binding | `RequestCompile`      | UI → Go    | `() → boolean`: encola una compilación de lo que hay en disco, **sin guardar**. Responde de inmediato; `false` solo durante el cierre. Lo usa el botón Compilar cuando no hay cambios sin guardar | 7 |
-| Evento  | `compile:started`     | Go → UI    | Sin payload. Lo emite el Scheduler al empezar cada compilación | 6 |
-| Evento  | `compile:finished`    | Go → UI    | `compiler.Result` = `{ success: boolean; logs: string; durationMs: number }`. No se emite después del cierre de la app | 6 |
-| HTTP    | `/__preview/document.pdf` | WebView → Go | `GET` → PDF del documento actual (`Cache-Control: no-store`, admite Range; 404 si todavía no existe). La UI agrega `?t=<timestamp>` para forzar la recarga | 4 |
-| Binding | `LoadContent`         | UI → Go    | `() → string` (`""` si el archivo todavía no existe) | 3 |
-| Binding | `DocumentPath`        | UI → Go    | `() → string`: ruta absoluta del documento actual | 3 |
+| Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ canceled, folderPath, filePath, tree: core.FileNode, truncated }`. Carpeta abierta (al inicio, `./workspace`), documento activo y árbol | 8 |
+| Binding | `RefreshWorkspace`    | UI → Go    | `() → main.WorkspaceState`: vuelve a escanear la carpeta abierta | 8 |
+| Binding | `OpenFolderDialog`    | UI → Go    | `() → main.WorkspaceState`. Diálogo nativo; `canceled: true` si se cierra. Abre la carpeta y elige `main.tex` o el primer `.tex` | 8 |
+| Binding | `OpenFile`            | UI → Go    | `(path) → main.OpenedFile` = `{ path, content }`. Solo `.tex` dentro de la carpeta abierta. Lo hace documento activo y encola su compilación | 8 |
+| Binding | `SaveContent`         | UI → Go    | `(path, content) → main.SaveResult` = `{ saved }`. Responde de inmediato. `path` (absoluto, `.tex`, dentro de la carpeta) viaja con cada guardado; **solo compila si `path` es el documento activo**. Rechaza la promesa si la ruta no es válida o falla la escritura | 8 |
+| Binding | `SaveAsDialog`        | UI → Go    | `(content) → main.WorkspaceState`. Diálogo nativo (filtro `*.tex`; agrega `.tex` si falta). Si el destino está fuera de la carpeta, su directorio pasa a ser la carpeta abierta. Lo hace documento activo y compila | 8 |
+| Binding | `RequestCompile`      | UI → Go    | `() → boolean`: encola una compilación del documento activo **sin guardar**; `false` solo durante el cierre | 7 |
+| Evento  | `compile:started`     | Go → UI    | `main.CompileStartedEvent` = `{ file }`. La UI ignora los eventos de un archivo que ya no está activo | 8 |
+| Evento  | `compile:finished`    | Go → UI    | `main.CompileFinishedEvent` = `{ file, success, logs, durationMs }`. No se emite después del cierre | 8 |
+| HTTP    | `/__preview/document.pdf` | WebView → Go | `GET` → PDF del **documento activo** (`Cache-Control: no-store`, admite Range; 404 si todavía no existe). La UI agrega `?t=<timestamp>` para forzar la recarga | 4 |
 
 ## 4. Motores LaTeX (requisito de producto)
 - **Detección (`internal/system/health.go`):** primero `exec.LookPath` y, si falla, `fallbackDirs` (`/Library/TeX/texbin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`) más `/usr/local/texlive/*/bin/*`. Motivo: en macOS, una app abierta desde el Finder o el Dock **no hereda el PATH de la shell**.
@@ -124,12 +130,22 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
   - **Si WebKitGTK antiguo falla con la build moderna:** usar `pdfjs-dist/legacy/build/pdf.mjs`.
 - **Test de integración opcional:** `CREATIVE_INK_LATEX_TEST=1 go test ./internal/compiler -run Integration -v` (lo ejecuta el programador).
 
+## 4.3.1 Carpetas, archivos y explorador (Sección 8)
+- **Rutas absolutas en el puente.** Go valida cada una con `core.ResolveInFolder`: dentro de la carpeta abierta y siguiendo symlinks, para que un enlace no pueda escapar. Así, un guardado tardío de una carpeta anterior se **rechaza** en lugar de escribirse en la nueva.
+- **Estado en Go:** `App.folder` y `App.docPath` protegidos por `sync.RWMutex`. El compilador toma el documento activo al **empezar** cada compilación (`compilingDoc`, solo en la goroutine del worker) y los eventos llevan ese `file`.
+- **Cambio de archivo en el frontend:** cambia `workspace.currentFilePath` → `$effect` en `Editor` → editor de solo lectura → `waitIdle()` (guarda lo pendiente en el archivo **anterior**) → `OpenFile` → `view.setState()`. `setState` no dispara los update listeners (sin autoguardado) y empieza un historial de deshacer nuevo. Si no se pudo guardar, **no cambia de archivo**.
+- **Abrir carpeta y Guardar como** también llaman antes a `waitIdle()`. Guardar como usa `adopt(path)`: mismo texto, archivo nuevo, sin recargar (se conservan cursor e historial).
+- **Diálogos inyectables** (`pickFolder`, `pickSavePath`), igual que `emit`, para testear sin el runtime de Wails.
+- **Decisión de diseño:** un solo archivo activo a la vez, sin pestañas.
+
 ## 4.4 Deuda técnica conocida (análisis del 2026-11-05)
 1. ~~**Guardar y compilar están acoplados en `SaveContent`.**~~ **Resuelto el 2026-11-06:** `SaveContent` responde de inmediato y la compilación va por el `Scheduler` con eventos (ver §4.3).
 2. **Se compila con cada pausa de 1 s.** Convendría un debounce propio para la compilación (por ejemplo 2–3 s), además de Cmd+S para compilar al instante.
 3. **No se guarda al cerrar la ventana:** falta `OnBeforeClose` para hacer un flush en Go.
-4. **`workspace/` depende del directorio de trabajo:** si la app se abre desde el Finder, ese directorio es `/`. Se resuelve con "abrir carpeta/archivo".
+4. **La carpeta *inicial* depende del directorio de trabajo** (`./workspace`). Desde el Finder ese directorio es `/`. Ya se puede abrir cualquier carpeta; falta recordar la última abierta en lugar de usar `./workspace`.
 5. **El PDF se carga entero en memoria (`fetch` → `data`).** Basta para documentos normales. Para PDFs de cientos de MB habría que usar `PDFDataRangeTransport`.
+6. **Proyectos de varios archivos:** se compila el `.tex` **activo**. Si editas un capítulo que se incluye con `\input`, se compila el capítulo y no el documento principal. Falta definir un "archivo principal" por carpeta.
+7. **El árbol no se actualiza solo** (no hay `fsnotify`): se refresca al abrir carpeta, al usar Guardar como o con el botón Actualizar.
 
 ## 5. Skills / conocimiento requerido
 

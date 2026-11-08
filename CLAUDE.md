@@ -20,6 +20,7 @@ Un editor LaTeX funcional "al estilo VS Code": explorador de archivos, editor, c
 - La compilación usa **latexmk** por defecto, con un motor seleccionable: `pdflatex`, `xelatex` o `lualatex`.
 - La app debe **detectar** los motores instalados (health check en `internal/system/`) y **ofrecer instalarlos** si faltan. La instalación siempre la confirma el usuario.
 - **Editor decidido:** CodeMirror 6 (sin `basicSetup`; las extensiones se eligen a mano en `Editor.svelte`).
+- **Un solo archivo activo** (sin pestañas, por minimalismo); se compila el `.tex` activo.
 - **Visor PDF decidido:** PDF.js (`pdfjs-dist`) en `<canvas>`; el PDF lo sirve el middleware de Go (`preview.go`).
 - Decisiones **pendientes** (no las asumas, espera instrucciones): modelo de plugins, migración a TypeScript, licencia y patrón final de IPC.
 
@@ -102,4 +103,11 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] `ActionBar.svelte`, `Sidebar.svelte` y `Workspace.svelte`; `App.svelte` como grid `[44px | 0/240px | 1fr]` con transición de 120 ms y Cmd/Ctrl+B
   - [x] Binding `RequestCompile()` para compilar sin guardar (más test)
   - [x] `check-svelte.mjs` ahora también compila los módulos `.svelte.js`
+  - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 8 — Carpetas, archivos y explorador** (código listo; falta validar con `wails dev`)
+  - [x] Backend: `core/workspace.go` (`ScanTree`, `ResolveInFolder`, `DefaultTeXFile`) más tests; `App` con carpeta y documento dinámicos (`RWMutex`)
+  - [x] Bindings `GetWorkspace`, `RefreshWorkspace`, `OpenFolderDialog`, `OpenFile`, `SaveAsDialog`; `SaveContent(path, content)`. Se quitaron `LoadContent` y `DocumentPath`
+  - [x] Eventos `compile:*` con `file`; diálogos inyectables; documento inicial en `./workspace` si falta
+  - [x] Frontend: `lib/workspace.svelte.js`, `FileTreeItem.svelte`, explorador, botones Abrir carpeta y Guardar como, ⌘O y ⇧⌘S
+  - [x] `Editor` cambia de archivo con `setState` sin desmontarse; guarda en el archivo anterior antes de cambiar
   - [ ] Validación del programador: reiniciar `wails dev`
