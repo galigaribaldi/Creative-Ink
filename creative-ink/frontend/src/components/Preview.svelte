@@ -73,8 +73,10 @@
     })
   })
 
-  // Every successful compilation publishes a new immutable snapshot in Go
-  // (pdfVersion) → new URL → reload. PDF.js then fetches only the byte ranges
+  // Every successful compilation that rewrote the PDF publishes a new
+  // immutable snapshot in Go (pdfVersion) → new URL → reload. An unchanged PDF
+  // (same ModTime) keeps the same pdfVersion, so this effect does not re-run
+  // and the canvas is not reloaded. PDF.js then fetches only the byte ranges
   // it needs from that snapshot, even while latexmk rewrites the live PDF.
   $effect(() => {
     if (!pdfVersion) return

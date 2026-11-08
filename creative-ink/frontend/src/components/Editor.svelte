@@ -15,14 +15,18 @@
   import { oneDark } from '@codemirror/theme-one-dark'
   import { OpenFile, RequestCompile, SaveContent } from '../../wailsjs/go/main/App.js'
   import { registerEditor } from '../lib/actions.js'
+  import { compilation } from '../lib/compilation.svelte.js'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
   // Two inactivity windows, both restarted by every keystroke:
   //  - 1 s → save to disk (cheap: protects the text early).
-  //  - 3 s → ask Go to compile (expensive: latexmk must not run while the
-  //    user is still typing). Cmd/Ctrl+S skips both and does both now.
+  //  - adaptive → ask Go to compile (expensive). The delay is
+  //    max(3 s, 2 × last compile duration) from compilation.svelte.js, and
+  //    auto-compile pauses for heavy documents (> 10 s).
+  //    Cmd/Ctrl+S skips both and does both now.
   const SAVE_DELAY_MS = 1000
-  const COMPILE_DELAY_MS = 3000
+  // macOS shows ⌘S, Linux/Windows Ctrl+S in the paused-compile notice.
+  const SAVE_SHORTCUT = navigator.platform.toUpperCase().includes('MAC') ? '⌘S' : 'Ctrl+S'
 
   const LABELS = {
     empty: 'Sin documento',
@@ -68,7 +72,11 @@
     clearTimeout(timer)
     timer = setTimeout(flush, SAVE_DELAY_MS)
     clearTimeout(compileTimer)
-    compileTimer = setTimeout(saveAndCompile, COMPILE_DELAY_MS)
+    compileTimer = null
+    // Read at scheduling time: the delay adapts after every compilation.
+    if (!compilation.autoCompilePaused) {
+      compileTimer = setTimeout(saveAndCompile, compilation.autoCompileDelayMs)
+    }
   }
 
   /**
@@ -248,6 +256,17 @@
     }
   })
 
+  // A heavy result pauses auto-compile: drop a compile already scheduled
+  // with the old (short) delay, so it does not fire one more time.
+  $effect(() => {
+    if (compilation.autoCompilePaused) {
+      untrack(() => {
+        clearTimeout(compileTimer)
+        compileTimer = null
+      })
+    }
+  })
+
   // The only place where the editor's document changes: when the selected
   // file changes. CodeMirror itself is never remounted.
   $effect(() => {
@@ -263,6 +282,15 @@
   {/if}
   <footer class="statusbar">
     <span class="file" title={filePath}>{fileName}</span>
+    {#if compilation.autoCompilePaused && status !== 'empty'}
+      <span
+        class="paused"
+        role="status"
+        title="La última compilación tardó {(compilation.durationMs / 1000).toFixed(1)} s"
+      >
+        Auto-compilación pausada (Documento pesado). Usa {SAVE_SHORTCUT} para compilar
+      </span>
+    {/if}
     <span class="status status-{status}" title={errorMsg}>{LABELS[status]}</span>
   </footer>
 </div>
@@ -307,6 +335,16 @@
     background: #1b1d23;
     font-size: 0.75rem;
     color: #9d9d9d;
+  }
+
+  .paused {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #fbbf24;
+    opacity: 0.85;
   }
 
   .file {
