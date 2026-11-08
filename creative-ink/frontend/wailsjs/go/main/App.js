@@ -10,8 +10,20 @@ export function ConfirmClose(arg1) {
   return window['go']['main']['App']['ConfirmClose'](arg1);
 }
 
+export function CreateProject(arg1) {
+  return window['go']['main']['App']['CreateProject'](arg1);
+}
+
+export function CreateQuickDocument() {
+  return window['go']['main']['App']['CreateQuickDocument']();
+}
+
 export function GetRepositoryOptions() {
   return window['go']['main']['App']['GetRepositoryOptions']();
+}
+
+export function GetStartScreen() {
+  return window['go']['main']['App']['GetStartScreen']();
 }
 
 export function GetWorkspace() {
@@ -26,12 +38,20 @@ export function OpenFolderDialog() {
   return window['go']['main']['App']['OpenFolderDialog']();
 }
 
+export function OpenProject(arg1) {
+  return window['go']['main']['App']['OpenProject'](arg1);
+}
+
 export function RefreshWorkspace() {
   return window['go']['main']['App']['RefreshWorkspace']();
 }
 
 export function RequestCompile() {
   return window['go']['main']['App']['RequestCompile']();
+}
+
+export function RevealQuickDocuments() {
+  return window['go']['main']['App']['RevealQuickDocuments']();
 }
 
 export function RunTerminalCommand(arg1) {
