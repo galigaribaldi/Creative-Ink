@@ -27,14 +27,17 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     │   ├── core/                 ← dominio: proyectos, archivos, (futuro) plugins
     │   │   ├── file_manager.go   ← FileManager: guardado atómico (tmp + rename) y carga de documentos
     │   │   ├── workspace.go      ← ScanTree, ResolveInFolder, DefaultTeXFile, PrepareRepository
-    │   │   ├── settings.go       ← <UserConfigDir>/creative-ink/settings.json: repositorio y autoCompile (UpdateSettings no pisa otros campos)
+    │   │   ├── settings.go       ← <UserConfigDir>/creative-ink/settings.json: repositorio, autoCompile y recientes (UpdateSettings no pisa otros campos)
+    │   │   ├── repository.go     ← estructura del repositorio, Slugify, CreateProject, CreateQuickDoc, StaleQuickDocs
+    │   │   ├── hide_{windows,other}.go ← ocultar .creative-ink en Windows (atributo hidden)
     │   │   ├── project_meta.go   ← <carpeta>/.creative-ink-meta: archivo principal del proyecto (ruta relativa)
     │   │   ├── watcher.go        ← FolderWatcher (fsnotify): cambios externos con debounce; TreeSignature
     │   │   ├── pdf_snapshots.go  ← PDFSnapshots: copias inmutables y versionadas del PDF para la vista previa
     │   │   └── terminal*.go      ← ExecuteCommand(Context): sh -c / cmd /c, 30 s, sin stdin, grupo de procesos, salida limitada
     │   └── system/               ← entorno: health check de LaTeX y detección/instalación de motores
     │       ├── health.go         ← HealthStatus: herramientas de LaTeX, hardware y repositorio
-    │       ├── platform.go       ← RepositoryOptions por SO, parser de XDG user-dirs
+    │       ├── platform.go       ← RepositoryOptions por SO, parser de XDG user-dirs; RepositoryName = My-Creative-Ink-Repository
+    │       ├── reveal.go         ← RevealInFileManager (open / xdg-open / explorer, sin shell)
     │       └── documents_<os>.go ← Documentos reales: darwin, linux (XDG), windows (Known Folders), other
     ├── build/                    ← iconos y metadatos de empaquetado por SO
     └── frontend/                 ← Svelte 5 + Vite 8
@@ -53,6 +56,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   │   ├── TerminalPanel.svelte ← terminal integrada: historial, entrada, ↑/↓, Ctrl+C
         │   │   ├── HealthPanel.svelte ← modal "Estado del sistema" (incluye "Sistema y repositorio")
         │   │   ├── RepositorySetup.svelte ← primer arranque: "Solo para mí" / "Para todos los usuarios"
+        │   │   ├── StartScreen.svelte ← cada sesión: Nuevo proyecto, Documento rápido, proyectos, recientes y aviso de documentos rápidos antiguos
         │   │   └── Preview.svelte     ← PDF.js en <canvas>, doble buffer, conserva la página al recargar
         │   ├── lib/
         │   │   ├── ui.svelte.js          ← estado visual ($state): sidebarOpen, activeTool, healthOpen. Nunca va a Go
@@ -69,9 +73,27 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
             └── runtime/          ← EventsOn, EventsEmit, etc.
 ```
 
-**Fuera del repo, en el sistema operativo del usuario:**
+**Fuera del repo, en el sistema operativo del usuario (Sección 18):**
 
-El repositorio central `My Creative Ink Repository` se crea **la primera vez que se abre la app**. Una pantalla de bienvenida (`RepositorySetup.svelte`) muestra el sistema detectado y las rutas propuestas, y el usuario elige el ámbito:
+```
+~/Documents/My-Creative-Ink-Repository/   ← repositorio central = LANZADOR (nunca se abre como proyecto)
+├── .creative-ink/                        ← oculta (en Windows con el atributo hidden): datos del editor
+│   ├── config.json                       ← valores por defecto del repositorio (servicio de configuración, paso 2)
+│   ├── plugins/                          ← plugins del usuario (solo en repositorios personales)
+│   ├── templates/                        ← plantillas de "Nuevo proyecto" (paso 2+)
+│   └── guide/                            ← guía de `ci` autogenerada y compilada (paso 4)
+├── tmp-Workspaces/                       ← documentos rápidos de un solo archivo
+│   ├── unnamed-tmp1/main.tex             ← uno por subcarpeta: no mezclan auxiliares
+│   └── unnamed-tmp2/main.tex
+└── Tesis-de-Maestria/                    ← un proyecto = una carpeta (nombre normalizado con "-")
+    ├── .creative-ink-meta                ← archivo principal (main.tex)
+    ├── main.tex · capitulos/ · figuras/ · referencias.bib
+```
+- **Convención de nombres:** todo lo que crea el editor usa `-` en lugar de espacios (`My-Creative-Ink-Repository`, `Tesis-de-Maestria`) y sin acentos en las carpetas (`core.Slugify`), para evitar problemas con herramientas que pasan por la shell (minted, externalización de TikZ) y con actualizaciones. El título del documento conserva el nombre original (escapado con `core.EscapeTeX`).
+- **Migración:** si `settings.json` apunta a `My Creative Ink Repository`, al arrancar se renombra a `My-Creative-Ink-Repository` (y se actualizan `repositoryPath` y los recientes). Si ya existen las dos carpetas, no se mueve nada y la pantalla de inicio lo avisa.
+- **Plugins por usuario:** en un repositorio personal, `<repo>/.creative-ink/plugins`; en uno compartido, `<UserConfigDir>/creative-ink/plugins` (nunca donde otras cuentas pueden escribir).
+- **Documentos rápidos antiguos:** al empezar cada sesión, la pantalla de inicio lista los que llevan **más de 8 h** sin modificarse (`core.StaleQuickDocs`) y ofrece abrir `tmp-Workspaces` en el Finder. **El editor nunca los borra** (por ahora no hay opción automática).
+- **En `settings.json` (por usuario, fuera del repositorio):** la ruta del repositorio, su ámbito, `autoCompile` y los **recientes** (`recentFolders`, 10 como máximo).
 
 | SO | "Solo para mí" (`user`) | "Para todos los usuarios" (`shared`) | Cómo se calcula |
 |----|-------------------------|--------------------------------------|-----------------|
@@ -111,9 +133,14 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 | Tipo    | Nombre                | Dirección  | Firma / payload | Sección |
 |---------|-----------------------|------------|-----------------|---------|
 | Binding | `SystemHealthCheck`   | UI → Go    | `() → system.HealthStatus` = `{ hasXeLaTeX, hasLatexmk, hasBiber: boolean; totalRAMGB, freeDiskSpaceGB: number; cpuCores: number; hardwareTier: string; hardwareTierId: 'basic'\|'advanced'\|'unknown'; repository: system.RepositoryOptions; warnings: string[] }`. Incluye el SO y el repositorio (actual y rutas propuestas) | 2, 9 |
-| Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ needsSetup, canceled, folderPath, filePath, mainFilePath, autoCompile, tree: core.FileNode, truncated }`. `autoCompile` es el ajuste de `ci config autocompile` (por defecto `true`). `mainFilePath` es el archivo principal del proyecto (`""` si no hay, o si se borró). Carpeta abierta (al inicio, el repositorio central guardado), documento activo y árbol. **`needsSetup: true`** en el primer arranque, sin crear nada en disco | 9 |
+| Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ needsSetup, needsStart, repositoryPath, canceled, folderPath, filePath, mainFilePath, autoCompile, tree: core.FileNode, truncated }`. **`needsStart: true`** con el repositorio listo y sin proyecto abierto: la UI muestra la pantalla de inicio. `autoCompile` es el ajuste de `ci config autocompile` (por defecto `true`). `mainFilePath` es el archivo principal del proyecto (`""` si no hay, o si se borró). Carpeta abierta, documento activo y árbol. **`needsSetup: true`** en el primer arranque, sin crear nada en disco. Desde la Sección 18 **no abre la raíz del repositorio**: sin proyecto, `needsStart: true` | 9, 18 |
 | Binding | `GetRepositoryOptions` | UI → Go   | `() → system.RepositoryOptions` = `{ os, osName, user, shared: RepositoryOption; warnings: string[]; currentScope, currentPath }`, con `RepositoryOption` = `{ scope, path, available, reason }`. Rutas propuestas para este SO | 9 |
-| Binding | `SetupRepository`     | UI → Go    | `(scope: 'user'\|'shared') → main.WorkspaceState`. Crea el repositorio en la ruta que calcula Go, guarda la elección y lo abre. Rechaza ámbitos desconocidos o no disponibles | 9 |
+| Binding | `SetupRepository`     | UI → Go    | `(scope: 'user'\|'shared') → main.WorkspaceState`. Crea el repositorio y su estructura (`.creative-ink/`, `tmp-Workspaces/`) en la ruta que calcula Go y guarda la elección. Devuelve `needsStart` (no abre ninguna carpeta). Rechaza ámbitos desconocidos o no disponibles | 9 |
+| Binding | `GetStartScreen`      | UI → Go    | `() → main.StartScreen` = `{ repositoryPath, projects, quickDocs, staleQuickDocs: core.ProjectInfo[]; staleAfterHours; recent: string[]; pluginsPath; warnings }`, con `ProjectInfo` = `{ name, path, mainFile, modified }` | 18 |
+| Binding | `CreateProject`       | UI → Go    | `(name) → main.WorkspaceState`. Crea `<repo>/<Slugify(name)>/` desde la plantilla con `main.tex` como principal, lo abre y lo compila. Error si ya existe o el nombre está reservado | 18 |
+| Binding | `CreateQuickDocument` | UI → Go    | `() → main.WorkspaceState`. Crea `tmp-Workspaces/unnamed-tmp<N>/main.tex` (N siguiente libre), lo abre y lo compila | 18 |
+| Binding | `OpenProject`         | UI → Go    | `(path) → main.WorkspaceState`. Solo carpetas **dentro del repositorio** (no la raíz, `.creative-ink` ni `tmp-Workspaces`) o **recientes** | 18 |
+| Binding | `RevealQuickDocuments`| UI → Go    | `() → void`: abre `tmp-Workspaces` en el gestor de archivos (`open` / `xdg-open` / `explorer`, sin shell) | 18 |
 | Binding | `RefreshWorkspace`    | UI → Go    | `() → main.WorkspaceState`: vuelve a escanear la carpeta abierta. La UI solo aplica el árbol y el archivo principal (`applyTree`), **nunca** `filePath` | 8, 11 |
 | Binding | `OpenFolderDialog`    | UI → Go    | `() → main.WorkspaceState`. Diálogo nativo; `canceled: true` si se cierra. Abre la carpeta y elige `main.tex` o el primer `.tex` | 8 |
 | Binding | `OpenFile`            | UI → Go    | `(path) → main.OpenedFile` = `{ path, content }`. Solo `.tex` dentro de la carpeta abierta. Lo hace documento activo y encola su compilación | 8 |
@@ -264,7 +291,25 @@ Los comandos se aplican al **archivo principal (★)** o, si no hay, al `.tex` a
 
 **Seguridad (riesgo previo, no introducido por `ci`):** latexmk lee el **`.latexmkrc` del proyecto**, que es código Perl. Abrir una carpeta ajena con la compilación automática activa equivale a ejecutar ese código. No se desactiva (`-norc`) porque hay proyectos, como la tesis, que dependen de él. Opción futura: confirmar antes de compilar una carpeta nueva que tenga `.latexmkrc`.
 
-## 4.6 Configuración, confianza y extensibilidad (propuesta del 2026-11-08, pendiente de decisión)
+## 4.6 Configuración, confianza y extensibilidad (diseño acordado el 2026-11-08)
+
+### Decisiones del usuario (2026-11-08)
+1. **Carpeta oculta del editor:** `<repo>/.creative-ink/` (config, plugins, plantillas, guía).
+2. **Abrir un proyecto = abrir su carpeta.** La raíz del repositorio es solo el lanzador (pantalla de inicio).
+3. **`tmp-Workspaces`:** nunca se borra nada automáticamente. Al empezar cada sesión se avisa de los documentos de más de 8 h; el usuario decide. Cada documento rápido va en su subcarpeta `unnamed-tmp1`, `unnamed-tmp2`…
+4. **Nombres normalizados con `-`:** `My-Creative-Ink-Repository` y todas las carpetas que crea el editor.
+5. **Plugins solo por usuario**, nunca en repositorios compartidos.
+6. **La guía de `ci`** se genera y se compila automáticamente.
+7. **Confianza:** se define en la instalación y se gestiona desde la terminal (`ci trust …`). Los proyectos creados por el editor son de confianza.
+
+### Plan y estado
+- [x] **Paso 1 — Estructura (Sección 18):** `.creative-ink/`, `tmp-Workspaces/`, pantalla de inicio (Nuevo proyecto, Documento rápido, proyectos, recientes, Abrir carpeta), plantilla de proyecto, migración del nombre y aviso de documentos rápidos antiguos.
+- [ ] **Paso 2 — Servicio de configuración por capas** (por defecto < repositorio `.creative-ink/config.json` < proyecto `.creative-ink-meta`; lo sensible solo desde el `settings.json` del usuario), `config:changed`, `ci config list|get|set` y `autoCompile` respetado por la UI y por Go (`RequestCompile(trigger)`).
+- [ ] **Paso 3 — Confianza:** política elegida en la instalación, `ci trust status|add|remove`, modo restringido (`latexmk -norc`) para carpetas ajenas con `.latexmkrc`, hash del archivo.
+- [ ] **Paso 4 — Registro de comandos `ci`** + guía autogenerada (`.creative-ink/guide/ci-guia.tex` → PDF) + `ci guide` + salida en streaming.
+- [ ] **Paso 5 — Host de plugins** (JSON-RPC por stdio, manifiesto con contribuciones y capacidades).
+
+### Análisis original (propuesta del 2026-11-08)
 
 > **Solo análisis, nada implementado.** Resuelve tres problemas abiertos con una sola base: (1) `ci config autocompile` se guarda pero la UI no lo respeta; (2) el `.latexmkrc` de un proyecto ajeno es código Perl que latexmk ejecuta; (3) los plugins futuros necesitarán aportar comandos y ajustes.
 
