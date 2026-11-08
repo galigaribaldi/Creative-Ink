@@ -751,3 +751,58 @@ func TestSyncTexBindingsWithoutDataAreSilent(t *testing.T) {
 		t.Errorf("not .tex: err = %v", err)
 	}
 }
+
+func TestHybridTerminalRoutesCiInternally(t *testing.T) {
+	a, _ := newTestApp(t, okCompile)
+	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+
+	// `ci` never reaches the shell: `ci help` works and lists the commands.
+	res, err := a.RunTerminalCommand("  ci help")
+	if err != nil || res.ExitCode != 0 || !strings.Contains(res.Output, "ci compile completo") {
+		t.Fatalf("ci help = %+v, %v", res, err)
+	}
+
+	// Settings: persisted in settings.json and reflected in WorkspaceState.
+	if res, _ := a.RunTerminalCommand("ci config autocompile off"); res.ExitCode != 0 {
+		t.Fatalf("autocompile off = %+v", res)
+	}
+	if st, _ := a.workspaceState(); st.AutoCompile {
+		t.Fatal("WorkspaceState.AutoCompile must reflect the saved setting")
+	}
+	if s, _ := core.ReadSettings(a.settingsPath); s.AutoCompileEnabled() {
+		t.Fatal("the setting must be saved")
+	}
+
+	// Usage errors are terminal results with exit code 1, not rejections.
+	res, err = a.RunTerminalCommand("ci compile volar")
+	if err != nil || res.ExitCode != 1 || !strings.Contains(res.Output, "✗") {
+		t.Fatalf("bad ci = %+v, %v", res, err)
+	}
+}
+
+func TestHybridTerminalCiWorksWithoutAFolder(t *testing.T) {
+	a := newApp("", "", okCompile)
+	t.Cleanup(func() { a.compiles.Close(time.Second) })
+	if res, err := a.RunTerminalCommand("ci help"); err != nil || res.ExitCode != 0 {
+		t.Fatalf("ci help without folder = %+v, %v", res, err)
+	}
+	if _, err := a.RunTerminalCommand("ls"); !errors.Is(err, core.ErrNoFolder) {
+		t.Fatalf("shell commands still need a folder, err = %v", err)
+	}
+}
+
+func TestCiBuildFailureEndsCompilingState(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	_, doc := a.workspace()
+	env := a.ciEnv()
+
+	env.BuildStarted()
+	env.BuildFinished(time.Second, errors.New("xelatex falló"), "▶ xelatex …")
+	if ev := nextEvent(t, events); ev.name != EventCompileStarted || ev.data[0].(CompileStartedEvent).File != doc {
+		t.Fatalf("started = %+v", ev)
+	}
+	fin := nextEvent(t, events).data[0].(CompileFinishedEvent)
+	if fin.Success || fin.File != doc || !strings.Contains(fin.Logs, "xelatex falló") || fin.DurationMs != 1000 {
+		t.Fatalf("finished = %+v", fin)
+	}
+}

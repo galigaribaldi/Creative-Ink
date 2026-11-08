@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"creative-ink/internal/ci"
 	"creative-ink/internal/compiler"
 	"creative-ink/internal/core"
 	"creative-ink/internal/system"
@@ -98,8 +100,9 @@ type App struct {
 	// previews holds immutable copies of the compiled PDFs served to PDF.js
 	// (nil = serve the live PDF, e.g. in tests or if the temp dir failed).
 	previews *core.PDFSnapshots
-	// lastPreview is the PDF behind the newest published version. Only the
-	// scheduler's worker goroutine touches it (OnFinished), so no lock.
+	// lastPreview is the PDF behind the newest published version. Only read
+	// or written by publishPreview, which always runs under the compile lock
+	// (the worker's OnFinished and `ci compile`), so it needs no lock of its own.
 	lastPreview previewStamp
 
 	// termMu guards termCancel: at most one terminal command runs at a time.
@@ -135,9 +138,12 @@ type WorkspaceState struct {
 	FilePath   string `json:"filePath"`   // absolute active .tex, "" if none
 	// MainFilePath is the project's root document ("" if none). When set it
 	// is what gets compiled and previewed, whatever file is being edited.
-	MainFilePath string        `json:"mainFilePath"`
-	Tree         core.FileNode `json:"tree"`
-	Truncated    bool          `json:"truncated"` // the tree hit its size limits
+	MainFilePath string `json:"mainFilePath"`
+	// AutoCompile is the saved `ci config autocompile` setting (default on).
+	// Pending: the UI does not honour it yet (see docs/MAP.md §4.3.6).
+	AutoCompile bool          `json:"autoCompile"`
+	Tree        core.FileNode `json:"tree"`
+	Truncated   bool          `json:"truncated"` // the tree hit its size limits
 }
 
 // OpenedFile is a document loaded into the editor.
@@ -273,9 +279,11 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 			OnFinished: func(r compiler.Result) {
 				event := CompileFinishedEvent{Result: r, File: a.compilingDoc}
 				if r.Success {
-					// Same worker goroutine as latexmk: the copy can never
-					// overlap the next compilation rewriting the PDF.
-					event.PDFVersion, event.PDFModTime = a.publishPreview(compiler.PDFPath(a.compilingDoc))
+					// Under the compile lock: neither the next latexmk nor a
+					// `ci compile` can be rewriting the PDF during the copy.
+					compiler.WithCompileLock(func() {
+						event.PDFVersion, event.PDFModTime = a.publishPreview(compiler.PDFPath(a.compilingDoc))
+					})
 				}
 				a.emit(EventCompileFinished, event)
 			},
@@ -313,8 +321,8 @@ type previewStamp struct {
 	version uint64
 }
 
-// publishPreview runs right after CompileLaTeXContext, on the same worker
-// goroutine (latexmk cannot be rewriting the PDF meanwhile). It reads the
+// publishPreview must run under compiler.WithCompileLock (no TeX run can be
+// rewriting the PDF meanwhile). It reads the
 // PDF's ModTime and, only if the PDF changed, copies a new snapshot. It
 // returns the version to show and the ModTime (Unix ms); 0, 0 on error.
 func (a *App) publishPreview(pdf string) (version uint64, modTime int64) {
@@ -438,8 +446,10 @@ func (a *App) SetupRepository(scope string) (WorkspaceState, error) {
 		return WorkspaceState{}, err
 	}
 	if a.settingsPath != "" {
-		settings := core.Settings{RepositoryScope: scope, RepositoryPath: option.Path}
-		if err := core.SaveSettings(a.settingsPath, settings); err != nil {
+		_, err := core.UpdateSettings(a.settingsPath, func(s *core.Settings) {
+			s.RepositoryScope, s.RepositoryPath = scope, option.Path
+		})
+		if err != nil {
 			return WorkspaceState{}, fmt.Errorf("guardar la configuración: %w", err)
 		}
 	}
@@ -638,7 +648,8 @@ func (a *App) ConfirmClose(saved bool) {
 // send what the user typed in the terminal panel.
 func (a *App) RunTerminalCommand(command string) (TerminalResult, error) {
 	folder, _ := a.workspace()
-	if folder == "" {
+	internal := ci.IsCommand(command)
+	if folder == "" && !internal {
 		return TerminalResult{}, core.ErrNoFolder
 	}
 
@@ -659,6 +670,10 @@ func (a *App) RunTerminalCommand(command string) (TerminalResult, error) {
 	}()
 
 	start := time.Now()
+	// Hybrid terminal: `ci …` is handled natively in Go, never by a shell.
+	if internal {
+		return a.runInternalCommand(ctx, command, folder, start), nil
+	}
 	output, err := core.ExecuteCommandContext(ctx, command, folder, []string{"PATH=" + system.ToolPATH()})
 	result := TerminalResult{
 		Command:    command,
@@ -681,6 +696,73 @@ func (a *App) RunTerminalCommand(command string) (TerminalResult, error) {
 		return TerminalResult{}, err // could not start (empty command, missing folder, no shell)
 	}
 	return result, nil
+}
+
+// runInternalCommand runs a reserved `ci` command (see internal/ci). A
+// failure is a normal terminal result: exit code 1 and the reason appended.
+func (a *App) runInternalCommand(ctx context.Context, command, folder string, start time.Time) TerminalResult {
+	output, err := ci.Run(ctx, command, a.ciEnv())
+	result := TerminalResult{Command: command, Folder: folder, Output: output}
+	switch {
+	case err == nil:
+	case ctx.Err() != nil:
+		result.ExitCode, result.Canceled = -1, true
+	default:
+		result.ExitCode = 1
+		if result.Output != "" && !strings.HasSuffix(result.Output, "\n") {
+			result.Output += "\n"
+		}
+		result.Output += "✗ " + err.Error() + "\n"
+	}
+	result.DurationMs = time.Since(start).Milliseconds()
+	return result
+}
+
+// ciEnv gives the `ci` handler the compile target, the settings and hooks
+// that keep the preview in sync with manual builds.
+func (a *App) ciEnv() ci.Env {
+	target := a.compileTarget()
+	return ci.Env{
+		Target:         target,
+		AutoCompile:    func() (bool, error) { return a.autoCompileEnabled(), nil },
+		SetAutoCompile: a.setAutoCompile,
+		BuildStarted: func() {
+			a.emit(EventCompileStarted, CompileStartedEvent{File: target})
+		},
+		BuildFinished: func(d time.Duration, err error, report string) {
+			event := CompileFinishedEvent{
+				Result: compiler.Result{Success: err == nil, DurationMs: d.Milliseconds()},
+				File:   target,
+			}
+			if err != nil {
+				event.Logs = err.Error() + "\n\n" + report
+			} else {
+				// Already under the compile lock (see ci.Env.BuildFinished).
+				event.Logs = "Compilado con ci compile."
+				event.PDFVersion, event.PDFModTime = a.publishPreview(compiler.PDFPath(target))
+			}
+			a.emit(EventCompileFinished, event)
+		},
+	}
+}
+
+func (a *App) autoCompileEnabled() bool {
+	if a.settingsPath == "" {
+		return true
+	}
+	s, err := core.ReadSettings(a.settingsPath)
+	if err != nil {
+		return true
+	}
+	return s.AutoCompileEnabled()
+}
+
+func (a *App) setAutoCompile(on bool) error {
+	if a.settingsPath == "" {
+		return errors.New("no se puede guardar la configuración en este sistema")
+	}
+	_, err := core.UpdateSettings(a.settingsPath, func(s *core.Settings) { s.AutoCompile = &on })
+	return err
 }
 
 // CancelTerminalCommand stops the running terminal command, if any.
@@ -949,6 +1031,7 @@ func (a *App) workspaceState() (WorkspaceState, error) {
 		FolderPath:   folder,
 		FilePath:     doc,
 		MainFilePath: a.effectiveMainFile(),
+		AutoCompile:  a.autoCompileEnabled(),
 		Tree:         tree,
 		Truncated:    truncated,
 	}, nil

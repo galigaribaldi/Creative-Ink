@@ -141,6 +141,7 @@ export namespace main {
 	    folderPath: string;
 	    filePath: string;
 	    mainFilePath: string;
+	    autoCompile: boolean;
 	    tree: core.FileNode;
 	    truncated: boolean;
 	
@@ -155,6 +156,7 @@ export namespace main {
 	        this.folderPath = source["folderPath"];
 	        this.filePath = source["filePath"];
 	        this.mainFilePath = source["mainFilePath"];
+	        this.autoCompile = source["autoCompile"];
 	        this.tree = this.convertValues(source["tree"], core.FileNode);
 	        this.truncated = source["truncated"];
 	    }

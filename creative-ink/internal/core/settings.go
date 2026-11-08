@@ -19,6 +19,15 @@ type Settings struct {
 	Version         int    `json:"version"`
 	RepositoryScope string `json:"repositoryScope"` // system.ScopeUser | system.ScopeShared
 	RepositoryPath  string `json:"repositoryPath"`  // absolute
+	// AutoCompile turns the editor's automatic compilation on or off
+	// (`ci config autocompile on|off`). A pointer so that a missing field,
+	// e.g. in an older settings.json, means "on" instead of "off".
+	AutoCompile *bool `json:"autoCompile,omitempty"`
+}
+
+// AutoCompileEnabled is AutoCompile with its default (on).
+func (s Settings) AutoCompileEnabled() bool {
+	return s.AutoCompile == nil || *s.AutoCompile
 }
 
 // SettingsPath returns <user config dir>/creative-ink/settings.json.
@@ -47,6 +56,37 @@ func LoadSettings(path string) (s Settings, ok bool, err error) {
 		return Settings{}, false, nil
 	}
 	return s, true, nil
+}
+
+// ReadSettings reads path as is (a missing file is the zero value), even
+// before the first-run setup chose a repository.
+func ReadSettings(path string) (Settings, error) {
+	var s Settings
+	data, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return s, nil
+	case err != nil:
+		return Settings{}, fmt.Errorf("read settings %q: %w", path, err)
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		return Settings{}, fmt.Errorf("parse settings %q: %w", path, err)
+	}
+	return s, nil
+}
+
+// UpdateSettings reads path (a missing file counts as empty), applies
+// mutate and saves it, so changing one field never drops the others.
+func UpdateSettings(path string, mutate func(*Settings)) (Settings, error) {
+	s, err := ReadSettings(path)
+	if err != nil {
+		return Settings{}, err
+	}
+	mutate(&s)
+	if err := SaveSettings(path, s); err != nil {
+		return Settings{}, err
+	}
+	return s, nil
 }
 
 // SaveSettings writes path atomically (temp file + rename).

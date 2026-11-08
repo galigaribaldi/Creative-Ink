@@ -234,3 +234,29 @@ func TestSettingsRoundTrip(t *testing.T) {
 		t.Fatal("a relative repository path must be ignored")
 	}
 }
+
+func TestUpdateSettingsKeepsOtherFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "creative-ink", "settings.json")
+	if err := SaveSettings(path, Settings{RepositoryScope: "user", RepositoryPath: "/r"}); err != nil {
+		t.Fatal(err)
+	}
+	if (Settings{}).AutoCompileEnabled() != true {
+		t.Fatal("a missing autoCompile must mean on")
+	}
+
+	off := false
+	if _, err := UpdateSettings(path, func(s *Settings) { s.AutoCompile = &off }); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := LoadSettings(path)
+	if err != nil || !ok || got.RepositoryPath != "/r" || got.AutoCompileEnabled() {
+		t.Fatalf("settings = %+v, ok=%v, err=%v", got, ok, err)
+	}
+
+	// Works before the first-run setup too (no file yet).
+	fresh := filepath.Join(t.TempDir(), "settings.json")
+	on := true
+	if s, err := UpdateSettings(fresh, func(s *Settings) { s.AutoCompile = &on }); err != nil || !s.AutoCompileEnabled() {
+		t.Fatalf("fresh = %+v, %v", s, err)
+	}
+}
