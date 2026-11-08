@@ -1,11 +1,9 @@
 <script>
   import { compilation } from '../lib/compilation.svelte.js'
   import { compileTarget } from '../lib/workspace.svelte.js'
-  import CompileLog from './CompileLog.svelte'
+  import BottomPanel from './BottomPanel.svelte'
   import Editor from './Editor.svelte'
   import Preview from './Preview.svelte'
-
-  let showLog = $derived(compilation.status === 'error' && compilation.logs !== '')
 </script>
 
 <!-- Layout only: Editor and Preview are never re-keyed or put inside {#if},
@@ -15,9 +13,8 @@
     <div class="editor-host">
       <Editor />
     </div>
-    {#if showLog}
-      <CompileLog logs={compilation.logs} />
-    {/if}
+    <!-- "Errores LaTeX" | "Terminal". Always mounted; hides itself. -->
+    <BottomPanel />
   </section>
 
   <section class="pane" aria-label="Vista previa">

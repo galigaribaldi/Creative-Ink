@@ -14,7 +14,7 @@
     saveDocument
   } from './lib/actions.js'
   import { listenCompileEvents, resetCompilation } from './lib/compilation.svelte.js'
-  import { toggleSidebar, ui } from './lib/ui.svelte.js'
+  import { toggleBottomTab, toggleSidebar, ui } from './lib/ui.svelte.js'
   import { compileTarget, workspace } from './lib/workspace.svelte.js'
 
   const ACTIONBAR_WIDTH = '44px'
@@ -41,11 +41,15 @@
    * Global shortcuts (they also fire inside CodeMirror: its keydown bubbles).
    * Cmd/Ctrl+S save + compile · Cmd/Ctrl+Shift+S save as
    * Cmd/Ctrl+B sidebar · Cmd/Ctrl+O open folder
+   * Ctrl+` or Cmd/Ctrl+J terminal (` is a dead key on Spanish layouts)
    */
   function onkeydown(event) {
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return
     const key = event.key.toLowerCase()
-    if (key === 's' && !event.shiftKey) {
+    if ((event.ctrlKey && event.code === 'Backquote') || (key === 'j' && !event.shiftKey)) {
+      event.preventDefault()
+      toggleBottomTab('terminal')
+    } else if (key === 's' && !event.shiftKey) {
       event.preventDefault() // no "Save page" from the webview
       saveDocument()
     } else if (key === 'b' && !event.shiftKey) {

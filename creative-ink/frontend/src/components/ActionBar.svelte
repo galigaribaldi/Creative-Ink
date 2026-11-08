@@ -1,7 +1,8 @@
 <script>
   import { compileDocument, openFolder, saveAs, saveDocument } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
-  import { toggleTool, ui } from '../lib/ui.svelte.js'
+  import { terminal } from '../lib/terminal.svelte.js'
+  import { toggleBottomTab, toggleTool, ui } from '../lib/ui.svelte.js'
 
   // macOS shows ⌘, Linux shows Ctrl in the tooltips.
   const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
@@ -11,6 +12,7 @@
   let explorerActive = $derived(ui.sidebarOpen && ui.activeTool === 'explorer')
   let compiling = $derived(compilation.status === 'compiling')
   let compileFailed = $derived(compilation.status === 'error')
+  let terminalOpen = $derived(ui.bottomPanelOpen && ui.bottomTab === 'terminal')
 </script>
 
 <nav class="actionbar" aria-label="Barra de acciones">
@@ -68,6 +70,20 @@
   </div>
 
   <div class="group">
+    <button
+      class:active={terminalOpen}
+      onclick={() => toggleBottomTab('terminal')}
+      aria-label="Terminal"
+      aria-pressed={terminalOpen}
+      title="Terminal (Ctrl+` · {MOD}J)"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" />
+        <path d="M7 10l3 2-3 2M12 15h5" />
+      </svg>
+      {#if terminal.running}<span class="badge busy" aria-hidden="true"></span>{/if}
+    </button>
+
     <button
       onclick={() => (ui.healthOpen = true)}
       aria-label="Estado del sistema"
@@ -148,6 +164,10 @@
 
   .compile.busy svg {
     animation: spin 0.9s linear infinite;
+  }
+
+  .badge.busy {
+    background: #fbbf24;
   }
 
   .badge {
