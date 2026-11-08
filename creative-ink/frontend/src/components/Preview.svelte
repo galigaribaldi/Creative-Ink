@@ -1,6 +1,7 @@
 <script>
-  import { onMount, untrack } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import { loadPdf, releasePdf } from '../lib/pdf.js'
+  import { sync, syncBackward } from '../lib/synctex.svelte.js'
 
   // Served by the Go AssetServer middleware (see preview.go: previewRoute).
   const PREVIEW_URL = '/__preview/document.pdf'
@@ -70,6 +71,8 @@
       pageCount = 0
       hasPage = false
       renderError = ''
+      highlight = null
+      rendered = { pageNumber: 0, cssScale: 1 }
     })
   })
 
@@ -167,8 +170,61 @@
     canvas.getContext('2d').drawImage(offscreen, 0, 0)
     // Free the offscreen backing store now instead of waiting for GC.
     offscreen.width = offscreen.height = 0
+    // CSS pixels per PDF point: converts SyncTeX coordinates both ways.
+    rendered = { pageNumber, cssScale: fitScale }
     hasPage = true
     return true
+  }
+
+  // ── SyncTeX ─────────────────────────────────────────────────────────────
+  const HIGHLIGHT_MS = 1800
+  const HIGHLIGHT_PAD_PX = 2
+  /** Page and scale of what the canvas shows now (non-reactive). */
+  let rendered = { pageNumber: 0, cssScale: 1 }
+  /** @type {{ left: number, top: number, width: number, height: number, key: number } | null} */
+  let highlight = $state(null)
+  /** @type {HTMLDivElement | undefined} */
+  let highlightEl = $state()
+  let highlightTimer
+
+  // Forward search (Editor → PDF): jump to the page and flash the box.
+  $effect(() => {
+    const target = sync.highlight
+    if (target) untrack(() => void showSyncHighlight(target))
+  })
+
+  /** @param {import('../lib/synctex.svelte.js').SyncHighlight} target */
+  async function showSyncHighlight(target) {
+    sync.highlight = null
+    if (!pdfDoc) return
+    const page = clampPage(target.page, pdfDoc.numPages)
+    if (page !== rendered.pageNumber) {
+      currentPageNumber = page
+      if (!(await renderPage(pdfDoc, page))) return
+    }
+    const s = rendered.cssScale
+    highlight = {
+      left: target.x * s - HIGHLIGHT_PAD_PX,
+      top: target.y * s - HIGHLIGHT_PAD_PX,
+      width: Math.max(target.width * s, 8) + 2 * HIGHLIGHT_PAD_PX,
+      height: Math.max(target.height * s, 8) + 2 * HIGHLIGHT_PAD_PX,
+      key: target.nonce // restarts the CSS animation
+    }
+    clearTimeout(highlightTimer)
+    highlightTimer = setTimeout(() => (highlight = null), HIGHLIGHT_MS)
+    await tick()
+    highlightEl?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+
+  // Backward search (PDF → Editor): double-click converts the CSS position to
+  // PDF points with the scale the page was drawn at.
+  /** @param {MouseEvent} event */
+  function ondblclick(event) {
+    if (!hasPage || !rendered.pageNumber) return
+    const rect = canvas.getBoundingClientRect()
+    const x = (event.clientX - rect.left) / rendered.cssScale
+    const y = (event.clientY - rect.top) / rendered.cssScale
+    void syncBackward(rendered.pageNumber, x, y)
   }
 
   onMount(() => {
@@ -204,12 +260,35 @@
       Vista previa{#if pdfName}<span class="pdf-name" title={documentKey}> · {pdfName}</span>{/if}
       {#if pageCount}<span class="pages">· página {currentPageNumber} de {pageCount}</span>{/if}
     </span>
+    {#if sync.notice}<span class="sync-notice" role="status">{sync.notice}</span>{/if}
     <span class="state-{compileState}">{LABELS[compileState]}</span>
   </header>
 
   <div class="viewer" bind:this={viewer}>
-    <canvas bind:this={canvas} class:hidden={!hasPage} aria-label="Página {currentPageNumber} del PDF compilado"
-    ></canvas>
+    <div class="page" class:hidden={!hasPage}>
+      <!-- Double-click: SyncTeX backward (keyboard alternative: ⌘⌥J/Ctrl+Alt+J
+           works the other way, from the editor). -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <canvas
+        bind:this={canvas}
+        {ondblclick}
+        title="Doble clic para ir al código fuente"
+        aria-label="Página {currentPageNumber} del PDF compilado"
+      ></canvas>
+      {#if highlight}
+        {#key highlight.key}
+          <div
+            bind:this={highlightEl}
+            class="sync-highlight"
+            style:left="{highlight.left}px"
+            style:top="{highlight.top}px"
+            style:width="{highlight.width}px"
+            style:height="{highlight.height}px"
+            aria-hidden="true"
+          ></div>
+        {/key}
+      {/if}
+    </div>
     {#if !hasPage}
       <p class="placeholder">
         {compileState === 'compiling' ? 'Compilando el documento…' : 'Escribe un documento LaTeX válido para ver el PDF.'}
@@ -273,15 +352,54 @@
     background: #2a2a2a;
   }
 
-  canvas {
-    display: block;
+  .page {
+    position: relative;
     flex-shrink: 0;
-    background: #fff;
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
   }
 
-  canvas.hidden {
+  .page.hidden {
     display: none;
+  }
+
+  canvas {
+    display: block;
+    background: #fff;
+    cursor: text;
+  }
+
+  .sync-highlight {
+    position: absolute;
+    border-radius: 2px;
+    background: rgba(251, 191, 36, 0.3);
+    outline: 2px solid rgba(251, 191, 36, 0.9);
+    pointer-events: none;
+    animation: sync-fade 1.8s ease-out forwards;
+  }
+
+  @keyframes sync-fade {
+    0%,
+    60% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sync-highlight {
+      animation: none;
+    }
+  }
+
+  .sync-notice {
+    margin-left: auto;
+    margin-right: 0.75rem;
+    color: #fbbf24;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .placeholder {

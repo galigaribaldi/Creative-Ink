@@ -16,6 +16,7 @@
   import { OpenFile, RequestCompile, SaveContent } from '../../wailsjs/go/main/App.js'
   import { registerEditor } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
+  import { sync, syncForward } from '../lib/synctex.svelte.js'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
   // Two inactivity windows, both restarted by every keystroke:
@@ -25,8 +26,9 @@
   //    auto-compile pauses for heavy documents (> 10 s).
   //    Cmd/Ctrl+S skips both and does both now.
   const SAVE_DELAY_MS = 1000
+  const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
   // macOS shows ⌘S, Linux/Windows Ctrl+S in the paused-compile notice.
-  const SAVE_SHORTCUT = navigator.platform.toUpperCase().includes('MAC') ? '⌘S' : 'Ctrl+S'
+  const SAVE_SHORTCUT = IS_MAC ? '⌘S' : 'Ctrl+S'
 
   const LABELS = {
     empty: 'Sin documento',
@@ -165,7 +167,28 @@
         StreamLanguage.define(stex),
         EditorView.lineWrapping,
         editability.of(editabilityFor(canEdit)),
+        // SyncTeX forward: ⌘-click (Ctrl-click on Linux/Windows) on a line.
+        EditorView.domEventHandlers({
+          mousedown(event, v) {
+            const mod = IS_MAC ? event.metaKey : event.ctrlKey
+            if (!mod || event.button !== 0 || !docFile) return false
+            const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
+            if (pos == null) return false
+            event.preventDefault()
+            void syncForward(docFile, v.state.doc.lineAt(pos).number)
+            return true
+          }
+        }),
         keymap.of([
+          // SyncTeX forward from the cursor line, without the mouse.
+          {
+            key: 'Mod-Alt-j',
+            preventDefault: true,
+            run: (v) => {
+              if (docFile) void syncForward(docFile, v.state.doc.lineAt(v.state.selection.main.head).number)
+              return true
+            }
+          },
           ...defaultKeymap,
           ...historyKeymap,
           indentWithTab
@@ -193,6 +216,20 @@
     status = path ? 'saved' : 'empty'
     errorMsg = ''
     if (path) view.focus()
+    // A backward search may have asked for a line of this file.
+    if (sync.reveal && sync.reveal.file === path) revealLine(sync.reveal.line)
+  }
+
+  /** Selects line n (1-based) and scrolls it to the middle (SyncTeX backward). */
+  function revealLine(n) {
+    if (!view) return
+    const line = view.state.doc.line(Math.min(Math.max(1, n), view.state.doc.lines))
+    view.dispatch({
+      selection: { anchor: line.from, head: line.to },
+      effects: EditorView.scrollIntoView(line.from, { y: 'center' })
+    })
+    view.focus()
+    sync.reveal = null
   }
 
   /** Renames the current document in place (Save As): same text, new file. */
@@ -212,6 +249,7 @@
     if (seq !== switchSeq) return
     if (!clean) {
       // The current file could not be saved: stay on it instead of losing edits.
+      sync.reveal = null // a pending SyncTeX jump must not fire later
       setEditable(docFile !== '')
       workspace.currentFilePath = docFile
       return
@@ -227,6 +265,7 @@
       if (seq !== switchSeq) return
       status = 'loadError'
       errorMsg = String(err)
+      sync.reveal = null
       setEditable(docFile !== '')
       // Keep the explorer selection truthful: the old file is still open.
       workspace.currentFilePath = docFile
@@ -254,6 +293,13 @@
       view?.destroy()
       view = null
     }
+  })
+
+  // SyncTeX backward into the file already open. For another file, load()
+  // reveals the line once the switch finishes.
+  $effect(() => {
+    const reveal = sync.reveal
+    if (reveal) untrack(() => reveal.file === docFile && revealLine(reveal.line))
   })
 
   // A heavy result pauses auto-compile: drop a compile already scheduled
