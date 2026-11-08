@@ -57,6 +57,9 @@ type HealthStatus struct {
 	HardwareTier    string  `json:"hardwareTier"`
 	HardwareTierID  string  `json:"hardwareTierId"`
 
+	// Operating system and proposed location of the central repository.
+	Repository RepositoryOptions `json:"repository"`
+
 	// Non-fatal probe failures. Always non-nil so JS receives [] and not null.
 	Warnings []string `json:"warnings"`
 }
@@ -67,6 +70,7 @@ type probes struct {
 	numCPU     func() int
 	totalRAM   func() (uint64, error)
 	freeDiskOn func(path string) (uint64, error)
+	repository func() RepositoryOptions
 }
 
 var hostProbes = probes{
@@ -86,6 +90,7 @@ var hostProbes = probes{
 		}
 		return u.Free, nil
 	},
+	repository: DetectRepositoryOptions,
 }
 
 // CheckHealth audits the LaTeX toolchain and the hardware of the host system.
@@ -100,6 +105,7 @@ func checkHealth(p probes) HealthStatus {
 		HasLatexmk: p.lookup("latexmk"),
 		HasBiber:   p.lookup("biber"),
 		CPUCores:   p.numCPU(),
+		Repository: p.repository(),
 		Warnings:   []string{},
 	}
 

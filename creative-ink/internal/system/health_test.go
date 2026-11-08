@@ -15,6 +15,7 @@ func fakeProbes() probes {
 		numCPU:     func() int { return 8 },
 		totalRAM:   func() (uint64, error) { return 16 * gib, nil },
 		freeDiskOn: func(string) (uint64, error) { return 250 * gb, nil },
+		repository: func() RepositoryOptions { return RepositoryOptions{OS: "darwin", Warnings: []string{}} },
 	}
 }
 
@@ -38,7 +39,8 @@ func TestCheckHealthHardwareProfile(t *testing.T) {
 		HasXeLaTeX: true, HasLatexmk: true, HasBiber: true,
 		TotalRAMGB: 16, CPUCores: 8, FreeDiskSpaceGB: 250,
 		HardwareTier: TierAdvanced, HardwareTierID: TierIDAdvanced,
-		Warnings: []string{},
+		Repository: RepositoryOptions{OS: "darwin", Warnings: []string{}},
+		Warnings:   []string{},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("checkHealth() = %+v\nwant %+v", got, want)
