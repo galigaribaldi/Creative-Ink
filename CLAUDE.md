@@ -42,6 +42,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 - **Svelte 5 (runes):** en `<!-- svelte-ignore a, b -->` los códigos se separan con **coma**. Después de un espacio, el compilador trata el resto como comentario.
 - **Svelte 5:** no llames `state` (ni `props`, `derived`, `effect`) a una prop o variable si usas la runa correspondiente: `$state` se interpretaría como un *store*.
 - **pdfjs-dist 6:** `PDFDocumentProxy.destroy()` **no existe**. Se libera con `doc.loadingTask.destroy()` (vía `releasePdf()` en `src/lib/pdf.js`). Usa siempre el `PDFWorker` compartido: sin él, cada documento crea un Web Worker nuevo.
+- **fsnotify en macOS (kqueue):** abre un descriptor por carpeta **y por archivo** vigilado, y no es recursivo. Respeta `maxWatchedDirs` y los filtros de `isIgnoredEntry`; nunca vigiles carpetas de build ni `node_modules`.
 - **Template de Wails v2.17.1:** venía con `vite-plugin-svelte@6` (no acepta Vite 8), con `new App()` (Svelte 4) y con un `jsconfig` obsoleto. Ya está corregido.
 
 ## Estado actual (actualizar al cerrar cada sección)
@@ -127,4 +128,11 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] `App.mainFile` (bajo `mu`, se recarga al cambiar de carpeta), `compileTarget()` para el Scheduler, `preview.go` y los eventos; guardar cualquier `.tex` recompila el principal
   - [x] Binding `SetMainFile(path)` (`""` lo quita); `WorkspaceState.mainFilePath`
   - [x] Frontend: `compileTarget()` en `workspace.svelte.js`; insignia `★ MAIN` y botón ☆/★ al pasar el ratón en `FileTreeItem`; la vista previa muestra el nombre del PDF
+  - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 11 — Explorador reactivo a cambios externos** (deuda técnica #7; código listo, falta validar con `wails dev`)
+  - [x] `github.com/fsnotify/fsnotify v1.9.0` en `go.mod`
+  - [x] `core/watcher.go`: `FolderWatcher` recursivo con filtros, debounce de 300 ms, `recover`, límite de 256 carpetas; `TreeSignature`
+  - [x] `App`: `restartWatcher` al cambiar de carpeta, `stopWatching` en el cierre, `onFolderChanged` emite `workspace:changed` solo si el árbol cambió
+  - [x] Frontend: `listenWorkspaceEvents()` → `refreshWorkspace()` (uno en curso, los demás juntados) y `applyTree()`, que no toca el archivo abierto
+  - [x] `go vet`, `go test`, `go test -race` y `GOOS=linux/windows go vet` limpios; tests del watcher estables (5 repeticiones)
   - [ ] Validación del programador: reiniciar `wails dev`

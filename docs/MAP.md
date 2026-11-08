@@ -24,7 +24,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     │   │   ├── file_manager.go   ← FileManager: guardado atómico (tmp + rename) y carga de documentos
     │   │   ├── workspace.go      ← ScanTree, ResolveInFolder, DefaultTeXFile, PrepareRepository
     │   │   ├── settings.go       ← elección del primer arranque en <UserConfigDir>/creative-ink/settings.json
-    │   │   └── project_meta.go   ← <carpeta>/.creative-ink-meta: archivo principal del proyecto (ruta relativa)
+    │   │   ├── project_meta.go   ← <carpeta>/.creative-ink-meta: archivo principal del proyecto (ruta relativa)
+    │   │   └── watcher.go        ← FolderWatcher (fsnotify): cambios externos con debounce; TreeSignature
     │   └── system/               ← entorno: health check de LaTeX y detección/instalación de motores
     │       ├── health.go         ← HealthStatus: herramientas de LaTeX, hardware y repositorio
     │       ├── platform.go       ← RepositoryOptions por SO, parser de XDG user-dirs
@@ -103,7 +104,7 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 | Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ needsSetup, canceled, folderPath, filePath, mainFilePath, tree: core.FileNode, truncated }`. `mainFilePath` es el archivo principal del proyecto (`""` si no hay, o si se borró). Carpeta abierta (al inicio, el repositorio central guardado), documento activo y árbol. **`needsSetup: true`** en el primer arranque, sin crear nada en disco | 9 |
 | Binding | `GetRepositoryOptions` | UI → Go   | `() → system.RepositoryOptions` = `{ os, osName, user, shared: RepositoryOption; warnings: string[]; currentScope, currentPath }`, con `RepositoryOption` = `{ scope, path, available, reason }`. Rutas propuestas para este SO | 9 |
 | Binding | `SetupRepository`     | UI → Go    | `(scope: 'user'\|'shared') → main.WorkspaceState`. Crea el repositorio en la ruta que calcula Go, guarda la elección y lo abre. Rechaza ámbitos desconocidos o no disponibles | 9 |
-| Binding | `RefreshWorkspace`    | UI → Go    | `() → main.WorkspaceState`: vuelve a escanear la carpeta abierta | 8 |
+| Binding | `RefreshWorkspace`    | UI → Go    | `() → main.WorkspaceState`: vuelve a escanear la carpeta abierta. La UI solo aplica el árbol y el archivo principal (`applyTree`), **nunca** `filePath` | 8, 11 |
 | Binding | `OpenFolderDialog`    | UI → Go    | `() → main.WorkspaceState`. Diálogo nativo; `canceled: true` si se cierra. Abre la carpeta y elige `main.tex` o el primer `.tex` | 8 |
 | Binding | `OpenFile`            | UI → Go    | `(path) → main.OpenedFile` = `{ path, content }`. Solo `.tex` dentro de la carpeta abierta. Lo hace documento activo y encola su compilación | 8 |
 | Binding | `SaveContent`         | UI → Go    | `(path, content) → main.SaveResult` = `{ saved }`. Responde de inmediato. `path` (absoluto, `.tex`, dentro de la carpeta) viaja con cada guardado. Compila si `path` es el documento activo o, **si hay archivo principal, al guardar cualquier `.tex`** (un capítulo con `\input` cambia el PDF del principal). Rechaza la promesa si la ruta no es válida o falla la escritura | 8 |
@@ -112,6 +113,7 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 | Binding | `RequestCompile`      | UI → Go    | `() → boolean`: encola una compilación del documento activo **sin guardar**; `false` solo durante el cierre | 7 |
 | Evento  | `compile:started`     | Go → UI    | `main.CompileStartedEvent` = `{ file }`: el **objetivo de compilación** (principal o activo). La UI ignora los eventos de otro objetivo | 8, 10 |
 | Evento  | `compile:finished`    | Go → UI    | `main.CompileFinishedEvent` = `{ file, success, logs, durationMs }`. No se emite después del cierre | 8 |
+| Evento  | `workspace:changed`   | Go → UI    | `main.WorkspaceChangedEvent` = `{ folder }`. Se crearon, borraron o renombraron archivos o carpetas fuera de la app (con debounce de 300 ms y **solo si el árbol visible cambió**). La UI llama a `RefreshWorkspace` si `folder` sigue abierta | 11 |
 | HTTP    | `/__preview/document.pdf` | WebView → Go | `GET` → PDF del **objetivo de compilación** (el del archivo principal si existe; si no, el del activo) (`Cache-Control: no-store`, admite Range; 404 si todavía no existe). La UI agrega `?t=<timestamp>` para forzar la recarga | 4 |
 
 ## 4. Motores LaTeX (requisito de producto)
@@ -169,6 +171,15 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 - **Frontend:** `compileTarget()` en `workspace.svelte.js` (`mainFilePath || currentFilePath`) es la clave del `Preview` y el filtro de los eventos `compile:*`. Al saltar entre capítulos, el objetivo no cambia: el PDF, la página y el log se conservan.
 - **UI:** insignia `★ MAIN` en el árbol. Al pasar el ratón por un `.tex` aparece ☆ ("Establecer como principal"); en el principal, ★ lo quita. La vista previa muestra qué PDF se ve (`· main.pdf`).
 
+## 4.3.3 Explorador reactivo a cambios externos (Sección 11)
+- **`core.FolderWatcher`** (`fsnotify` v1.9, sin Wails) vigila la carpeta abierta y sus subcarpetas con los mismos filtros que `ScanTree` (`isIgnoredEntry`). `fsnotify` no es recursivo: las carpetas nuevas se añaden al vuelo.
+- **Solo cambios de estructura:** `Create`, `Remove` y `Rename`. Se ignoran las escrituras (autoguardado, latexmk), los auxiliares de LaTeX, el `.tmp` del guardado atómico y los archivos ocultos (`.creative-ink-meta`).
+- **Debounce de 300 ms** (`WatchDebounce`) en la goroutine del watcher, que además recupera los panics. Si hay *overflow* de eventos, se refresca igualmente.
+- **Sin eventos falsos:** `App.onFolderChanged` vuelve a escanear y compara `core.TreeSignature` con la anterior. Solo emite `workspace:changed` si el árbol visible cambió (kqueue informa `Remove`+`Create` cuando el guardado atómico reemplaza `main.tex`).
+- **Ciclo de vida:** `App.restartWatcher()` al cambiar de carpeta (vigila siempre la carpeta *actual*, aunque dos cambios coincidan), `stopWatching()` en `OnShutdown`. Los callbacks de un watcher viejo se descartan. En los tests, `watchFolder` se inyecta.
+- **Límites:** como mucho 256 carpetas vigiladas (`maxWatchedDirs`) y 6 niveles. En macOS, kqueue abre un descriptor por carpeta **y por archivo** vigilado; Go ≥ 1.19 sube el límite blando de descriptores al duro al arrancar.
+- **Frontend:** `listenWorkspaceEvents()` (en `actions.js`, se da de baja en `onDestroy`) → `refreshWorkspace()`, con un solo refresco en curso y los demás juntados en uno. `applyTree()` no cambia el archivo abierto: un refresco durante un cambio de archivo no puede devolver el editor al archivo anterior.
+
 ## 4.4 Deuda técnica conocida (análisis del 2026-11-05)
 1. ~~**Guardar y compilar están acoplados en `SaveContent`.**~~ **Resuelto el 2026-11-06:** `SaveContent` responde de inmediato y la compilación va por el `Scheduler` con eventos (ver §4.3).
 2. **Se compila con cada pausa de 1 s.** Convendría un debounce propio para la compilación (por ejemplo 2–3 s), además de Cmd+S para compilar al instante.
@@ -176,7 +187,7 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 4. ~~**La carpeta *inicial* depende del directorio de trabajo** (`./workspace`).~~ **Resuelto el 2026-11-07:** la app abre un repositorio central en `~/Documents/My Creative Ink Repository`, una ruta **absoluta** construida con `os.UserHomeDir()` y `filepath.Join` (válida en macOS y Linux). Se crea con `MkdirAll(0755)` si no existe y lleva un `main.tex` inicial si no hay ningún `.tex`, sin sobrescribir nunca. Funciona igual desde `wails dev` y desde el Finder. **Ampliado el mismo día:** la ruta depende del SO y de la elección del primer arranque ("Solo para mí" o "Para todos los usuarios"); en Linux se respeta XDG (`~/Documentos`) y en Windows, Known Folders (ver §1). *Pendiente menor:* recordar la última carpeta abierta y permitir cambiar el repositorio desde la UI (hoy hay que borrar `settings.json`).
 5. **El PDF se carga entero en memoria (`fetch` → `data`).** Basta para documentos normales. Para PDFs de cientos de MB habría que usar `PDFDataRangeTransport`.
 6. ~~**Proyectos de varios archivos:** se compila el `.tex` **activo**.~~ **Resuelto el 2026-11-07:** cada carpeta puede tener un **archivo principal** (`SetMainFile`, guardado en `.creative-ink-meta`). Se compila y se muestra ese archivo mientras se edita cualquier capítulo (ver §4.3.2). Texto original: Si editas un capítulo que se incluye con `\input`, se compila el capítulo y no el documento principal. Falta definir un "archivo principal" por carpeta.
-7. **El árbol no se actualiza solo** (no hay `fsnotify`): se refresca al abrir carpeta, al usar Guardar como o con el botón Actualizar.
+7. ~~**El árbol no se actualiza solo** (no hay `fsnotify`).~~ **Resuelto el 2026-11-07:** `core.FolderWatcher` (fsnotify) avisa con `workspace:changed`, con debounce y solo si el árbol visible cambió, y la UI refresca el explorador sola (ver §4.3.3). El botón Actualizar se mantiene como respaldo.
 
 ## 5. Skills / conocimiento requerido
 
