@@ -43,6 +43,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 - **Svelte 5:** no llames `state` (ni `props`, `derived`, `effect`) a una prop o variable si usas la runa correspondiente: `$state` se interpretaría como un *store*.
 - **pdfjs-dist 6:** `PDFDocumentProxy.destroy()` **no existe**. Se libera con `doc.loadingTask.destroy()` (vía `releasePdf()` en `src/lib/pdf.js`). Usa siempre el `PDFWorker` compartido: sin él, cada documento crea un Web Worker nuevo.
 - **fsnotify en macOS (kqueue):** abre un descriptor por carpeta **y por archivo** vigilado, y no es recursivo. Respeta `maxWatchedDirs` y los filtros de `isIgnoredEntry`; nunca vigiles carpetas de build ni `node_modules`.
+- **pdfjs-dist 6 por rangos:** `disableAutoFetch: true` **exige** `disableStream: true`. Sirve siempre instantáneas inmutables (`?v=`), nunca el `<doc>.pdf` que latexmk reescribe. En Linux sin `-tags webkit2_41`, Wails no pasa cabeceras: no hay rangos (se descarga entero).
 - **Template de Wails v2.17.1:** venía con `vite-plugin-svelte@6` (no acepta Vite 8), con `new App()` (Svelte 4) y con un `jsconfig` obsoleto. Ya está corregido.
 
 ## Estado actual (actualizar al cerrar cada sección)
@@ -141,4 +142,9 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] `Editor.svelte`: guardar a 1 s y compilar a 3 s de inactividad (`saveAndCompile` → `RequestCompile`); `SaveContent` ya no compila
   - [x] `OnBeforeClose` → `App.beforeClose`: evento `app:before-close`, binding `ConfirmClose(saved)`, límite de 2 s y diálogo nativo si el guardado falló
   - [x] Tests del protocolo de cierre (confirmación, timeout, cancelar, duplicados); `go test -race` y `GOOS=linux/windows go vet` limpios
+  - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 13 — Visor PDF por rangos HTTP** (deuda técnica #5; código listo, falta validar con `wails dev` y medir con un PDF grande)
+  - [x] `lib/pdf.js`: `getDocument({ url, rangeChunkSize: 65536, disableAutoFetch: true, disableStream: true, worker })`; sin `fetch` completo
+  - [x] `core/pdf_snapshots.go`: instantáneas inmutables y versionadas (3), copiadas en streaming en la goroutine del worker; `compile:finished.pdfVersion`
+  - [x] `preview.go`: `?v=<version>`, `http.ServeContent` con 206 Partial Content (tests de `Range` y de inmutabilidad)
   - [ ] Validación del programador: reiniciar `wails dev`
