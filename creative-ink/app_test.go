@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -495,5 +496,60 @@ func TestDeletedMainFileFallsBackToActiveDocument(t *testing.T) {
 	}
 	if st, _ := a.workspaceState(); st.MainFilePath != "" {
 		t.Fatalf("a deleted main file must not be reported, got %q", st.MainFilePath)
+	}
+}
+
+// fakeWatcher records Close and lets the test trigger onChange.
+type fakeWatcher struct{ closed bool }
+
+func (f *fakeWatcher) Close() error { f.closed = true; return nil }
+
+func TestWorkspaceChangedOnlyWhenTheTreeChanges(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	var onChange func()
+	watchers := []*fakeWatcher{}
+	a.watchFolder = func(root string, cb func()) (io.Closer, error) {
+		onChange = cb
+		w := &fakeWatcher{}
+		watchers = append(watchers, w)
+		return w, nil
+	}
+	a.restartWatcher()
+	folder, _ := a.workspace()
+
+	onChange() // e.g. kqueue Remove+Create after an atomic save: same tree
+	expectNoEvent(t, events)
+
+	if err := os.WriteFile(filepath.Join(folder, "figura.png"), []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	onChange()
+	ev := nextEvent(t, events)
+	if ev.name != EventWorkspaceChanged || ev.data[0].(WorkspaceChangedEvent).Folder != folder {
+		t.Fatalf("event = %+v", ev)
+	}
+	onChange() // nothing new since the last event
+	expectNoEvent(t, events)
+
+	// Opening another folder replaces the watcher; the old one is closed and
+	// its late callbacks are ignored.
+	staleChange := onChange
+	other := t.TempDir()
+	a.pickFolder = func(string) (string, error) { return other, nil }
+	if _, err := a.OpenFolderDialog(); err != nil {
+		t.Fatal(err)
+	}
+	if len(watchers) != 2 || !watchers[0].closed {
+		t.Fatalf("watchers = %+v, want the first one closed", watchers)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "otra.png"), []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	staleChange()
+	expectNoEvent(t, events)
+
+	a.stopWatching()
+	if !watchers[1].closed {
+		t.Fatal("shutdown must close the watcher")
 	}
 }

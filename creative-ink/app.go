@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -26,6 +27,9 @@ const (
 	EventCompileStarted = "compile:started"
 	// EventCompileFinished carries a CompileFinishedEvent.
 	EventCompileFinished = "compile:finished"
+	// EventWorkspaceChanged carries a WorkspaceChangedEvent: files or folders
+	// were created, removed or renamed outside the app.
+	EventWorkspaceChanged = "workspace:changed"
 )
 
 // shutdownTimeout bounds how long closing the app waits for latexmk to die.
@@ -64,6 +68,13 @@ type App struct {
 	// it is compiled instead of the active document.
 	mainFile string
 
+	// watchFolder starts a filesystem watcher (nil in tests = no watching).
+	watchFolder func(root string, onChange func()) (io.Closer, error)
+	// watchMu guards watcher and treeSig.
+	watchMu sync.Mutex
+	watcher io.Closer
+	treeSig uint64 // signature of the last tree seen, to drop no-op events
+
 	// compilingDoc is the document of the compilation in progress. It is only
 	// touched by the scheduler's worker goroutine (OnStarted → compile →
 	// OnFinished run sequentially there), so it needs no lock.
@@ -97,6 +108,12 @@ type OpenedFile struct {
 	Content string `json:"content"`
 }
 
+// WorkspaceChangedEvent is the payload of EventWorkspaceChanged. Folder lets
+// the UI ignore an event for a folder it already left.
+type WorkspaceChangedEvent struct {
+	Folder string `json:"folder"`
+}
+
 // CompileStartedEvent is the payload of EventCompileStarted.
 type CompileStartedEvent struct {
 	File string `json:"file"`
@@ -122,6 +139,9 @@ func NewApp() *App {
 	a.emit = a.emitWails
 	a.pickFolder = a.dialogPickFolder
 	a.pickSavePath = a.dialogPickSavePath
+	a.watchFolder = func(root string, onChange func()) (io.Closer, error) {
+		return core.WatchFolder(root, core.WatchDebounce, onChange)
+	}
 	return a
 }
 
@@ -174,6 +194,7 @@ func (a *App) startup(ctx context.Context) {
 // shutdown is called by Wails when the app is closing: stop latexmk so it
 // does not outlive the window.
 func (a *App) shutdown(_ context.Context) {
+	a.stopWatching()
 	a.compiles.Close(shutdownTimeout)
 }
 
@@ -202,9 +223,13 @@ func (a *App) openConfiguredRepository() (configured bool, err error) {
 
 	main := loadMainFile(settings.RepositoryPath)
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.folder == "" {
+	opened := a.folder == ""
+	if opened {
 		a.folder, a.docPath, a.mainFile = settings.RepositoryPath, doc, main
+	}
+	a.mu.Unlock()
+	if opened {
+		a.restartWatcher()
 	}
 	return true, nil
 }
@@ -460,10 +485,71 @@ func (a *App) setWorkspace(folder, docPath string) {
 	}
 
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.folder, a.docPath = folder, docPath
 	if changed {
 		a.mainFile = main
+	}
+	a.mu.Unlock()
+
+	if changed {
+		a.restartWatcher()
+	}
+}
+
+// restartWatcher watches the folder that is open now (not a parameter: if two
+// folder changes race, the last call always watches the current folder).
+func (a *App) restartWatcher() {
+	a.watchMu.Lock()
+	defer a.watchMu.Unlock()
+	if a.watcher != nil {
+		_ = a.watcher.Close()
+		a.watcher = nil
+	}
+	folder, _ := a.workspace()
+	if a.watchFolder == nil || folder == "" {
+		return
+	}
+	if tree, truncated, err := core.ScanTree(folder); err == nil {
+		a.treeSig = core.TreeSignature(tree, truncated)
+	}
+	w, err := a.watchFolder(folder, func() { a.onFolderChanged(folder) })
+	if err != nil {
+		// Not fatal: the explorer still has its manual refresh button.
+		log.Printf("[watcher] no se vigilará %q: %v", folder, err)
+		return
+	}
+	a.watcher = w
+}
+
+func (a *App) stopWatching() {
+	a.watchMu.Lock()
+	defer a.watchMu.Unlock()
+	if a.watcher != nil {
+		_ = a.watcher.Close()
+		a.watcher = nil
+	}
+}
+
+// onFolderChanged runs on the watcher goroutine after a debounced burst of
+// external changes. It emits EventWorkspaceChanged only if the tree the
+// explorer shows really changed (e.g. kqueue reports Remove+Create when
+// main.tex is replaced by an atomic save: same tree, no event).
+func (a *App) onFolderChanged(folder string) {
+	if current, _ := a.workspace(); current != folder {
+		return // a stale watcher for a folder that is no longer open
+	}
+	tree, truncated, err := core.ScanTree(folder)
+	if err != nil {
+		return
+	}
+	sig := core.TreeSignature(tree, truncated)
+
+	a.watchMu.Lock()
+	unchanged := sig == a.treeSig
+	a.treeSig = sig
+	a.watchMu.Unlock()
+	if !unchanged {
+		a.emit(EventWorkspaceChanged, WorkspaceChangedEvent{Folder: folder})
 	}
 }
 
