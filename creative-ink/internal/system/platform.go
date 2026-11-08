@@ -9,8 +9,14 @@ import (
 )
 
 // RepositoryName is the central folder Creative-ink creates, inside the
-// user's (or the shared) Documents folder, like an Obsidian vault.
-const RepositoryName = "My Creative Ink Repository"
+// user's (or the shared) Documents folder, like an Obsidian vault. Every
+// name the editor creates uses "-" instead of spaces: some TeX tools that go
+// through a shell (minted, TikZ externalization, epstopdf) break on spaces.
+const RepositoryName = "My-Creative-Ink-Repository"
+
+// LegacyRepositoryName is the name used before 2026-11-08; repositories
+// with it are renamed to RepositoryName at startup (see App.migrate…).
+const LegacyRepositoryName = "My Creative Ink Repository"
 
 // Repository scopes chosen on first run.
 const (
