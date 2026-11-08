@@ -4,3 +4,27 @@ Thumbs.db
 
 # Claude Code (preferencias locales por usuario)
 .claude/settings.local.json
+
+# LaTeX / latexmk: archivos auxiliares y PDF generados (en cualquier carpeta).
+# Si algún día hay que versionar un PDF a propósito, agrega una excepción: !ruta/archivo.pdf
+*.pdf
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.xdv
+*.synctex.gz
+*.synctex(busy)
+*.out
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+*.bcf
+*.run.xml
+*.nav
+*.snm
+*.vrb
+# Escritura atómica de FileManager (si la app se cierra a mitad de un guardado)
+*.tex.tmp
