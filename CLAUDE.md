@@ -148,3 +148,8 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] `core/pdf_snapshots.go`: instantáneas inmutables y versionadas (3), copiadas en streaming en la goroutine del worker; `compile:finished.pdfVersion`
   - [x] `preview.go`: `?v=<version>`, `http.ServeContent` con 206 Partial Content (tests de `Range` y de inmutabilidad)
   - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 14 — Disparador adaptativo y prevención de recarga** (§4.5; código listo, falta validar con `wails dev`)
+  - [x] `compilation.svelte.js`: `autoCompileDelayMs = max(3000, 2 × durationMs)` y `autoCompilePaused` si `durationMs > 10000`, por objetivo y en memoria; aviso en la barra de estado del editor
+  - [x] `Editor.svelte`: lee el retraso al programar cada compilación; no programa nada mientras esté pausado
+  - [x] `App.publishPreview`: `os.Stat` del PDF tras compilar; reutiliza `pdfVersion` si `ModTime` y tamaño no cambiaron (sin copia ni recarga); `compile:finished.pdfModTime`
+  - [ ] Validación del programador: reiniciar `wails dev`

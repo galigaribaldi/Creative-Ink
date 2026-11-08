@@ -114,7 +114,7 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 | Binding | `RequestCompile`      | UI → Go    | `() → boolean`: encola una compilación del **objetivo** (principal o activo) sin guardar. Es **el único disparador al editar**: inactividad de 3 s, Cmd/Ctrl+S, botones Guardar y Compilar. `false` solo durante el cierre | 7, 12 |
 | Binding | `ConfirmClose`        | UI → Go    | `(saved: boolean) → void`: respuesta a `app:before-close` cuando la UI ya volcó CodeMirror a disco. Si `saved` es `false`, Go pregunta con un diálogo nativo antes de cerrar | 12 |
 | Evento  | `compile:started`     | Go → UI    | `main.CompileStartedEvent` = `{ file }`: el **objetivo de compilación** (principal o activo). La UI ignora los eventos de otro objetivo | 8, 10 |
-| Evento  | `compile:finished`    | Go → UI    | `main.CompileFinishedEvent` = `{ file, success, logs, durationMs, pdfVersion }`. `pdfVersion` es la instantánea publicada (0 si falló la compilación o la copia). No se emite después del cierre | 8, 13 |
+| Evento  | `compile:finished`    | Go → UI    | `main.CompileFinishedEvent` = `{ file, success, logs, durationMs, pdfVersion, pdfModTime }`. `pdfVersion` es la instantánea publicada (0 si falló la compilación o la copia); **si el PDF no cambió** (mismo `ModTime` y tamaño), Go **reutiliza la versión anterior** sin copiarla. `pdfModTime` es el `ModTime` del PDF en ms Unix. No se emite después del cierre | 8, 13, 14 |
 | Evento  | `app:before-close`    | Go → UI    | Sin payload. Lo emite `OnBeforeClose` en el primer intento de cerrar la ventana; la UI hace `waitIdle()` y responde con `ConfirmClose`. Go cierra igual a los 2 s si no hay respuesta | 12 |
 | Evento  | `workspace:changed`   | Go → UI    | `main.WorkspaceChangedEvent` = `{ folder }`. Se crearon, borraron o renombraron archivos o carpetas fuera de la app (con debounce de 300 ms y **solo si el árbol visible cambió**). La UI llama a `RefreshWorkspace` si `folder` sigue abierta | 11 |
 | HTTP    | `/__preview/document.pdf?v=<pdfVersion>` | WebView → Go | `GET` → instantánea **inmutable** del PDF del objetivo de compilación (`core.PDFSnapshots`; se guardan las 3 últimas). Admite `Range` → **206 Partial Content** (`http.ServeContent`: `Accept-Ranges`, `Content-Length`, `Content-Range`). Sin `v`, sirve la más reciente; una versión desconocida da 404 | 4, 13 |
@@ -201,11 +201,21 @@ El repositorio central `My Creative Ink Repository` se crea **la primera vez que
 5. ~~**El PDF se carga entero en memoria (`fetch` → `data`).**~~ **Resuelto el 2026-11-07:** PDF.js carga por **rangos HTTP** (`getDocument({ url, rangeChunkSize, disableAutoFetch, disableStream: true })`) desde instantáneas inmutables (`?v=<pdfVersion>`) que sirve `preview.go` con `206 Partial Content`. *Pendiente:* medirlo con un PDF grande en la app (ver §4.5) y, en Linux, compilar con `-tags webkit2_41` para tener rangos.
 6. ~~**Proyectos de varios archivos:** se compila el `.tex` **activo**.~~ **Resuelto el 2026-11-07:** cada carpeta puede tener un **archivo principal** (`SetMainFile`, guardado en `.creative-ink-meta`). Se compila y se muestra ese archivo mientras se edita cualquier capítulo (ver §4.3.2). Texto original: Si editas un capítulo que se incluye con `\input`, se compila el capítulo y no el documento principal. Falta definir un "archivo principal" por carpeta.
 7. ~~**El árbol no se actualiza solo** (no hay `fsnotify`).~~ **Resuelto el 2026-11-07:** `core.FolderWatcher` (fsnotify) avisa con `workspace:changed`, con debounce y solo si el árbol visible cambió, y la UI refresca el explorador sola (ver §4.3.3). El botón Actualizar se mantiene como respaldo.
-8. **Escalabilidad de la compilación automática y la vista previa con documentos grandes** (tesis, libros, muchas imágenes o TikZ). Analizado el 2026-11-07, **sin implementar todavía**: ver §4.5.
+8. **Escalabilidad de la compilación automática y la vista previa con documentos grandes** (tesis, libros, muchas imágenes o TikZ). Analizado el 2026-11-07. **Parcialmente resuelto**: disparador adaptativo y prevención de recarga implementados; el resto sigue pendiente (ver §4.5).
 
-## 4.5 Escalabilidad con documentos grandes (análisis del 2026-11-07, pendiente)
+## 4.5 Escalabilidad con documentos grandes (análisis del 2026-11-07; implementación parcial)
 
-> Solo análisis: no hay nada implementado. Antes de decidir, hay que **medir** con un documento de prueba representativo (ver al final).
+> **Implementado (Sección 14):** el **disparador adaptativo** de la compilación (opción 1) y la **prevención de recarga visual** cuando el PDF no cambió (primer punto de la opción 7). El resto sigue siendo análisis. Antes de decidir lo demás, hay que **medir** con un documento de prueba representativo (ver al final).
+
+### Implementado
+- **Disparador adaptativo** (`lib/compilation.svelte.js` + `Editor.svelte`):
+  - tras cada `compile:finished` del objetivo, `autoCompileDelayMs = max(3000, durationMs × 2)` (`adaptiveDelay`). El editor lo lee cada vez que programa una compilación automática;
+  - si `durationMs > 10000` (`HEAVY_COMPILE_MS`), `autoCompilePaused = true`: no hay compilación automática y la barra de estado del editor muestra *"Auto-compilación pausada (Documento pesado). Usa ⌘S para compilar"* (Ctrl+S en Linux y Windows). Al pausarse se cancela el temporizador que ya estuviera programado;
+  - es **temporal y por proyecto**: se reanuda en cuanto una compilación (por ejemplo, con ⌘S) termina en 10 s o menos, y se reinicia al cambiar el objetivo de compilación (`resetCompilation`). No se guarda en disco.
+- **Sin recarga si el PDF no cambió:**
+  - `App.publishPreview` corre en la goroutine del worker justo después de `CompileLaTeXContext`. Lee el `ModTime` del PDF con `os.Stat` y, si coinciden ruta, `ModTime` y tamaño con la última publicación (latexmk: *"All targets are up-to-date"*), **reutiliza `pdfVersion`**: no copia la instantánea y no cambia la URL;
+  - `compile:finished` incluye `pdfModTime`. La UI solo actualiza `pdfVersion` si el `ModTime` cambió (segunda barrera), así que `Preview.svelte` no vuelve a cargar ni a dibujar el `<canvas>`.
+  - *Nota:* `CompileLaTeXContext` mantiene su firma `(string, error)`; el `ModTime` se lee en el hook `OnFinished`, en la misma goroutine y sin que latexmk pueda estar escribiendo.
 
 ### Problema
 La compilación automática (3 s sin escribir) funciona bien con documentos pequeños. Con documentos grandes (cientos de páginas, decenas de imágenes, figuras TikZ, bibliografía con biber) puede convertirse en un **cuello de botella** de CPU, disco y memoria, y también en la vista previa (decodificar y dibujar el PDF).
@@ -213,18 +223,18 @@ La compilación automática (3 s sin escribir) funciona bien con documentos pequ
 ### Cómo se comporta hoy (verificado en el código)
 | Pieza | Comportamiento actual | Por qué escala mal |
 |-------|-----------------------|--------------------|
-| Disparador (`Editor.svelte`) | `RequestCompile` tras 3 s fijos de inactividad (`COMPILE_DELAY_MS`) | Si una compilación tarda 40 s, cada pausa de 3 s al escribir encola otra. El usuario nunca deja de tener latexmk corriendo |
+| Disparador (`Editor.svelte`) | ~~3 s fijos~~ → **adaptativo** desde la Sección 14: `max(3 s, 2 × duración)`, y pausa por encima de 10 s | Resuelto para el caso típico. Pendiente: un documento justo por debajo de 10 s sigue compilando en cada pausa de unos 20 s |
 | Scheduler (`scheduler.go`) | Un solo worker; una petición nueva **no cancela** la compilación en curso, solo deja una pendiente (`pending = true`) | Encadena compilaciones casi sin pausa: la CPU queda ocupada de forma continua (ventiladores, batería) y el resultado ya está viejo cuando llega |
 | latexmk (`orchestrator.go`) | Compilación completa con `-xelatex`; latexmk repite pasadas para referencias, índices y biber | xelatex es de un solo hilo y vuelve a procesar todas las imágenes y las figuras TikZ en cada pasada |
 | Límite de tiempo | `compileTimeout = 60 s`, fijo | Un documento grande puede superarlo **siempre**: la compilación se corta y el usuario solo ve "superó el límite" |
 | Prioridad del proceso | latexmk corre con prioridad normal | Compite con la UI (WebView, CodeMirror) por la CPU |
 | Vista previa (`pdf.js`, `Preview.svelte`) | ~~`fetch` del PDF completo~~ → desde la Sección 13, **carga por rangos** de una instantánea | Ya no se copia el PDF entero en RAM (deuda #5 resuelta). Siguen pendientes: copiar la instantánea en disco en cada compilación (coste de E/S proporcional al tamaño) y decodificar las imágenes de la página visible en el hilo principal (`disableWorkerRendering: true`) |
-| Recarga sin cambios | `pdfTimestamp = Date.now()` en cada éxito, aunque latexmk dijera "All targets up-to-date" | Se vuelve a descargar y analizar un PDF idéntico |
+| Recarga sin cambios | ~~se recargaba en cada éxito~~ → desde la Sección 14 se reutiliza `pdfVersion` si el `ModTime` no cambió | Resuelto: ni copia en disco ni recarga del canvas |
 
 Ya existe un dato útil: `compile:finished` incluye `durationMs`, todavía sin usar.
 
 ### Opciones para más adelante (no decididas)
-1. **Disparador adaptativo.** Ajustar el debounce según `durationMs` (por ejemplo, `max(3 s, 2 × última duración)`). Por encima de un umbral (por ejemplo 15 s), **desactivar la compilación automática** y dejar solo Cmd/Ctrl+S, avisando en la UI ("Documento grande: compila con ⌘S"). Podría guardarse por proyecto en `.creative-ink-meta`.
+1. ~~**Disparador adaptativo.**~~ **Implementado** (umbral de 10 s, en memoria; ver "Implementado"). *Posible mejora:* recordar la pausa por proyecto en `.creative-ink-meta`.
 2. **Cancelar compilaciones viejas.** Si llega una petición y la compilación en curso supera cierto tiempo, cancelarla y empezar de nuevo. *Riesgo:* un latexmk cortado a mitad puede dejar `.aux` inconsistentes; latexmk suele recuperarse en la pasada siguiente, pero hay que probarlo.
 3. **Límite de tiempo configurable** por proyecto en lugar de 60 s fijos, o un límite más amplio cuando la compilación la pide el usuario (Cmd+S) frente a la automática.
 4. **Modo borrador para la vista previa automática** (requiere decisión del usuario, porque cambia los flags de latexmk; ver la skill `latex-toolchain-orchestrator`):
@@ -234,7 +244,7 @@ Ya existe un dato útil: `compile:finished` incluye `durationMs`, todavía sin u
 5. **Prioridad baja para latexmk:** `nice` en macOS/Linux y `BELOW_NORMAL_PRIORITY_CLASS` en Windows, para que la UI siga fluida mientras compila.
 6. **Valores por defecto según el hardware:** usar el tier de `SystemHealthCheck` (`basic` / `advanced`) y `cpuCores` para elegir debounce y modo (borrador por defecto en equipos `basic`).
 7. **Vista previa más barata:**
-   - No recargar si el PDF no cambió: incluir la fecha de modificación (o un hash) del PDF en `compile:finished`, o usar `ETag`/`If-None-Match` en `preview.go`.
+   - ~~No recargar si el PDF no cambió.~~ **Implementado** con `pdfModTime` y la reutilización de `pdfVersion`.
    - Cargar por rangos (`PDFDataRangeTransport`, deuda #5) para no copiar el PDF entero.
    - Dibujar en el worker (`GlobalWorkerOptions.rendererSrc` + `OffscreenCanvas`) para que las imágenes pesadas no bloqueen el hilo principal.
 8. **Visibilidad:** emitir el progreso de latexmk (pasada actual, biber) como eventos, para que una compilación larga no parezca colgada.
