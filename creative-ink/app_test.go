@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"creative-ink/internal/core"
+	"creative-ink/internal/system"
 )
 
 // emittedEvent is one call to App.emit.
@@ -260,22 +261,119 @@ func TestRequestCompileQueuesWithoutSaving(t *testing.T) {
 	}
 }
 
-func TestStarterDocumentOnlyWhenMissing(t *testing.T) {
-	folder := t.TempDir()
-	doc := filepath.Join(folder, "main.tex")
-	a := newApp(folder, doc, okCompile)
-	t.Cleanup(func() { a.compiles.Close(time.Second) })
+// fakeRepoOptions proposes temp folders: a user one and, if shared, a shared one.
+func fakeRepoOptions(t *testing.T, shared bool) (func() system.RepositoryOptions, string, string) {
+	t.Helper()
+	userPath := filepath.Join(t.TempDir(), "Documents", system.RepositoryName)
+	sharedPath := filepath.Join(t.TempDir(), "Shared", system.RepositoryName)
+	return func() system.RepositoryOptions {
+		opts := system.RepositoryOptions{
+			OS: "darwin", OSName: "macOS", Warnings: []string{},
+			User:   system.RepositoryOption{Scope: system.ScopeUser, Path: userPath, Available: true},
+			Shared: system.RepositoryOption{Scope: system.ScopeShared, Reason: "no hay carpeta compartida"},
+		}
+		if shared {
+			opts.Shared = system.RepositoryOption{Scope: system.ScopeShared, Path: sharedPath, Available: true}
+		}
+		return opts
+	}, userPath, sharedPath
+}
 
-	a.ensureStarterDocument()
-	if data, _ := os.ReadFile(doc); string(data) != starterDocument {
-		t.Fatalf("starter = %q", data)
+// newFirstRunApp has no folder open and an empty settings location.
+func newFirstRunApp(t *testing.T, shared bool) (*App, string, string) {
+	t.Helper()
+	a := newApp("", "", okCompile)
+	t.Cleanup(func() { a.compiles.Close(time.Second) })
+	var userPath, sharedPath string
+	a.repoOptions, userPath, sharedPath = fakeRepoOptions(t, shared)
+	a.settingsPath = filepath.Join(t.TempDir(), "creative-ink", "settings.json")
+	return a, userPath, sharedPath
+}
+
+func TestFirstRunNeedsSetupAndCreatesNothing(t *testing.T) {
+	// Simulate a Finder launch: the working directory must not matter.
+	t.Chdir(t.TempDir())
+	a, userPath, _ := newFirstRunApp(t, true)
+
+	st, err := a.GetWorkspace()
+	if err != nil || !st.NeedsSetup {
+		t.Fatalf("first run = %+v, %v; want NeedsSetup", st, err)
 	}
-	if err := os.WriteFile(doc, []byte("mío"), 0o644); err != nil {
+	if _, err := os.Stat(userPath); !os.IsNotExist(err) {
+		t.Fatal("nothing may be created before the user chooses")
+	}
+	if _, err := os.Stat("workspace"); !os.IsNotExist(err) {
+		t.Fatal("nothing may be created relative to the working directory")
+	}
+}
+
+func TestSetupRepositoryUserScopePersists(t *testing.T) {
+	a, userPath, _ := newFirstRunApp(t, true)
+
+	st, err := a.SetupRepository(system.ScopeUser)
+	if err != nil {
 		t.Fatal(err)
 	}
-	a.ensureStarterDocument()
-	if data, _ := os.ReadFile(doc); string(data) != "mío" {
-		t.Fatal("an existing document must never be overwritten")
+	if st.NeedsSetup || st.FolderPath != userPath || st.FilePath != filepath.Join(userPath, "main.tex") {
+		t.Fatalf("state = %+v", st)
+	}
+	if data, _ := os.ReadFile(st.FilePath); string(data) != starterDocument {
+		t.Fatalf("starter = %q", data)
+	}
+	if scope, path := a.currentRepository(); scope != system.ScopeUser || path != userPath {
+		t.Fatalf("saved = %q %q", scope, path)
+	}
+
+	// Next launch: the saved choice is reused, no setup screen.
+	next := newApp("", "", okCompile)
+	t.Cleanup(func() { next.compiles.Close(time.Second) })
+	next.settingsPath = a.settingsPath
+	st, err = next.GetWorkspace()
+	if err != nil || st.NeedsSetup || st.FolderPath != userPath {
+		t.Fatalf("next launch = %+v, %v", st, err)
+	}
+}
+
+func TestSetupRepositorySharedScope(t *testing.T) {
+	a, _, sharedPath := newFirstRunApp(t, true)
+
+	st, err := a.SetupRepository(system.ScopeShared)
+	if err != nil || st.FolderPath != sharedPath {
+		t.Fatalf("shared = %+v, %v", st, err)
+	}
+	if opts := a.GetRepositoryOptions(); opts.CurrentScope != system.ScopeShared || opts.CurrentPath != sharedPath {
+		t.Fatalf("current = %q %q", opts.CurrentScope, opts.CurrentPath)
+	}
+}
+
+func TestSetupRepositoryRejectsUnavailableOrInvalidScope(t *testing.T) {
+	a, _, _ := newFirstRunApp(t, false) // e.g. Linux: no shared folder
+
+	if _, err := a.SetupRepository(system.ScopeShared); err == nil {
+		t.Error("an unavailable scope must be rejected")
+	}
+	if _, err := a.SetupRepository("/etc"); err == nil {
+		t.Error("an unknown scope must be rejected (paths never come from JS)")
+	}
+	if _, ok, _ := core.LoadSettings(a.settingsPath); ok {
+		t.Error("nothing may be saved after a rejected setup")
+	}
+}
+
+func TestConfiguredRepositoryKeepsUserFolder(t *testing.T) {
+	a, _ := newTestApp(t, okCompile) // a folder is already open
+	a.repoOptions, _, _ = fakeRepoOptions(t, false)
+	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	if err := core.SaveSettings(a.settingsPath, core.Settings{RepositoryScope: system.ScopeUser, RepositoryPath: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := a.workspace()
+
+	if _, err := a.openConfiguredRepository(); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := a.workspace(); after != before {
+		t.Fatalf("open folder changed from %q to %q", before, after)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -132,5 +133,104 @@ func TestResolveInFolder(t *testing.T) {
 	}
 	if _, err := ResolveInFolder("", filepath.Join(root, "main.tex")); !errors.Is(err, ErrNoFolder) {
 		t.Errorf("no folder: err = %v", err)
+	}
+}
+
+func TestPrepareRepositoryCreatesFolderAndStarter(t *testing.T) {
+	// Missing parents too: ~/Documents may not exist on a fresh Linux install.
+	dir := filepath.Join(t.TempDir(), "Documents", "My Creative Ink Repository")
+
+	doc, err := PrepareRepository(dir, "starter", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("repository not created: %v", err)
+	}
+	if extra := info.Mode().Perm() &^ 0o755; extra != 0 {
+		t.Errorf("permissions = %o, must not exceed 0755", info.Mode().Perm())
+	}
+	if doc != filepath.Join(dir, "main.tex") {
+		t.Fatalf("doc = %q", doc)
+	}
+	if data, _ := os.ReadFile(doc); string(data) != "starter" {
+		t.Fatalf("starter content = %q", data)
+	}
+}
+
+func TestPrepareRepositoryNeverOverwrites(t *testing.T) {
+	dir := t.TempDir()
+	mkfiles(t, dir, "main.tex")
+	if err := os.WriteFile(filepath.Join(dir, "main.tex"), []byte("mío"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	doc, err := PrepareRepository(dir, "starter", false)
+	if err != nil || doc != filepath.Join(dir, "main.tex") {
+		t.Fatalf("PrepareRepository = %q, %v", doc, err)
+	}
+	if data, _ := os.ReadFile(doc); string(data) != "mío" {
+		t.Fatal("an existing document must never be overwritten")
+	}
+}
+
+func TestPrepareRepositoryKeepsExistingTeX(t *testing.T) {
+	dir := t.TempDir()
+	mkfiles(t, dir, "tesis.tex", "figs/a.png")
+
+	doc, err := PrepareRepository(dir, "starter", false)
+	if err != nil || doc != filepath.Join(dir, "tesis.tex") {
+		t.Fatalf("PrepareRepository = %q, %v", doc, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "main.tex")); !os.IsNotExist(err) {
+		t.Fatal("no main.tex must be created when the folder already has a .tex")
+	}
+}
+
+func TestPrepareRepositorySharedIsWritableByAll(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows relies on Public Documents ACLs")
+	}
+	dir := filepath.Join(t.TempDir(), "shared")
+	if _, err := PrepareRepository(dir, "starter", true); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o777 || info.Mode()&os.ModeSticky == 0 {
+		t.Fatalf("mode = %v, want drwxrwxrwt", info.Mode())
+	}
+}
+
+func TestSettingsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "creative-ink", "settings.json")
+
+	if _, ok, err := LoadSettings(path); ok || err != nil {
+		t.Fatalf("first run: ok=%v err=%v, want not configured", ok, err)
+	}
+	want := Settings{RepositoryScope: "user", RepositoryPath: "/Users/ana/Documents/My Creative Ink Repository"}
+	if err := SaveSettings(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := LoadSettings(path)
+	want.Version = settingsVersion
+	if err != nil || !ok || got != want {
+		t.Fatalf("LoadSettings = %+v, %v, %v; want %+v", got, ok, err, want)
+	}
+
+	if err := os.WriteFile(path, []byte("{nope"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := LoadSettings(path); ok || err == nil {
+		t.Fatal("a corrupt file must be reported and treated as not configured")
+	}
+	if err := os.WriteFile(path, []byte(`{"repositoryPath":"relativo"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := LoadSettings(path); ok {
+		t.Fatal("a relative repository path must be ignored")
 	}
 }

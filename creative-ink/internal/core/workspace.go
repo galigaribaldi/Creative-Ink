@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -123,6 +124,45 @@ func (s *treeScanner) children(dir string, depth int) []FileNode {
 		nodes = append(nodes, node)
 	}
 	return nodes
+}
+
+// PrepareRepository creates dir (and missing parents) with 0755 permissions
+// and returns the document to open there. If dir has no .tex at its top
+// level, it writes starter as main.tex first. It never overwrites a file.
+//
+// shared opens the repository folder itself to every user of the machine
+// (0777 + sticky bit, like /Users/Shared: anyone can add documents, only
+// their owner can delete them). On Windows, Public Documents' ACLs apply.
+func PrepareRepository(dir, starter string, shared bool) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create repository %q: %w", dir, err)
+	}
+	if shared && runtime.GOOS != "windows" {
+		if err := os.Chmod(dir, 0o777|os.ModeSticky); err != nil {
+			return "", fmt.Errorf("share repository %q: %w", dir, err)
+		}
+	}
+	if doc := DefaultTeXFile(dir); doc != "" {
+		return doc, nil
+	}
+
+	doc := filepath.Join(dir, "main.tex")
+	// O_EXCL: if another call created it in the meantime, keep that file.
+	f, err := os.OpenFile(doc, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, fs.ErrExist) {
+		return doc, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("create %q: %w", doc, err)
+	}
+	_, writeErr := f.WriteString(starter)
+	if closeErr := f.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		return "", fmt.Errorf("write %q: %w", doc, writeErr)
+	}
+	return doc, nil
 }
 
 // DefaultTeXFile picks the document to open in a folder: main.tex if it

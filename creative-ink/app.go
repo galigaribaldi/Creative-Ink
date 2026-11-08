@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -16,11 +17,7 @@ import (
 	"creative-ink/internal/system"
 )
 
-// defaultFolder is opened at startup until the user picks another folder.
-// It is relative to the working directory.
-const defaultFolder = "workspace"
-
-// starterDocument is written to the default folder when it has no .tex yet.
+// starterDocument is written to the central repository when it has no .tex yet.
 const starterDocument = "\\documentclass{article}\n\\begin{document}\n\nHola, Creative-ink.\n\n\\end{document}\n"
 
 // Wails events emitted to the frontend (documented in docs/MAP.md §3).
@@ -52,6 +49,10 @@ type App struct {
 	// Native dialogs, injected for the same reason. "" means cancelled.
 	pickFolder   func(defaultDir string) (string, error)
 	pickSavePath func(defaultDir, defaultName string) (string, error)
+	// repoOptions proposes repository locations for this OS (injectable).
+	repoOptions func() system.RepositoryOptions
+	// settingsPath is the per-user settings file ("" = cannot persist).
+	settingsPath string
 
 	// mu guards folder and docPath: bound calls each run on their own
 	// goroutine, and the compile worker and preview middleware read them too.
@@ -73,6 +74,9 @@ type SaveResult struct {
 
 // WorkspaceState describes the open folder for the explorer.
 type WorkspaceState struct {
+	// NeedsSetup: first run, the user has not chosen where the central
+	// repository lives yet (see GetRepositoryOptions / SetupRepository).
+	NeedsSetup bool          `json:"needsSetup"`
 	Canceled   bool          `json:"canceled"`   // the user closed the dialog
 	FolderPath string        `json:"folderPath"` // absolute
 	FilePath   string        `json:"filePath"`   // absolute active .tex, "" if none
@@ -99,13 +103,15 @@ type CompileFinishedEvent struct {
 	File string `json:"file"`
 }
 
-// NewApp creates the App facade with the default folder open.
+// NewApp creates the App facade. No folder is open until startup prepares
+// the central repository (~/Documents/My Creative Ink Repository).
 func NewApp() *App {
-	folder := defaultFolder
-	if abs, err := filepath.Abs(folder); err == nil {
-		folder = abs
+	a := newApp("", "", compiler.CompileLaTeXContext)
+	if path, err := core.SettingsPath(); err == nil {
+		a.settingsPath = path
+	} else {
+		log.Printf("[settings] la configuración no se guardará: %v", err)
 	}
-	a := newApp(folder, filepath.Join(folder, "main.tex"), compiler.CompileLaTeXContext)
 	a.emit = a.emitWails
 	a.pickFolder = a.dialogPickFolder
 	a.pickSavePath = a.dialogPickSavePath
@@ -119,6 +125,8 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 		folder:  folder,
 		docPath: docPath,
 		emit:    func(string, ...any) {},
+		// Overridden by tests; production detects the host OS.
+		repoOptions: system.DetectRepositoryOptions,
 	}
 	a.compiles = compiler.NewScheduler(
 		func(ctx context.Context) (string, error) {
@@ -146,7 +154,10 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 // use the Wails runtime (events, dialogs) from bound methods.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	a.ensureStarterDocument()
+	if _, err := a.openConfiguredRepository(); err != nil {
+		// Not fatal: GetWorkspace retries and reports the error to the UI.
+		log.Printf("[workspace] no se pudo abrir el repositorio central: %v", err)
+	}
 }
 
 // shutdown is called by Wails when the app is closing: stop latexmk so it
@@ -155,27 +166,113 @@ func (a *App) shutdown(_ context.Context) {
 	a.compiles.Close(shutdownTimeout)
 }
 
-// ensureStarterDocument gives a first run something to edit: if the default
-// document does not exist, it writes a minimal LaTeX file.
-func (a *App) ensureStarterDocument() {
-	_, doc := a.workspace()
-	if doc == "" {
-		return
+// openConfiguredRepository opens the central repository chosen on first
+// run, recreating it (and its starter main.tex) if it was deleted. configured
+// is false on first run: nothing is created until the user chooses a scope.
+// A folder the user opened in the meantime is never replaced.
+func (a *App) openConfiguredRepository() (configured bool, err error) {
+	if a.settingsPath == "" {
+		return false, nil
 	}
-	if _, err := os.Stat(doc); errors.Is(err, os.ErrNotExist) {
-		_ = a.files.SaveDocument(starterDocument, doc)
+	settings, ok, err := core.LoadSettings(a.settingsPath)
+	if err != nil {
+		// A corrupt settings file must not lock the user out: ask again.
+		log.Printf("[settings] %v; se pedirá elegir el repositorio de nuevo", err)
+		return false, nil
 	}
+	if !ok {
+		return false, nil
+	}
+	shared := settings.RepositoryScope == system.ScopeShared
+	doc, err := core.PrepareRepository(settings.RepositoryPath, starterDocument, shared)
+	if err != nil {
+		return true, err
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.folder == "" {
+		a.folder, a.docPath = settings.RepositoryPath, doc
+	}
+	return true, nil
+}
+
+// currentRepository returns the saved scope and path ("" if not configured).
+func (a *App) currentRepository() (scope, path string) {
+	if a.settingsPath == "" {
+		return "", ""
+	}
+	if s, ok, err := core.LoadSettings(a.settingsPath); err == nil && ok {
+		return s.RepositoryScope, s.RepositoryPath
+	}
+	return "", ""
 }
 
 // ── Bindings ───────────────────────────────────────────────────────────────
 
 // SystemHealthCheck audits the host LaTeX toolchain (xelatex, latexmk, biber).
+// The report includes the OS and the proposed repository locations.
 func (a *App) SystemHealthCheck() system.HealthStatus {
-	return system.CheckHealth()
+	status := system.CheckHealth()
+	status.Repository.CurrentScope, status.Repository.CurrentPath = a.currentRepository()
+	return status
+}
+
+// GetRepositoryOptions proposes, for this OS, where the central repository
+// can live: the user's Documents and, on macOS and Windows, the Documents
+// folder shared by all users. Used by the first-run screen.
+func (a *App) GetRepositoryOptions() system.RepositoryOptions {
+	opts := a.repoOptions()
+	opts.CurrentScope, opts.CurrentPath = a.currentRepository()
+	return opts
+}
+
+// SetupRepository creates the central repository for scope ("user" or
+// "shared"), remembers the choice and opens it. The path is always the one
+// Go computed for this OS: the frontend only picks the scope.
+func (a *App) SetupRepository(scope string) (WorkspaceState, error) {
+	opts := a.repoOptions()
+	var option system.RepositoryOption
+	switch scope {
+	case system.ScopeUser:
+		option = opts.User
+	case system.ScopeShared:
+		option = opts.Shared
+	default:
+		return WorkspaceState{}, fmt.Errorf("ámbito de repositorio inválido %q", scope)
+	}
+	if !option.Available {
+		return WorkspaceState{}, fmt.Errorf("opción no disponible en %s: %s", opts.OSName, option.Reason)
+	}
+
+	doc, err := core.PrepareRepository(option.Path, starterDocument, scope == system.ScopeShared)
+	if err != nil {
+		return WorkspaceState{}, err
+	}
+	if a.settingsPath != "" {
+		settings := core.Settings{RepositoryScope: scope, RepositoryPath: option.Path}
+		if err := core.SaveSettings(a.settingsPath, settings); err != nil {
+			return WorkspaceState{}, fmt.Errorf("guardar la configuración: %w", err)
+		}
+	}
+	a.setWorkspace(option.Path, doc)
+	a.compiles.Request()
+	return a.workspaceState()
 }
 
 // GetWorkspace returns the open folder, its tree and the active document.
+// With no folder open yet it opens the configured central repository, or
+// reports NeedsSetup on first run (nothing is created on disk until then).
 func (a *App) GetWorkspace() (WorkspaceState, error) {
+	if folder, _ := a.workspace(); folder == "" {
+		configured, err := a.openConfiguredRepository()
+		if err != nil {
+			return WorkspaceState{}, fmt.Errorf("abrir el repositorio central: %w", err)
+		}
+		if !configured {
+			return WorkspaceState{NeedsSetup: true}, nil
+		}
+	}
 	return a.workspaceState()
 }
 
