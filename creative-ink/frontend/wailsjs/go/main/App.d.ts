@@ -3,12 +3,18 @@
 import {main} from '../models';
 import {system} from '../models';
 
-export function DocumentPath():Promise<string>;
+export function GetWorkspace():Promise<main.WorkspaceState>;
 
-export function LoadContent():Promise<string>;
+export function OpenFile(arg1:string):Promise<main.OpenedFile>;
+
+export function OpenFolderDialog():Promise<main.WorkspaceState>;
+
+export function RefreshWorkspace():Promise<main.WorkspaceState>;
 
 export function RequestCompile():Promise<boolean>;
 
-export function SaveContent(arg1:string):Promise<main.SaveResult>;
+export function SaveAsDialog(arg1:string):Promise<main.WorkspaceState>;
+
+export function SaveContent(arg1:string,arg2:string):Promise<main.SaveResult>;
 
 export function SystemHealthCheck():Promise<system.HealthStatus>;
