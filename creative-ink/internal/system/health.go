@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -177,6 +178,28 @@ func FindBinary(name string) (string, bool) {
 func binaryExists(name string) bool {
 	_, ok := FindBinary(name)
 	return ok
+}
+
+// ToolPATH returns the process PATH extended with the TeX and Homebrew
+// directories it lacks (appended, so the user's own order wins). Apps
+// launched from the macOS Finder get a minimal PATH; commands run from the
+// integrated terminal (tlmgr, git from Homebrew) need these.
+func ToolPATH() string {
+	current := os.Getenv("PATH")
+	parts := filepath.SplitList(current)
+	seen := make(map[string]bool, len(parts))
+	for _, p := range parts {
+		seen[p] = true
+	}
+	for _, dir := range candidateDirs() {
+		if !seen[dir] {
+			if info, err := os.Stat(dir); err == nil && info.IsDir() {
+				parts = append(parts, dir)
+				seen[dir] = true
+			}
+		}
+	}
+	return strings.Join(parts, string(os.PathListSeparator))
 }
 
 func candidateDirs() []string {

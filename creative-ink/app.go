@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
@@ -101,6 +102,10 @@ type App struct {
 	// scheduler's worker goroutine touches it (OnFinished), so no lock.
 	lastPreview previewStamp
 
+	// termMu guards termCancel: at most one terminal command runs at a time.
+	termMu     sync.Mutex
+	termCancel context.CancelFunc
+
 	// watchFolder starts a filesystem watcher (nil in tests = no watching).
 	watchFolder func(root string, onChange func()) (io.Closer, error)
 	// watchMu guards watcher and treeSig.
@@ -146,6 +151,22 @@ type OpenedFile struct {
 type WorkspaceChangedEvent struct {
 	Folder string `json:"folder"`
 }
+
+// TerminalResult is the outcome of a command run from the integrated
+// terminal. A non-zero exit, a timeout or a cancel are normal outcomes, not
+// errors: the promise only rejects when the command could not be started.
+type TerminalResult struct {
+	Command    string `json:"command"`
+	Folder     string `json:"folder"`   // where it ran
+	Output     string `json:"output"`   // Stdout+Stderr, capped at 256 KB
+	ExitCode   int    `json:"exitCode"` // -1 if it did not exit normally
+	TimedOut   bool   `json:"timedOut"`
+	Canceled   bool   `json:"canceled"`
+	DurationMs int64  `json:"durationMs"`
+}
+
+// errTerminalBusy rejects a second command while one is running.
+var errTerminalBusy = errors.New("ya hay un comando en ejecución; espera o cancélalo")
 
 // CompileStartedEvent is the payload of EventCompileStarted.
 type CompileStartedEvent struct {
@@ -251,6 +272,7 @@ func (a *App) startup(ctx context.Context) {
 // shutdown is called by Wails when the app is closing: stop latexmk so it
 // does not outlive the window.
 func (a *App) shutdown(_ context.Context) {
+	a.CancelTerminalCommand()
 	a.stopWatching()
 	a.compiles.Close(shutdownTimeout)
 	if a.previews != nil {
@@ -580,6 +602,69 @@ func (a *App) ConfirmClose(saved bool) {
 		return
 	}
 	a.allowCloseAndQuit()
+}
+
+// RunTerminalCommand runs command through the system shell in the open
+// folder (30 s timeout) and returns its combined output. One command at a
+// time. TeX and Homebrew directories are added to PATH, which apps launched
+// from the macOS Finder lack.
+//
+// SECURITY: this is arbitrary command execution by design. The UI must only
+// send what the user typed in the terminal panel.
+func (a *App) RunTerminalCommand(command string) (TerminalResult, error) {
+	folder, _ := a.workspace()
+	if folder == "" {
+		return TerminalResult{}, core.ErrNoFolder
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a.termMu.Lock()
+	if a.termCancel != nil {
+		a.termMu.Unlock()
+		cancel()
+		return TerminalResult{}, errTerminalBusy
+	}
+	a.termCancel = cancel
+	a.termMu.Unlock()
+	defer func() {
+		a.termMu.Lock()
+		a.termCancel = nil
+		a.termMu.Unlock()
+		cancel()
+	}()
+
+	start := time.Now()
+	output, err := core.ExecuteCommandContext(ctx, command, folder, []string{"PATH=" + system.ToolPATH()})
+	result := TerminalResult{
+		Command:    command,
+		Folder:     folder,
+		Output:     output,
+		DurationMs: time.Since(start).Milliseconds(),
+	}
+
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		result.ExitCode = 0
+	case errors.As(err, &exitErr):
+		result.ExitCode = exitErr.ExitCode()
+	case errors.Is(err, core.ErrCommandTimeout):
+		result.ExitCode, result.TimedOut = -1, true
+	case errors.Is(err, core.ErrCommandCanceled):
+		result.ExitCode, result.Canceled = -1, true
+	default:
+		return TerminalResult{}, err // could not start (empty command, missing folder, no shell)
+	}
+	return result, nil
+}
+
+// CancelTerminalCommand stops the running terminal command, if any.
+func (a *App) CancelTerminalCommand() {
+	a.termMu.Lock()
+	defer a.termMu.Unlock()
+	if a.termCancel != nil {
+		a.termCancel()
+	}
 }
 
 // RequestCompile queues a background compilation of the active document as

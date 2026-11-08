@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -654,5 +656,76 @@ func TestConfirmCloseWithoutCloseInProgressIsIgnored(t *testing.T) {
 	a.ConfirmClose(true)
 	if quits.Load() != 0 {
 		t.Fatal("ConfirmClose must not quit unless a close was requested")
+	}
+}
+
+func TestRunTerminalCommand(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("uses sh syntax")
+	}
+	a, _ := newTestApp(t, okCompile)
+	folder, _ := a.workspace()
+
+	res, err := a.RunTerminalCommand("ls; exit 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 2 || res.Folder != folder || !strings.Contains(res.Output, "main.tex") {
+		t.Fatalf("result = %+v: must run in the open folder and report the exit code", res)
+	}
+
+	if _, err := a.RunTerminalCommand("  "); err == nil {
+		t.Error("an empty command must be rejected")
+	}
+}
+
+func TestRunTerminalCommandOneAtATimeAndCancel(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("uses sh syntax")
+	}
+	a, _ := newTestApp(t, okCompile)
+
+	done := make(chan TerminalResult, 1)
+	go func() {
+		res, _ := a.RunTerminalCommand("sleep 20")
+		done <- res
+	}()
+	// Wait until it is running.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		a.termMu.Lock()
+		running := a.termCancel != nil
+		a.termMu.Unlock()
+		if running || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if _, err := a.RunTerminalCommand("echo otro"); !errors.Is(err, errTerminalBusy) {
+		t.Fatalf("second command: err = %v, want errTerminalBusy", err)
+	}
+
+	a.CancelTerminalCommand()
+	select {
+	case res := <-done:
+		if !res.Canceled || res.ExitCode != -1 {
+			t.Fatalf("result = %+v, want canceled", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancel did not stop the command")
+	}
+
+	// Free again.
+	if res, err := a.RunTerminalCommand("echo libre"); err != nil || !strings.Contains(res.Output, "libre") {
+		t.Fatalf("after cancel: %+v, %v", res, err)
+	}
+}
+
+func TestRunTerminalCommandNeedsAFolder(t *testing.T) {
+	a := newApp("", "", okCompile)
+	t.Cleanup(func() { a.compiles.Close(time.Second) })
+	if _, err := a.RunTerminalCommand("ls"); !errors.Is(err, core.ErrNoFolder) {
+		t.Fatalf("err = %v, want ErrNoFolder", err)
 	}
 }
