@@ -43,6 +43,9 @@ const shutdownTimeout = 3 * time.Second
 // the app open forever).
 const closeFlushTimeout = 2 * time.Second
 
+// previewSnapshotsKept: the PDF on screen, the one loading and one spare.
+const previewSnapshotsKept = 3
+
 const (
 	closeAnywayButton = "Cerrar sin guardar"
 	cancelCloseButton = "Cancelar"
@@ -90,6 +93,10 @@ type App struct {
 	closeTimeout time.Duration
 	quit         func()
 	confirmQuit  func(message string) bool
+
+	// previews holds immutable copies of the compiled PDFs served to PDF.js
+	// (nil = serve the live PDF, e.g. in tests or if the temp dir failed).
+	previews *core.PDFSnapshots
 
 	// watchFolder starts a filesystem watcher (nil in tests = no watching).
 	watchFolder func(root string, onChange func()) (io.Closer, error)
@@ -148,6 +155,10 @@ type CompileStartedEvent struct {
 type CompileFinishedEvent struct {
 	compiler.Result
 	File string `json:"file"`
+	// PDFVersion identifies the immutable preview snapshot of this result
+	// (0 when there is none: failed compilation or snapshot error). The UI
+	// loads /__preview/document.pdf?v=<PDFVersion>.
+	PDFVersion uint64 `json:"pdfVersion"`
 }
 
 // NewApp creates the App facade. No folder is open until startup prepares
@@ -167,6 +178,11 @@ func NewApp() *App {
 	}
 	a.quit = a.quitWails
 	a.confirmQuit = a.dialogConfirmQuit
+	if previews, err := core.NewPDFSnapshots("", previewSnapshotsKept); err == nil {
+		a.previews = previews
+	} else {
+		log.Printf("[preview] sin instantáneas, se servirá el PDF en vivo: %v", err)
+	}
 	return a
 }
 
@@ -202,7 +218,13 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 				a.emit(EventCompileStarted, CompileStartedEvent{File: a.compilingDoc})
 			},
 			OnFinished: func(r compiler.Result) {
-				a.emit(EventCompileFinished, CompileFinishedEvent{Result: r, File: a.compilingDoc})
+				event := CompileFinishedEvent{Result: r, File: a.compilingDoc}
+				if r.Success {
+					// Same worker goroutine as latexmk: the copy can never
+					// overlap the next compilation rewriting the PDF.
+					event.PDFVersion = a.publishPreview(compiler.PDFPath(a.compilingDoc))
+				}
+				a.emit(EventCompileFinished, event)
 			},
 		},
 	)
@@ -224,6 +246,23 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(_ context.Context) {
 	a.stopWatching()
 	a.compiles.Close(shutdownTimeout)
+	if a.previews != nil {
+		_ = a.previews.Close()
+	}
+}
+
+// publishPreview snapshots a freshly compiled PDF and returns its version
+// (0 if there is no snapshot store or the copy failed).
+func (a *App) publishPreview(pdf string) uint64 {
+	if a.previews == nil {
+		return 0
+	}
+	version, err := a.previews.Publish(pdf)
+	if err != nil {
+		log.Printf("[preview] no se pudo publicar %q: %v", pdf, err)
+		return 0
+	}
+	return version
 }
 
 // openConfiguredRepository opens the central repository chosen on first
