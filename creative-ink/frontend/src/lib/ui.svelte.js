@@ -7,7 +7,10 @@ export const ui = $state({
   sidebarOpen: false,
   /** @type {SidebarTool} */
   activeTool: 'explorer',
-  healthOpen: false
+  healthOpen: false,
+  /** Explorer folders the user expanded or collapsed, by absolute path. */
+  /** @type {Record<string, boolean>} */
+  expandedDirs: {}
 })
 
 /**
@@ -26,4 +29,9 @@ export function toggleTool(tool) {
 
 export function toggleSidebar() {
   ui.sidebarOpen = !ui.sidebarOpen
+}
+
+/** Expands or collapses an explorer folder. */
+export function setDirExpanded(/** @type {string} */ path, /** @type {boolean} */ expanded) {
+  ui.expandedDirs[path] = expanded
 }

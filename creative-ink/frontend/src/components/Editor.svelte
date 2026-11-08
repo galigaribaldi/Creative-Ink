@@ -1,6 +1,6 @@
 <script>
-  import { onMount } from 'svelte'
-  import { EditorState } from '@codemirror/state'
+  import { onMount, untrack } from 'svelte'
+  import { Compartment, EditorState } from '@codemirror/state'
   import {
     EditorView,
     keymap,
@@ -13,67 +13,81 @@
   import { StreamLanguage, bracketMatching, indentOnInput } from '@codemirror/language'
   import { stex } from '@codemirror/legacy-modes/mode/stex'
   import { oneDark } from '@codemirror/theme-one-dark'
-  import { DocumentPath, LoadContent, SaveContent } from '../../wailsjs/go/main/App.js'
+  import { OpenFile, SaveContent } from '../../wailsjs/go/main/App.js'
   import { registerEditor } from '../lib/actions.js'
+  import { baseName, workspace } from '../lib/workspace.svelte.js'
 
-  // Inactivity window before autosaving. Each successful save also queues a
-  // background compilation in Go, reported through Wails events (see App.svelte).
+  // Inactivity window before autosaving. Each save of the active document
+  // also queues a background compilation in Go (reported through events).
   const SAVE_DELAY_MS = 1000
 
   const LABELS = {
-    loading: 'Cargando…',
+    empty: 'Sin documento',
+    loading: 'Abriendo…',
     saved: 'Guardado',
     dirty: 'Sin guardar',
     saving: 'Guardando…',
     error: 'Error al guardar',
-    loadError: 'Error al abrir el documento'
+    loadError: 'No se pudo abrir el archivo'
   }
 
   /** @type {HTMLDivElement} */
   let container
   /** @type {EditorView | null} */
   let view = null
+  // Read-only while there is no document or a file switch is in progress.
+  const editability = new Compartment()
 
-  // Debounce / save-queue bookkeeping (not reactive: never rendered).
+  // ── Save bookkeeping (non-reactive: never rendered) ──────────────────────
+  // docFile is the file whose text is in CodeMirror. Every save captures it
+  // at flush time, so text can never be written to another file.
+  let docFile = ''
   let timer = null // pending debounce timeout
   let saving = false // a SaveContent call is in flight
   let pending = false // a save was requested while another was in flight
+  let dirty = false // the editor holds edits not yet sent to Go
+  /** @type {((clean: boolean) => void)[]} */
+  let idleWaiters = []
+  let switchSeq = 0 // identifies the latest file switch
 
-  /** @type {'loading' | 'saved' | 'dirty' | 'saving' | 'error' | 'loadError'} */
-  let status = $state('loading')
+  /** @type {keyof typeof LABELS} */
+  let status = $state('empty')
   let errorMsg = $state('')
-  let docPath = $state('')
-  let fileName = $derived(docPath.split(/[\\/]/).pop() || '')
+  let fileName = $state('')
+  let filePath = $state('')
 
-  // Called on every document change: restart the 1 s inactivity timer.
+  // Called on every document change: restart the inactivity timer.
   // Keystrokes only reset a timer; nothing crosses the IPC bridge here.
   function scheduleSave() {
+    dirty = true
     status = 'dirty'
     clearTimeout(timer)
     timer = setTimeout(flush, SAVE_DELAY_MS)
   }
 
-  // Sends the latest content to Go. At most one SaveContent is in flight;
-  // requests arriving meanwhile are coalesced into a single follow-up save.
+  // Sends the latest content of docFile to Go. At most one SaveContent is in
+  // flight; requests arriving meanwhile are coalesced into one follow-up.
   async function flush() {
     clearTimeout(timer)
     timer = null
-    if (!view) return
     if (saving) {
       pending = true
       return
     }
+    if (!view || !docFile || !dirty) return settle()
 
     saving = true
+    dirty = false
     status = 'saving'
+    const path = docFile
     try {
-      // The document is serialised once, at save time, not per keystroke.
       // Go saves and answers at once with { saved }; it does not wait for latexmk.
-      await SaveContent(view.state.doc.toString())
+      await SaveContent(path, view.state.doc.toString())
       // If the user typed during the save, status is already 'dirty': keep it.
       if (status === 'saving') status = 'saved'
       errorMsg = ''
     } catch (err) {
+      dirty = true // still unsaved: the next edit or Cmd+S retries
       status = 'error'
       errorMsg = String(err)
     } finally {
@@ -81,93 +95,159 @@
       if (pending) {
         pending = false
         flush()
+      } else {
+        settle()
       }
     }
   }
 
-  function createView(doc) {
-    view = new EditorView({
-      parent: container,
-      state: EditorState.create({
-        doc,
-        extensions: [
-          lineNumbers(),
-          highlightActiveLineGutter(),
-          highlightActiveLine(),
-          drawSelection(),
-          history(),
-          indentOnInput(),
-          bracketMatching(),
-          StreamLanguage.define(stex),
-          EditorView.lineWrapping,
-          keymap.of([
-            // Cmd/Ctrl+S saves immediately, skipping the debounce.
-            { key: 'Mod-s', preventDefault: true, run: () => (flush(), true) },
-            ...defaultKeymap,
-            ...historyKeymap,
-            indentWithTab
-          ]),
-          oneDark,
-          EditorView.theme({
-            '&': { height: '100%', fontSize: '14px' },
-            '.cm-scroller': { fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace' }
-          }),
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged) scheduleSave()
-          })
-        ]
-      })
-    })
-    view.focus()
+  // Resolves waitIdle() callers once nothing is pending.
+  function settle() {
+    if (saving || pending || timer) return
+    const clean = !dirty
+    idleWaiters.splice(0).forEach((resolve) => resolve(clean))
   }
 
-  onMount(() => {
-    let destroyed = false
-    /** @type {(() => void) | undefined} */
-    let unregister
+  /** Saves pending edits now; resolves true if everything reached the disk. */
+  function waitIdle() {
+    const done = new Promise((resolve) => idleWaiters.push(resolve))
+    flush()
+    return done
+  }
 
-    ;(async () => {
-      try {
-        const [content, path] = await Promise.all([LoadContent(), DocumentPath()])
-        if (destroyed) return
-        docPath = path
-        createView(content)
-        status = 'saved'
-        // Lets the ActionBar save/compile without a reference to CodeMirror.
-        unregister = registerEditor({
-          save: flush,
-          isDirty: () => status === 'dirty' || status === 'saving'
+  function editabilityFor(canEdit) {
+    return [EditorView.editable.of(canEdit), EditorState.readOnly.of(!canEdit)]
+  }
+
+  function setEditable(canEdit) {
+    view?.dispatch({ effects: editability.reconfigure(editabilityFor(canEdit)) })
+  }
+
+  function createState(doc, canEdit) {
+    return EditorState.create({
+      doc,
+      extensions: [
+        lineNumbers(),
+        highlightActiveLineGutter(),
+        highlightActiveLine(),
+        drawSelection(),
+        history(),
+        indentOnInput(),
+        bracketMatching(),
+        StreamLanguage.define(stex),
+        EditorView.lineWrapping,
+        editability.of(editabilityFor(canEdit)),
+        keymap.of([
+          // Cmd/Ctrl+S saves immediately, skipping the debounce.
+          { key: 'Mod-s', preventDefault: true, run: () => (flush(), true) },
+          ...defaultKeymap,
+          ...historyKeymap,
+          indentWithTab
+        ]),
+        oneDark,
+        EditorView.theme({
+          '&': { height: '100%', fontSize: '14px' },
+          '.cm-scroller': { fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace' }
+        }),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) scheduleSave()
         })
-        // Save once on start so Go compiles what is on disk and the preview is not empty.
-        if (content.trim()) flush()
-      } catch (err) {
-        // Never mount an empty editor if loading failed: the first
-        // autosave would overwrite the real file with nothing.
-        status = 'loadError'
-        errorMsg = String(err)
-      }
-    })()
+      ]
+    })
+  }
+
+  /** Shows `content` as the document `path`. setState fires no update listener (no autosave) and starts a fresh undo history for the file. */
+  function load(path, content) {
+    docFile = path
+    dirty = false
+    view.setState(createState(content, path !== ''))
+    adopt(path)
+    status = path ? 'saved' : 'empty'
+    errorMsg = ''
+    if (path) view.focus()
+  }
+
+  /** Renames the current document in place (Save As): same text, new file. */
+  function adopt(path) {
+    docFile = path
+    filePath = path
+    fileName = baseName(path)
+  }
+
+  /** Switches the editor to `target`, saving the current file first. */
+  async function switchTo(target) {
+    if (!view || target === docFile) return
+    const seq = ++switchSeq
+    setEditable(false)
+
+    const clean = await waitIdle()
+    if (seq !== switchSeq) return
+    if (!clean) {
+      // The current file could not be saved: stay on it instead of losing edits.
+      setEditable(docFile !== '')
+      workspace.currentFilePath = docFile
+      return
+    }
+
+    if (!target) return load('', '')
+    status = 'loading'
+    try {
+      const file = await OpenFile(target)
+      if (seq !== switchSeq) return
+      load(file.path, file.content)
+    } catch (err) {
+      if (seq !== switchSeq) return
+      status = 'loadError'
+      errorMsg = String(err)
+      setEditable(docFile !== '')
+      // Keep the explorer selection truthful: the old file is still open.
+      workspace.currentFilePath = docFile
+    }
+  }
+
+  // Declared before the $effect below: effects run in order, so the view
+  // exists when the first file switch happens.
+  onMount(() => {
+    view = new EditorView({ parent: container, state: createState('', false) })
+    const unregister = registerEditor({
+      save: flush,
+      waitIdle,
+      isDirty: () => dirty || saving || timer !== null,
+      getContent: () => view?.state.doc.toString() ?? '',
+      adopt
+    })
 
     return () => {
-      destroyed = true
-      unregister?.()
-      if (timer) flush() // persist edits still inside the debounce window
+      unregister()
+      switchSeq++ // abandon an in-flight switch
+      if (dirty) flush() // persist edits still inside the debounce window
       view?.destroy()
       view = null
     }
+  })
+
+  // The only place where the editor's document changes: when the selected
+  // file changes. CodeMirror itself is never remounted.
+  $effect(() => {
+    const target = workspace.currentFilePath
+    untrack(() => void switchTo(target))
   })
 </script>
 
 <div class="editor">
   <div class="surface" bind:this={container}></div>
+  {#if status === 'empty'}
+    <p class="empty">Abre una carpeta y elige un archivo <code>.tex</code> en el explorador.</p>
+  {/if}
   <footer class="statusbar">
-    <span class="file" title={docPath}>{fileName}</span>
+    <span class="file" title={filePath}>{fileName}</span>
     <span class="status status-{status}" title={errorMsg}>{LABELS[status]}</span>
   </footer>
 </div>
 
 <style>
   .editor {
+    position: relative;
     height: 100%;
     display: flex;
     flex-direction: column;
@@ -178,6 +258,22 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
+  }
+
+  .empty {
+    position: absolute;
+    inset: 0 0 1.6rem;
+    display: grid;
+    place-items: center;
+    margin: 0;
+    padding: 2rem;
+    text-align: center;
+    color: #6b6b6b;
+    pointer-events: none;
+  }
+
+  .empty code {
+    color: #9d9d9d;
   }
 
   .statusbar {
@@ -202,7 +298,8 @@
   }
 
   .status-dirty,
-  .status-saving {
+  .status-saving,
+  .status-loading {
     color: #fbbf24;
   }
 

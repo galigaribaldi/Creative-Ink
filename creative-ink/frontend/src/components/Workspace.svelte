@@ -1,5 +1,6 @@
 <script>
   import { compilation } from '../lib/compilation.svelte.js'
+  import { workspace } from '../lib/workspace.svelte.js'
   import CompileLog from './CompileLog.svelte'
   import Editor from './Editor.svelte'
   import Preview from './Preview.svelte'
@@ -20,7 +21,11 @@
   </section>
 
   <section class="pane" aria-label="Vista previa">
-    <Preview compileState={compilation.status} pdfTimestamp={compilation.pdfTimestamp} />
+    <Preview
+      compileState={compilation.status}
+      pdfTimestamp={compilation.pdfTimestamp}
+      documentKey={workspace.currentFilePath}
+    />
   </section>
 </div>
 

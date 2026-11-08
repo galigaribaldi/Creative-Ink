@@ -1,24 +1,45 @@
 <script>
-  import { onDestroy } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
   import ActionBar from './components/ActionBar.svelte'
   import HealthPanel from './components/HealthPanel.svelte'
   import Sidebar from './components/Sidebar.svelte'
   import Workspace from './components/Workspace.svelte'
-  import { listenCompileEvents } from './lib/compilation.svelte.js'
+  import { initWorkspace, openFolder, saveAs } from './lib/actions.js'
+  import { listenCompileEvents, resetCompilation } from './lib/compilation.svelte.js'
   import { toggleSidebar, ui } from './lib/ui.svelte.js'
+  import { workspace } from './lib/workspace.svelte.js'
 
   const ACTIONBAR_WIDTH = '44px'
   const SIDEBAR_WIDTH = '240px'
 
-  // Subscribed during init, before the Editor mounts and triggers its first
-  // save, so no compile event can be missed.
+  // Subscribed during init, before the first file is opened (opening a file
+  // queues its compilation), so no compile event can be missed.
   onDestroy(listenCompileEvents())
+  void initWorkspace()
 
-  /** Cmd/Ctrl+B toggles the sidebar (Cmd/Ctrl+S is handled by CodeMirror). */
+  // A different document: the previous one's compile status and log no
+  // longer apply (Preview resets its own canvas through documentKey).
+  $effect(() => {
+    workspace.currentFilePath
+    untrack(resetCompilation)
+  })
+
+  /**
+   * Global shortcuts. Cmd/Ctrl+S is handled by CodeMirror itself.
+   * Cmd/Ctrl+B sidebar · Cmd/Ctrl+O open folder · Cmd/Ctrl+Shift+S save as.
+   */
   function onkeydown(event) {
-    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 'b') {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+    const key = event.key.toLowerCase()
+    if (key === 'b' && !event.shiftKey) {
       event.preventDefault()
       toggleSidebar()
+    } else if (key === 'o' && !event.shiftKey) {
+      event.preventDefault()
+      void openFolder()
+    } else if (key === 's' && event.shiftKey) {
+      event.preventDefault()
+      void saveAs()
     }
   }
 </script>

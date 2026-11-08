@@ -1,10 +1,12 @@
 <script>
-  import { compileDocument, saveDocument } from '../lib/actions.js'
+  import { compileDocument, openFolder, saveAs, saveDocument } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
   import { toggleTool, ui } from '../lib/ui.svelte.js'
 
   // macOS shows ⌘, Linux shows Ctrl in the tooltips.
-  const MOD = navigator.platform.toUpperCase().includes('MAC') ? '⌘' : 'Ctrl+'
+  const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
+  const MOD = IS_MAC ? '⌘' : 'Ctrl+'
+  const SHIFT_MOD = IS_MAC ? '⇧⌘' : 'Ctrl+Shift+'
 
   let explorerActive = $derived(ui.sidebarOpen && ui.activeTool === 'explorer')
   let compiling = $derived(compilation.status === 'compiling')
@@ -26,10 +28,23 @@
       </svg>
     </button>
 
+    <button onclick={openFolder} aria-label="Abrir carpeta" title="Abrir carpeta ({MOD}O)">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      </svg>
+    </button>
+
     <button onclick={saveDocument} aria-label="Guardar" title="Guardar ({MOD}S)">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z" />
         <path d="M8 3v5h7V3M8 21v-7h8v7" />
+      </svg>
+    </button>
+
+    <button onclick={saveAs} aria-label="Guardar como…" title="Guardar como… ({SHIFT_MOD}S)">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M13 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9l3 3v5" />
+        <path d="M8 3v5h7V3M17 15v6M14 18h6" />
       </svg>
     </button>
 

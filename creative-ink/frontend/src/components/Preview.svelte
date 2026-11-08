@@ -11,10 +11,11 @@
   /**
    * @type {{
    *   compileState: 'idle' | 'compiling' | 'success' | 'error',
-   *   pdfTimestamp: number
+   *   pdfTimestamp: number,
+   *   documentKey: string
    * }}
    */
-  let { compileState, pdfTimestamp } = $props()
+  let { compileState, pdfTimestamp, documentKey } = $props()
 
   const LABELS = {
     idle: 'Sin compilar',
@@ -46,7 +47,28 @@
   let hasPage = $state(false)
   let renderError = $state('')
 
-  // Every successful compilation bumps pdfTimestamp in App → new URL → reload.
+  // Another .tex was opened: its PDF is a different document, so drop the
+  // current one and start again at page 1. Declared before the reload effect
+  // so a reset never discards the new file's first PDF.
+  let shownDocument = ''
+  $effect(() => {
+    const key = documentKey
+    untrack(() => {
+      if (key === shownDocument) return
+      shownDocument = key
+      loadSeq++ // in-flight loads become stale and release their own document
+      loading = false
+      renderTask?.cancel()
+      void releasePdf(pdfDoc)
+      pdfDoc = null
+      currentPageNumber = 1
+      pageCount = 0
+      hasPage = false
+      renderError = ''
+    })
+  })
+
+  // Every successful compilation bumps pdfTimestamp → new URL → reload.
   $effect(() => {
     if (!pdfTimestamp) return
     const url = `${PREVIEW_URL}?t=${pdfTimestamp}`
