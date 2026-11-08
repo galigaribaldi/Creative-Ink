@@ -20,7 +20,8 @@ Un editor LaTeX funcional "al estilo VS Code": explorador de archivos, editor, c
 - La compilación usa **latexmk** por defecto, con un motor seleccionable: `pdflatex`, `xelatex` o `lualatex`.
 - La app debe **detectar** los motores instalados (health check en `internal/system/`) y **ofrecer instalarlos** si faltan. La instalación siempre la confirma el usuario.
 - **Editor decidido:** CodeMirror 6 (sin `basicSetup`; las extensiones se eligen a mano en `Editor.svelte`).
-- **Repositorio central** `My Creative Ink Repository`: en el **primer arranque** el usuario elige "Solo para mí" (sus Documentos) o "Para todos los usuarios" (Documentos compartidos; no existe en Linux). Go calcula la ruta según el sistema operativo y guarda la elección en la configuración del usuario.
+- **Repositorio central** `My-Creative-Ink-Repository`: en el **primer arranque** el usuario elige "Solo para mí" (sus Documentos) o "Para todos los usuarios" (Documentos compartidos; no existe en Linux). Go calcula la ruta según el sistema operativo y guarda la elección en la configuración del usuario.
+- **La raíz del repositorio es un lanzador:** cada sesión empieza en la pantalla de inicio. Un proyecto es una carpeta `<repo>/<Nombre-Normalizado>/`; los documentos rápidos van en `<repo>/tmp-Workspaces/unnamed-tmpN/`. Datos del editor en `<repo>/.creative-ink/`. Diseño completo en `docs/MAP.md` §4.6.
 - **Un solo archivo activo** (sin pestañas, por minimalismo). Se compila el **archivo principal** del proyecto si está definido (`.creative-ink-meta`); si no, el `.tex` activo.
 - **Visor PDF decidido:** PDF.js (`pdfjs-dist`) en `<canvas>`; el PDF lo sirve el middleware de Go (`preview.go`).
 - Decisiones **pendientes** (no las asumas, espera instrucciones): modelo de plugins, migración a TypeScript, licencia y patrón final de IPC.
@@ -45,6 +46,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 - **fsnotify en macOS (kqueue):** abre un descriptor por carpeta **y por archivo** vigilado, y no es recursivo. Respeta `maxWatchedDirs` y los filtros de `isIgnoredEntry`; nunca vigiles carpetas de build ni `node_modules`.
 - **pdfjs-dist 6 por rangos:** `disableAutoFetch: true` **exige** `disableStream: true`. Sirve siempre instantáneas inmutables (`?v=`), nunca el `<doc>.pdf` que latexmk reescribe. En Linux sin `-tags webkit2_41`, Wails no pasa cabeceras: no hay rangos (se descarga entero).
 - **Terminal integrada (`RunTerminalCommand`):** es la **única** excepción a "nunca `sh -c`" y es ejecución arbitraria por diseño. Pásale solo lo que el usuario escribió en la terminal; nunca construyas comandos a partir de documentos, logs o nombres de archivo, y nunca uses `{@html}` con contenido externo.
+- **Convención de nombres:** todo lo que crea el editor usa `-` en lugar de espacios y sin acentos (`core.Slugify`). Nunca crees carpetas o archivos con espacios.
 - **Template de Wails v2.17.1:** venía con `vite-plugin-svelte@6` (no acepta Vite 8), con `new App()` (Svelte 4) y con un `jsconfig` obsoleto. Ya está corregido.
 
 ## Estado actual (actualizar al cerrar cada sección)
@@ -171,3 +173,10 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] `RunTerminalCommand` enruta `ci …` a Go; los builds emiten `compile:started`/`compile:finished`; `settings.json.autoCompile` + `WorkspaceState.autoCompile`
   - [ ] Pendiente de decisión (propuesta en `docs/MAP.md` §4.6): servicio de configuración por capas, confianza de carpetas para `.latexmkrc`, registro de comandos `ci` y host de plugins. Hasta entonces la UI no respeta `autoCompile`, y `--shell-escape` no se ofrece
   - [ ] Validación del programador: reiniciar `wails dev` y probar `ci help` en la terminal
+- [ ] **Sección 18 — Estructura del repositorio y pantalla de inicio** (§4.6, paso 1; código listo, falta validar con `wails dev`)
+  - [x] `My-Creative-Ink-Repository` con migración automática del nombre con espacios (sin sobrescribir; avisa si existen las dos carpetas)
+  - [x] `core/repository.go`: `.creative-ink/{config.json,plugins,templates,guide}` (oculta en Windows), `tmp-Workspaces/unnamed-tmpN`, `Slugify`, plantilla de proyecto, `StaleQuickDocs` (más de 8 h, solo aviso)
+  - [x] Bindings `GetStartScreen`, `CreateProject`, `CreateQuickDocument`, `OpenProject` (solo dentro del repositorio o recientes), `RevealQuickDocuments`; `WorkspaceState.needsStart/repositoryPath`; recientes en `settings.json`
+  - [x] Plugins por usuario: `<repo>/.creative-ink/plugins` o `<UserConfigDir>/creative-ink/plugins` si el repositorio es compartido
+  - [x] Frontend: `StartScreen.svelte` en cada sesión y botón Inicio en la ActionBar
+  - [ ] Validación del programador: reiniciar `wails dev`
