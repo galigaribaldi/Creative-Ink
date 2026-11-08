@@ -317,29 +317,32 @@ func TestFirstRunNeedsSetupAndCreatesNothing(t *testing.T) {
 	}
 }
 
-func TestSetupRepositoryUserScopePersists(t *testing.T) {
+func TestSetupRepositoryCreatesLayoutAndShowsStart(t *testing.T) {
 	a, userPath, _ := newFirstRunApp(t, true)
 
 	st, err := a.SetupRepository(system.ScopeUser)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.NeedsSetup || st.FolderPath != userPath || st.FilePath != filepath.Join(userPath, "main.tex") {
+	// The root is a launcher: nothing is opened, the start screen follows.
+	if st.NeedsSetup || !st.NeedsStart || st.FolderPath != "" || st.RepositoryPath != userPath {
 		t.Fatalf("state = %+v", st)
 	}
-	if data, _ := os.ReadFile(st.FilePath); string(data) != starterDocument {
-		t.Fatalf("starter = %q", data)
+	for _, rel := range []string{".creative-ink/config.json", ".creative-ink/plugins", "tmp-Workspaces"} {
+		if _, err := os.Stat(filepath.Join(userPath, rel)); err != nil {
+			t.Errorf("%s missing: %v", rel, err)
+		}
 	}
 	if scope, path := a.currentRepository(); scope != system.ScopeUser || path != userPath {
 		t.Fatalf("saved = %q %q", scope, path)
 	}
 
-	// Next launch: the saved choice is reused, no setup screen.
+	// Next launch: no setup screen, straight to the start screen.
 	next := newApp("", "", okCompile)
 	t.Cleanup(func() { next.compiles.Close(time.Second) })
 	next.settingsPath = a.settingsPath
 	st, err = next.GetWorkspace()
-	if err != nil || st.NeedsSetup || st.FolderPath != userPath {
+	if err != nil || st.NeedsSetup || !st.NeedsStart || st.RepositoryPath != userPath {
 		t.Fatalf("next launch = %+v, %v", st, err)
 	}
 }
@@ -348,11 +351,18 @@ func TestSetupRepositorySharedScope(t *testing.T) {
 	a, _, sharedPath := newFirstRunApp(t, true)
 
 	st, err := a.SetupRepository(system.ScopeShared)
-	if err != nil || st.FolderPath != sharedPath {
+	if err != nil || st.RepositoryPath != sharedPath {
 		t.Fatalf("shared = %+v, %v", st, err)
 	}
 	if opts := a.GetRepositoryOptions(); opts.CurrentScope != system.ScopeShared || opts.CurrentPath != sharedPath {
 		t.Fatalf("current = %q %q", opts.CurrentScope, opts.CurrentPath)
+	}
+	// Plugins are per-user: outside the shared repository.
+	if _, err := os.Stat(filepath.Join(sharedPath, ".creative-ink", "plugins")); !os.IsNotExist(err) {
+		t.Fatal("a shared repository must not hold plugins")
+	}
+	if got := a.pluginsDir(); got != filepath.Join(filepath.Dir(a.settingsPath), "plugins") || !dirExists(got) {
+		t.Fatalf("plugins dir = %q", got)
 	}
 }
 
@@ -370,7 +380,7 @@ func TestSetupRepositoryRejectsUnavailableOrInvalidScope(t *testing.T) {
 	}
 }
 
-func TestConfiguredRepositoryKeepsUserFolder(t *testing.T) {
+func TestLoadRepositoryKeepsUserFolder(t *testing.T) {
 	a, _ := newTestApp(t, okCompile) // a folder is already open
 	a.repoOptions, _, _ = fakeRepoOptions(t, false)
 	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
@@ -379,7 +389,7 @@ func TestConfiguredRepositoryKeepsUserFolder(t *testing.T) {
 	}
 	before, _ := a.workspace()
 
-	if _, err := a.openConfiguredRepository(); err != nil {
+	if _, err := a.loadRepository(); err != nil {
 		t.Fatal(err)
 	}
 	if after, _ := a.workspace(); after != before {
@@ -804,5 +814,150 @@ func TestCiBuildFailureEndsCompilingState(t *testing.T) {
 	fin := nextEvent(t, events).data[0].(CompileFinishedEvent)
 	if fin.Success || fin.File != doc || !strings.Contains(fin.Logs, "xelatex falló") || fin.DurationMs != 1000 {
 		t.Fatalf("finished = %+v", fin)
+	}
+}
+
+// newRepoApp has a configured repository and no folder open (start screen).
+func newRepoApp(t *testing.T) (*App, string) {
+	t.Helper()
+	a, userPath, _ := newFirstRunApp(t, false)
+	if _, err := a.SetupRepository(system.ScopeUser); err != nil {
+		t.Fatal(err)
+	}
+	return a, userPath
+}
+
+func TestLegacyRepositoryIsRenamed(t *testing.T) {
+	docs := t.TempDir()
+	legacy := filepath.Join(docs, system.LegacyRepositoryName)
+	project := filepath.Join(legacy, "Tesis")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := newApp("", "", okCompile)
+	t.Cleanup(func() { a.compiles.Close(time.Second) })
+	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	if err := core.SaveSettings(a.settingsPath, core.Settings{
+		RepositoryScope: system.ScopeUser, RepositoryPath: legacy, RecentFolders: []string{project},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := a.loadRepository(); err != nil {
+		t.Fatal(err)
+	}
+	renamed := filepath.Join(docs, system.RepositoryName)
+	if a.repository() != renamed || !dirExists(filepath.Join(renamed, "Tesis")) || dirExists(legacy) {
+		t.Fatalf("repo = %q: the legacy folder must be renamed with its content", a.repository())
+	}
+	s, _ := core.ReadSettings(a.settingsPath)
+	if s.RepositoryPath != renamed || s.RecentFolders[0] != filepath.Join(renamed, "Tesis") {
+		t.Fatalf("settings not updated: %+v", s)
+	}
+}
+
+func TestLegacyRepositoryNotRenamedWhenBothExist(t *testing.T) {
+	docs := t.TempDir()
+	legacy := filepath.Join(docs, system.LegacyRepositoryName)
+	for _, d := range []string{legacy, filepath.Join(docs, system.RepositoryName)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newApp("", "", okCompile)
+	t.Cleanup(func() { a.compiles.Close(time.Second) })
+	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	_ = core.SaveSettings(a.settingsPath, core.Settings{RepositoryScope: system.ScopeUser, RepositoryPath: legacy})
+
+	if _, err := a.loadRepository(); err != nil {
+		t.Fatal(err)
+	}
+	if a.repository() != legacy {
+		t.Fatal("with both folders present nothing may be moved")
+	}
+	if screen, _ := a.GetStartScreen(); len(screen.Warnings) == 0 {
+		t.Fatal("the user must be warned")
+	}
+}
+
+func TestCreateProjectAndQuickDocument(t *testing.T) {
+	a, root := newRepoApp(t)
+	events := make(chan emittedEvent, 32)
+	a.emit = func(name string, data ...any) { events <- emittedEvent{name: name, data: data} }
+
+	st, err := a.CreateProject("Tesis de Maestría")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(root, "Tesis-de-Maestria")
+	if st.FolderPath != project || st.MainFilePath != filepath.Join(project, "main.tex") || st.NeedsStart {
+		t.Fatalf("project state = %+v", st)
+	}
+	expectCompileOf(t, events, filepath.Join(project, "main.tex"))
+
+	st, err = a.CreateQuickDocument()
+	quick := filepath.Join(root, "tmp-Workspaces", "unnamed-tmp1")
+	if err != nil || st.FolderPath != quick || st.FilePath != filepath.Join(quick, "main.tex") {
+		t.Fatalf("quick state = %+v, %v", st, err)
+	}
+	expectCompileOf(t, events, filepath.Join(quick, "main.tex"))
+
+	screen, err := a.GetStartScreen()
+	if err != nil || len(screen.Projects) != 1 || len(screen.QuickDocs) != 1 {
+		t.Fatalf("start screen = %+v, %v", screen, err)
+	}
+	if len(screen.Recent) != 2 || screen.Recent[0] != quick {
+		t.Fatalf("recent = %v, want the quick document first", screen.Recent)
+	}
+}
+
+func TestOpenProjectOnlyFromTheRepositoryOrRecents(t *testing.T) {
+	a, root := newRepoApp(t)
+	if _, err := a.CreateProject("Tesis"); err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(root, "Tesis")
+
+	if st, err := a.OpenProject(project); err != nil || st.MainFilePath != filepath.Join(project, "main.tex") {
+		t.Fatalf("open project = %+v, %v", st, err)
+	}
+	for _, bad := range []string{root, filepath.Join(root, ".creative-ink"), filepath.Join(root, "tmp-Workspaces"), t.TempDir()} {
+		if _, err := a.OpenProject(bad); err == nil {
+			t.Errorf("OpenProject(%q) must be rejected", bad)
+		}
+	}
+
+	// A folder opened with ⌘O becomes a recent and can be reopened.
+	outside := t.TempDir()
+	a.pickFolder = func(string) (string, error) { return outside, nil }
+	if _, err := a.OpenFolderDialog(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.OpenProject(outside); err != nil {
+		t.Fatalf("a recent folder must be openable: %v", err)
+	}
+}
+
+func TestStartScreenReportsStaleQuickDocs(t *testing.T) {
+	a, root := newRepoApp(t)
+	st, _ := a.CreateQuickDocument()
+	old := time.Now().Add(-9 * time.Hour)
+	if err := os.Chtimes(st.FilePath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	screen, err := a.GetStartScreen()
+	if err != nil || len(screen.StaleQuickDocs) != 1 || screen.StaleAfterHours != 8 {
+		t.Fatalf("screen = %+v, %v", screen, err)
+	}
+	if _, err := os.Stat(st.FilePath); err != nil {
+		t.Fatal("stale quick documents are never deleted by the editor")
+	}
+
+	// Loose .tex files at the root are flagged (the root is only a launcher).
+	if err := os.WriteFile(filepath.Join(root, "suelto.tex"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if screen, _ := a.GetStartScreen(); len(screen.Warnings) == 0 {
+		t.Fatal("loose documents at the root must be reported")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +77,13 @@ type App struct {
 	repoOptions func() system.RepositoryOptions
 	// settingsPath is the per-user settings file ("" = cannot persist).
 	settingsPath string
+	// repoRoot is the central repository (a launcher, never the open folder
+	// itself); repoShared marks the "all users" scope. Guarded by mu.
+	repoRoot   string
+	repoShared bool
+	// repoWarnings are shown once on the start screen (e.g. a migration
+	// that could not run). Guarded by mu.
+	repoWarnings []string
 
 	// mu guards folder and docPath: bound calls each run on their own
 	// goroutine, and the compile worker and preview middleware read them too.
@@ -132,10 +140,14 @@ type SaveResult struct {
 type WorkspaceState struct {
 	// NeedsSetup: first run, the user has not chosen where the central
 	// repository lives yet (see GetRepositoryOptions / SetupRepository).
-	NeedsSetup bool   `json:"needsSetup"`
-	Canceled   bool   `json:"canceled"`   // the user closed the dialog
-	FolderPath string `json:"folderPath"` // absolute
-	FilePath   string `json:"filePath"`   // absolute active .tex, "" if none
+	NeedsSetup bool `json:"needsSetup"`
+	// NeedsStart: the repository is ready but no project is open yet; the UI
+	// shows the start screen (GetStartScreen).
+	NeedsStart     bool   `json:"needsStart"`
+	RepositoryPath string `json:"repositoryPath"`
+	Canceled       bool   `json:"canceled"`   // the user closed the dialog
+	FolderPath     string `json:"folderPath"` // absolute
+	FilePath       string `json:"filePath"`   // absolute active .tex, "" if none
 	// MainFilePath is the project's root document ("" if none). When set it
 	// is what gets compiled and previewed, whatever file is being edited.
 	MainFilePath string `json:"mainFilePath"`
@@ -144,6 +156,21 @@ type WorkspaceState struct {
 	AutoCompile bool          `json:"autoCompile"`
 	Tree        core.FileNode `json:"tree"`
 	Truncated   bool          `json:"truncated"` // the tree hit its size limits
+}
+
+// StartScreen is what the start screen shows when a session begins.
+type StartScreen struct {
+	RepositoryPath string             `json:"repositoryPath"`
+	Projects       []core.ProjectInfo `json:"projects"`
+	QuickDocs      []core.ProjectInfo `json:"quickDocs"`
+	// StaleQuickDocs: quick documents untouched for more than
+	// StaleAfterHours. Only reported; deleting them is the user's call.
+	StaleQuickDocs  []core.ProjectInfo `json:"staleQuickDocs"`
+	StaleAfterHours int                `json:"staleAfterHours"`
+	// Recent: folders opened before that still exist, newest first.
+	Recent      []string `json:"recent"`
+	PluginsPath string   `json:"pluginsPath"`
+	Warnings    []string `json:"warnings"`
 }
 
 // OpenedFile is a document loaded into the editor.
@@ -296,9 +323,9 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 // use the Wails runtime (events, dialogs) from bound methods.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	if _, err := a.openConfiguredRepository(); err != nil {
+	if _, err := a.loadRepository(); err != nil {
 		// Not fatal: GetWorkspace retries and reports the error to the UI.
-		log.Printf("[workspace] no se pudo abrir el repositorio central: %v", err)
+		log.Printf("[workspace] no se pudo preparar el repositorio central: %v", err)
 	}
 }
 
@@ -357,11 +384,12 @@ func (a *App) publishPreview(pdf string) (version uint64, modTime int64) {
 	return version, modTime
 }
 
-// openConfiguredRepository opens the central repository chosen on first
-// run, recreating it (and its starter main.tex) if it was deleted. configured
-// is false on first run: nothing is created until the user chooses a scope.
-// A folder the user opened in the meantime is never replaced.
-func (a *App) openConfiguredRepository() (configured bool, err error) {
+// loadRepository reads the repository chosen on first run, migrates a
+// legacy name ("My Creative Ink Repository" → "My-Creative-Ink-Repository")
+// and makes sure its layout exists (.creative-ink/, tmp-Workspaces/). It does
+// NOT open a folder: the repository root is a launcher and the start screen
+// picks a project. configured is false on first run (nothing is created).
+func (a *App) loadRepository() (configured bool, err error) {
 	if a.settingsPath == "" {
 		return false, nil
 	}
@@ -374,23 +402,99 @@ func (a *App) openConfiguredRepository() (configured bool, err error) {
 	if !ok {
 		return false, nil
 	}
+
+	root, warning := a.migrateLegacyRepository(settings.RepositoryPath)
 	shared := settings.RepositoryScope == system.ScopeShared
-	doc, err := core.PrepareRepository(settings.RepositoryPath, starterDocument, shared)
-	if err != nil {
+	if err := core.EnsureRepositoryLayout(root, shared); err != nil {
 		return true, err
 	}
 
-	main := loadMainFile(settings.RepositoryPath)
 	a.mu.Lock()
-	opened := a.folder == ""
-	if opened {
-		a.folder, a.docPath, a.mainFile = settings.RepositoryPath, doc, main
+	a.repoRoot, a.repoShared = root, shared
+	if warning != "" {
+		a.repoWarnings = append(a.repoWarnings, warning)
 	}
 	a.mu.Unlock()
-	if opened {
-		a.restartWatcher()
+	if shared {
+		a.ensureUserPluginsDir()
 	}
 	return true, nil
+}
+
+// migrateLegacyRepository renames a repository that still uses the legacy
+// name with spaces, and updates settings.json (path and recents). It never
+// overwrites: if both folders exist it keeps the old one and warns.
+func (a *App) migrateLegacyRepository(path string) (root, warning string) {
+	if filepath.Base(path) != system.LegacyRepositoryName {
+		return path, ""
+	}
+	target := filepath.Join(filepath.Dir(path), system.RepositoryName)
+	oldExists, newExists := dirExists(path), dirExists(target)
+	switch {
+	case oldExists && newExists:
+		return path, fmt.Sprintf("Existen \"%s\" y \"%s\": se sigue usando la primera. Mueve tus proyectos y borra la que sobre.",
+			system.LegacyRepositoryName, system.RepositoryName)
+	case oldExists:
+		if err := os.Rename(path, target); err != nil {
+			return path, fmt.Sprintf("No se pudo renombrar el repositorio a %s: %v", system.RepositoryName, err)
+		}
+		log.Printf("[repository] renombrado %q → %q", path, target)
+	}
+	if a.settingsPath != "" {
+		_, err := core.UpdateSettings(a.settingsPath, func(s *core.Settings) {
+			s.RepositoryPath = target
+			for i, f := range s.RecentFolders {
+				if f == path || strings.HasPrefix(f, path+string(filepath.Separator)) {
+					s.RecentFolders[i] = target + strings.TrimPrefix(f, path)
+				}
+			}
+		})
+		if err != nil {
+			log.Printf("[settings] no se pudo guardar la nueva ruta del repositorio: %v", err)
+		}
+	}
+	return target, ""
+}
+
+// ensureUserPluginsDir creates the per-user plugins folder used when the
+// repository is shared (plugins are never stored where every account can
+// write: see core.EnsureRepositoryLayout).
+func (a *App) ensureUserPluginsDir() {
+	if dir := a.pluginsDir(); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Printf("[plugins] %v", err)
+		}
+	}
+}
+
+// pluginsDir is where this user's plugins live: <repo>/.creative-ink/plugins
+// for a personal repository, <UserConfigDir>/creative-ink/plugins for a
+// shared one. "" before the repository is configured.
+func (a *App) pluginsDir() string {
+	a.mu.RLock()
+	root, shared := a.repoRoot, a.repoShared
+	a.mu.RUnlock()
+	switch {
+	case root == "":
+		return ""
+	case shared:
+		if a.settingsPath == "" {
+			return ""
+		}
+		return filepath.Join(filepath.Dir(a.settingsPath), "plugins")
+	}
+	return filepath.Join(core.MetaDir(root), "plugins")
+}
+
+func (a *App) repository() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.repoRoot
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // currentRepository returns the saved scope and path ("" if not configured).
@@ -441,8 +545,8 @@ func (a *App) SetupRepository(scope string) (WorkspaceState, error) {
 		return WorkspaceState{}, fmt.Errorf("opción no disponible en %s: %s", opts.OSName, option.Reason)
 	}
 
-	doc, err := core.PrepareRepository(option.Path, starterDocument, scope == system.ScopeShared)
-	if err != nil {
+	shared := scope == system.ScopeShared
+	if err := core.EnsureRepositoryLayout(option.Path, shared); err != nil {
 		return WorkspaceState{}, err
 	}
 	if a.settingsPath != "" {
@@ -453,8 +557,13 @@ func (a *App) SetupRepository(scope string) (WorkspaceState, error) {
 			return WorkspaceState{}, fmt.Errorf("guardar la configuración: %w", err)
 		}
 	}
-	a.setWorkspace(option.Path, doc)
-	a.compiles.Request()
+	a.mu.Lock()
+	a.repoRoot, a.repoShared = option.Path, shared
+	a.mu.Unlock()
+	if shared {
+		a.ensureUserPluginsDir()
+	}
+	// Next: the start screen (new project / quick document).
 	return a.workspaceState()
 }
 
@@ -462,13 +571,15 @@ func (a *App) SetupRepository(scope string) (WorkspaceState, error) {
 // With no folder open yet it opens the configured central repository, or
 // reports NeedsSetup on first run (nothing is created on disk until then).
 func (a *App) GetWorkspace() (WorkspaceState, error) {
-	if folder, _ := a.workspace(); folder == "" {
-		configured, err := a.openConfiguredRepository()
+	if a.repository() == "" {
+		configured, err := a.loadRepository()
 		if err != nil {
-			return WorkspaceState{}, fmt.Errorf("abrir el repositorio central: %w", err)
+			return WorkspaceState{}, fmt.Errorf("preparar el repositorio central: %w", err)
 		}
 		if !configured {
-			return WorkspaceState{NeedsSetup: true}, nil
+			if folder, _ := a.workspace(); folder == "" {
+				return WorkspaceState{NeedsSetup: true}, nil
+			}
 		}
 	}
 	return a.workspaceState()
@@ -479,10 +590,147 @@ func (a *App) RefreshWorkspace() (WorkspaceState, error) {
 	return a.workspaceState()
 }
 
+// GetStartScreen lists the repository's projects and quick documents, the
+// recent folders, and the quick documents older than 8 h (a reminder: the
+// editor never deletes them).
+func (a *App) GetStartScreen() (StartScreen, error) {
+	root := a.repository()
+	if root == "" {
+		return StartScreen{}, errors.New("el repositorio central no está configurado")
+	}
+	projects, err := core.ListProjects(root)
+	if err != nil {
+		return StartScreen{}, err
+	}
+	quick, err := core.ListQuickDocs(root)
+	if err != nil {
+		return StartScreen{}, err
+	}
+	stale, err := core.StaleQuickDocs(root, core.QuickDocMaxAge, time.Now())
+	if err != nil {
+		return StartScreen{}, err
+	}
+
+	screen := StartScreen{
+		RepositoryPath:  root,
+		Projects:        projects,
+		QuickDocs:       quick,
+		StaleQuickDocs:  stale,
+		StaleAfterHours: int(core.QuickDocMaxAge / time.Hour),
+		Recent:          []string{},
+		PluginsPath:     a.pluginsDir(),
+		Warnings:        []string{},
+	}
+	if a.settingsPath != "" {
+		if s, err := core.ReadSettings(a.settingsPath); err == nil {
+			for _, f := range s.RecentFolders {
+				if dirExists(f) {
+					screen.Recent = append(screen.Recent, f)
+				}
+			}
+		}
+	}
+	a.mu.RLock()
+	screen.Warnings = append(screen.Warnings, a.repoWarnings...)
+	a.mu.RUnlock()
+	if core.DefaultTeXFile(root) != "" {
+		screen.Warnings = append(screen.Warnings,
+			"Hay documentos .tex sueltos en la raíz del repositorio. La raíz es solo el lanzador: muévelos a un proyecto o a tmp-Workspaces.")
+	}
+	return screen, nil
+}
+
+// CreateProject creates <repo>/<name normalized with "-">/ from the template
+// (main.tex as main file, capitulos/, figuras/, referencias.bib) and opens it.
+func (a *App) CreateProject(name string) (WorkspaceState, error) {
+	root := a.repository()
+	if root == "" {
+		return WorkspaceState{}, errors.New("el repositorio central no está configurado")
+	}
+	dir, mainTex, err := core.CreateProject(root, name)
+	if err != nil {
+		return WorkspaceState{}, err
+	}
+	return a.openProjectFolder(dir, mainTex)
+}
+
+// CreateQuickDocument creates tmp-Workspaces/unnamed-tmp<N>/main.tex (a quick
+// single-file document) and opens it.
+func (a *App) CreateQuickDocument() (WorkspaceState, error) {
+	root := a.repository()
+	if root == "" {
+		return WorkspaceState{}, errors.New("el repositorio central no está configurado")
+	}
+	dir, tex, err := core.CreateQuickDoc(root, starterDocument)
+	if err != nil {
+		return WorkspaceState{}, err
+	}
+	return a.openProjectFolder(dir, tex)
+}
+
+// OpenProject opens a project or quick document folder from the start
+// screen: a folder inside the repository (not the root, not .creative-ink)
+// or one of the recent folders. Paths always come from GetStartScreen.
+func (a *App) OpenProject(path string) (WorkspaceState, error) {
+	clean := filepath.Clean(path)
+	if !filepath.IsAbs(clean) || !dirExists(clean) {
+		return WorkspaceState{}, fmt.Errorf("la carpeta %q no existe", path)
+	}
+	if !a.isOpenableProject(clean) {
+		return WorkspaceState{}, fmt.Errorf("%q no es un proyecto del repositorio ni una carpeta reciente", path)
+	}
+	doc := core.DefaultTeXFile(clean)
+	if meta, err := core.LoadProjectMeta(clean); err == nil {
+		if main := meta.MainFilePath(clean); main != "" {
+			doc = main
+		}
+	}
+	return a.openProjectFolder(clean, doc)
+}
+
+// RevealQuickDocuments opens tmp-Workspaces in the OS file manager, so the
+// user can review and delete old quick documents themselves.
+func (a *App) RevealQuickDocuments() error {
+	root := a.repository()
+	if root == "" {
+		return errors.New("el repositorio central no está configurado")
+	}
+	return system.RevealInFileManager(core.QuickDocsDir(root))
+}
+
+func (a *App) isOpenableProject(dir string) bool {
+	if root := a.repository(); root != "" {
+		rel, err := filepath.Rel(root, dir)
+		inside := err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+		if inside && !strings.HasPrefix(rel, core.MetaDirName) && rel != core.QuickDocsDirName {
+			return true
+		}
+	}
+	if a.settingsPath != "" {
+		if s, err := core.ReadSettings(a.settingsPath); err == nil && slices.Contains(s.RecentFolders, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// openProjectFolder makes dir the open folder with doc active ("" = none)
+// and compiles it.
+func (a *App) openProjectFolder(dir, doc string) (WorkspaceState, error) {
+	a.setWorkspace(dir, doc)
+	if doc != "" {
+		a.compiles.Request()
+	}
+	return a.workspaceState()
+}
+
 // OpenFolderDialog lets the user pick a folder with the native dialog, opens
 // it and selects its default document (main.tex or the first .tex).
 func (a *App) OpenFolderDialog() (WorkspaceState, error) {
 	current, _ := a.workspace()
+	if current == "" {
+		current = a.repository()
+	}
 	dir, err := a.pickFolder(current)
 	if err != nil {
 		return WorkspaceState{}, fmt.Errorf("abrir carpeta: %w", err)
@@ -924,6 +1172,17 @@ func (a *App) setWorkspace(folder, docPath string) {
 
 	if changed {
 		a.restartWatcher()
+		a.rememberRecent(folder)
+	}
+}
+
+// rememberRecent adds folder to the start screen's recent list (best effort).
+func (a *App) rememberRecent(folder string) {
+	if folder == "" || a.settingsPath == "" {
+		return
+	}
+	if _, err := core.UpdateSettings(a.settingsPath, func(s *core.Settings) { s.AddRecentFolder(folder) }); err != nil {
+		log.Printf("[settings] no se pudo guardar el reciente: %v", err)
 	}
 }
 
@@ -1021,19 +1280,21 @@ func (a *App) compileTarget() string {
 func (a *App) workspaceState() (WorkspaceState, error) {
 	folder, doc := a.workspace()
 	if folder == "" {
-		return WorkspaceState{}, nil
+		root := a.repository()
+		return WorkspaceState{NeedsStart: root != "", RepositoryPath: root, AutoCompile: a.autoCompileEnabled()}, nil
 	}
 	tree, truncated, err := core.ScanTree(folder)
 	if err != nil {
 		return WorkspaceState{}, err
 	}
 	return WorkspaceState{
-		FolderPath:   folder,
-		FilePath:     doc,
-		MainFilePath: a.effectiveMainFile(),
-		AutoCompile:  a.autoCompileEnabled(),
-		Tree:         tree,
-		Truncated:    truncated,
+		FolderPath:     folder,
+		RepositoryPath: a.repository(),
+		FilePath:       doc,
+		MainFilePath:   a.effectiveMainFile(),
+		AutoCompile:    a.autoCompileEnabled(),
+		Tree:           tree,
+		Truncated:      truncated,
 	}, nil
 }
 
