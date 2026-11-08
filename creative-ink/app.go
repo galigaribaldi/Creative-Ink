@@ -97,6 +97,9 @@ type App struct {
 	// previews holds immutable copies of the compiled PDFs served to PDF.js
 	// (nil = serve the live PDF, e.g. in tests or if the temp dir failed).
 	previews *core.PDFSnapshots
+	// lastPreview is the PDF behind the newest published version. Only the
+	// scheduler's worker goroutine touches it (OnFinished), so no lock.
+	lastPreview previewStamp
 
 	// watchFolder starts a filesystem watcher (nil in tests = no watching).
 	watchFolder func(root string, onChange func()) (io.Closer, error)
@@ -159,6 +162,10 @@ type CompileFinishedEvent struct {
 	// (0 when there is none: failed compilation or snapshot error). The UI
 	// loads /__preview/document.pdf?v=<PDFVersion>.
 	PDFVersion uint64 `json:"pdfVersion"`
+	// PDFModTime is the PDF's modification time (Unix ms, 0 if unknown). An
+	// unchanged PDF (latexmk: "All targets up-to-date") keeps the same
+	// PDFVersion and PDFModTime, so the UI does not reload the canvas.
+	PDFModTime int64 `json:"pdfModTime"`
 }
 
 // NewApp creates the App facade. No folder is open until startup prepares
@@ -222,7 +229,7 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 				if r.Success {
 					// Same worker goroutine as latexmk: the copy can never
 					// overlap the next compilation rewriting the PDF.
-					event.PDFVersion = a.publishPreview(compiler.PDFPath(a.compilingDoc))
+					event.PDFVersion, event.PDFModTime = a.publishPreview(compiler.PDFPath(a.compilingDoc))
 				}
 				a.emit(EventCompileFinished, event)
 			},
@@ -251,18 +258,48 @@ func (a *App) shutdown(_ context.Context) {
 	}
 }
 
-// publishPreview snapshots a freshly compiled PDF and returns its version
-// (0 if there is no snapshot store or the copy failed).
-func (a *App) publishPreview(pdf string) uint64 {
-	if a.previews == nil {
-		return 0
-	}
-	version, err := a.previews.Publish(pdf)
+// previewStamp identifies a PDF on disk at publish time.
+type previewStamp struct {
+	path    string
+	modTime time.Time
+	size    int64
+	version uint64
+}
+
+// publishPreview runs right after CompileLaTeXContext, on the same worker
+// goroutine (latexmk cannot be rewriting the PDF meanwhile). It reads the
+// PDF's ModTime and, only if the PDF changed, copies a new snapshot. It
+// returns the version to show and the ModTime (Unix ms); 0, 0 on error.
+func (a *App) publishPreview(pdf string) (version uint64, modTime int64) {
+	info, err := os.Stat(pdf)
 	if err != nil {
-		log.Printf("[preview] no se pudo publicar %q: %v", pdf, err)
-		return 0
+		log.Printf("[preview] no se encontró el PDF %q: %v", pdf, err)
+		return 0, 0
 	}
-	return version
+	modTime = info.ModTime().UnixMilli()
+
+	// Same file, same ModTime and size: latexmk did not rewrite it. Reuse the
+	// published version (no disk copy, and the UI keeps its canvas).
+	last := a.lastPreview
+	if last.version != 0 && last.path == pdf && last.modTime.Equal(info.ModTime()) && last.size == info.Size() {
+		if a.previews == nil {
+			return last.version, modTime
+		}
+		if _, ok := a.previews.Path(last.version); ok {
+			return last.version, modTime
+		}
+	}
+
+	if a.previews == nil {
+		// No snapshot store: the middleware serves the live PDF, and the
+		// ModTime works as a version that changes whenever the PDF does.
+		version = uint64(modTime)
+	} else if version, err = a.previews.Publish(pdf); err != nil {
+		log.Printf("[preview] no se pudo publicar %q: %v", pdf, err)
+		return 0, modTime
+	}
+	a.lastPreview = previewStamp{path: pdf, modTime: info.ModTime(), size: info.Size(), version: version}
+	return version, modTime
 }
 
 // openConfiguredRepository opens the central repository chosen on first

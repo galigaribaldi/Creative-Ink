@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"creative-ink/internal/core"
 )
@@ -146,5 +147,70 @@ func TestFailedCompileDoesNotPublish(t *testing.T) {
 	nextEvent(t, events)
 	if fin := nextEvent(t, events).data[0].(CompileFinishedEvent); fin.Success || fin.PDFVersion != 0 {
 		t.Fatalf("finished = %+v, want failure without a snapshot", fin)
+	}
+}
+
+func TestUnchangedPDFKeepsItsVersion(t *testing.T) {
+	// mode: "write" rewrites main.pdf, "skip" leaves it untouched (latexmk
+	// "All targets are up-to-date"), "later" rewrites it with a newer ModTime.
+	mode := "write"
+	a, events := newTestApp(t, func(ctx context.Context, workdir, filename string) (string, error) {
+		path := filepath.Join(workdir, "main.pdf")
+		switch mode {
+		case "skip":
+			return "Latexmk: All targets are up-to-date", nil
+		case "later":
+			if err := os.WriteFile(path, []byte("%PDF v2"), 0o644); err != nil {
+				return "", err
+			}
+			later := time.Now().Add(2 * time.Second)
+			return "ok", os.Chtimes(path, later, later)
+		}
+		return "ok", os.WriteFile(path, []byte("%PDF v1"), 0o644)
+	})
+	previews, err := core.NewPDFSnapshots(t.TempDir(), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = previews.Close() })
+	a.previews = previews
+
+	compile := func(m string) CompileFinishedEvent {
+		t.Helper()
+		mode = m // set before RequestCompile: the worker reads it afterwards
+		a.RequestCompile()
+		nextEvent(t, events) // started
+		return nextEvent(t, events).data[0].(CompileFinishedEvent)
+	}
+
+	first := compile("write")
+	if first.PDFVersion == 0 || first.PDFModTime == 0 {
+		t.Fatalf("first = %+v, want a version and a ModTime", first)
+	}
+
+	same := compile("skip")
+	if same.PDFVersion != first.PDFVersion || same.PDFModTime != first.PDFModTime {
+		t.Fatalf("unchanged PDF: %+v, want the same version/ModTime as %+v", same, first)
+	}
+	if v, _, _ := previews.Latest(); v != first.PDFVersion {
+		t.Fatal("an unchanged PDF must not be copied again")
+	}
+
+	changed := compile("later")
+	if changed.PDFVersion == first.PDFVersion || changed.PDFModTime == first.PDFModTime {
+		t.Fatalf("rewritten PDF: %+v, want a new version and ModTime", changed)
+	}
+}
+
+func TestPreviewVersionWithoutSnapshotStore(t *testing.T) {
+	a, events := newTestApp(t, func(ctx context.Context, workdir, filename string) (string, error) {
+		return "ok", os.WriteFile(filepath.Join(workdir, "main.pdf"), []byte("%PDF"), 0o644)
+	})
+	// previews == nil: the ModTime doubles as the version (live PDF served).
+	a.RequestCompile()
+	nextEvent(t, events)
+	fin := nextEvent(t, events).data[0].(CompileFinishedEvent)
+	if fin.PDFVersion == 0 || int64(fin.PDFVersion) != fin.PDFModTime {
+		t.Fatalf("finished = %+v, want version == ModTime", fin)
 	}
 }
