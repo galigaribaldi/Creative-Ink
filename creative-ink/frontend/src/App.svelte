@@ -8,7 +8,7 @@
   import { initWorkspace, openFolder, saveAs } from './lib/actions.js'
   import { listenCompileEvents, resetCompilation } from './lib/compilation.svelte.js'
   import { toggleSidebar, ui } from './lib/ui.svelte.js'
-  import { workspace } from './lib/workspace.svelte.js'
+  import { compileTarget, workspace } from './lib/workspace.svelte.js'
 
   const ACTIONBAR_WIDTH = '44px'
   const SIDEBAR_WIDTH = '240px'
@@ -18,10 +18,11 @@
   onDestroy(listenCompileEvents())
   void initWorkspace()
 
-  // A different document: the previous one's compile status and log no
-  // longer apply (Preview resets its own canvas through documentKey).
+  // A different compile target (another file, or the main file changed): the
+  // previous status and log no longer apply. Switching chapters while a main
+  // file is set keeps the target, so nothing is reset.
   $effect(() => {
-    workspace.currentFilePath
+    compileTarget()
     untrack(resetCompilation)
   })
 

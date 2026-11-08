@@ -7,7 +7,7 @@
 
 /**
  * @typedef {{ name: string, path: string, isDir: boolean, editable: boolean, children?: FileNode[] }} FileNode
- * @typedef {{ needsSetup: boolean, canceled: boolean, folderPath: string, filePath: string, tree: FileNode, truncated: boolean }} WorkspaceState
+ * @typedef {{ needsSetup: boolean, canceled: boolean, folderPath: string, filePath: string, mainFilePath: string, tree: FileNode, truncated: boolean }} WorkspaceState
  */
 
 export const workspace = $state({
@@ -18,6 +18,11 @@ export const workspace = $state({
    * makes Editor.svelte save pending edits and load the new file.
    */
   currentFilePath: '',
+  /**
+   * Absolute path of the project's root document ("" = none). When set, Go
+   * compiles and previews it whatever file is being edited.
+   */
+  mainFilePath: '',
   /** @type {FileNode | null} */
   fileTree: null,
   truncated: false,
@@ -34,7 +39,16 @@ export function applyWorkspace(/** @type {WorkspaceState} */ state) {
   workspace.fileTree = state.tree
   workspace.truncated = state.truncated
   workspace.currentFilePath = state.filePath
+  workspace.mainFilePath = state.mainFilePath
   workspace.error = ''
+}
+
+/**
+ * What Go compiles and previews: the main file if the project has one,
+ * otherwise the file being edited. Reactive when read inside $derived/$effect.
+ */
+export function compileTarget() {
+  return workspace.mainFilePath || workspace.currentFilePath
 }
 
 /** Last path segment, for display. */

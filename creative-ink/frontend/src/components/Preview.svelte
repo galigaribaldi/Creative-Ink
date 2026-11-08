@@ -17,6 +17,11 @@
    */
   let { compileState, pdfTimestamp, documentKey } = $props()
 
+  // Which PDF is shown (the main file's when the project has one).
+  let pdfName = $derived(
+    (documentKey.split(/[\\/]/).pop() ?? '').replace(/\.tex$/i, '.pdf')
+  )
+
   const LABELS = {
     idle: 'Sin compilar',
     compiling: 'Compilando…',
@@ -192,7 +197,7 @@
 <div class="preview">
   <header class="bar">
     <span>
-      Vista previa PDF
+      Vista previa{#if pdfName}<span class="pdf-name" title={documentKey}> · {pdfName}</span>{/if}
       {#if pageCount}<span class="pages">· página {currentPageNumber} de {pageCount}</span>{/if}
     </span>
     <span class="state-{compileState}">{LABELS[compileState]}</span>
@@ -230,6 +235,10 @@
     background: #1b1d23;
     font-size: 0.75rem;
     color: #9d9d9d;
+  }
+
+  .pdf-name {
+    color: #bdbdbd;
   }
 
   .pages {

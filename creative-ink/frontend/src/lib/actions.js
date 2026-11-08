@@ -8,6 +8,7 @@ import {
   RefreshWorkspace,
   RequestCompile,
   SaveAsDialog,
+  SetMainFile,
   SetupRepository
 } from '../../wailsjs/go/main/App.js'
 import { applyWorkspace, workspace } from './workspace.svelte.js'
@@ -101,6 +102,19 @@ export async function refreshWorkspace() {
  */
 export function openFile(path) {
   workspace.currentFilePath = path
+}
+
+/**
+ * Makes `path` the project's main file, or clears it with "". Go stores it
+ * in the folder's .creative-ink-meta and recompiles the new target.
+ * @param {string} path absolute, or ""
+ */
+export async function setMainFile(path) {
+  try {
+    applyWorkspace(await SetMainFile(path))
+  } catch (err) {
+    report(err)
+  }
 }
 
 /** Saves now, skipping the autosave debounce. A save also queues a compile. */

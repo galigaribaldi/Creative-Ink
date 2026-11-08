@@ -1,6 +1,6 @@
 <script>
   import { compilation } from '../lib/compilation.svelte.js'
-  import { workspace } from '../lib/workspace.svelte.js'
+  import { compileTarget } from '../lib/workspace.svelte.js'
   import CompileLog from './CompileLog.svelte'
   import Editor from './Editor.svelte'
   import Preview from './Preview.svelte'
@@ -24,7 +24,7 @@
     <Preview
       compileState={compilation.status}
       pdfTimestamp={compilation.pdfTimestamp}
-      documentKey={workspace.currentFilePath}
+      documentKey={compileTarget()}
     />
   </section>
 </div>

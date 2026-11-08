@@ -2,7 +2,7 @@
 // source of truth; this module only reflects the last event received so that
 // any component (ActionBar, Workspace, Preview) can read it without props.
 import { EventsOn } from '../../wailsjs/runtime/runtime.js'
-import { workspace } from './workspace.svelte.js'
+import { compileTarget } from './workspace.svelte.js'
 
 // Event names emitted by Go (app.go: EventCompileStarted / EventCompileFinished).
 export const COMPILE_STARTED = 'compile:started'
@@ -30,14 +30,14 @@ export function listenCompileEvents() {
   const offs = [
     /** @param {{ file: string }} event */
     EventsOn(COMPILE_STARTED, (event) => {
-      if (event.file !== workspace.currentFilePath) return
+      if (event.file !== compileTarget()) return
       compilation.status = 'compiling'
     }),
     /** @param {{ file: string, success: boolean, logs: string, durationMs: number }} result */
     EventsOn(COMPILE_FINISHED, (result) => {
-      // A result for a file that is no longer open must not touch the
-      // preview (its PDF is not the one being edited).
-      if (result.file !== workspace.currentFilePath) return
+      // A result for another document (e.g. the file that was active before
+      // a switch) must not touch the preview: it is not the PDF shown.
+      if (result.file !== compileTarget()) return
       compilation.logs = result.logs
       compilation.durationMs = result.durationMs
       if (result.success) {
