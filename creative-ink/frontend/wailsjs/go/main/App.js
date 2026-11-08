@@ -34,6 +34,10 @@ export function SaveContent(arg1, arg2) {
   return window['go']['main']['App']['SaveContent'](arg1, arg2);
 }
 
+export function SetMainFile(arg1) {
+  return window['go']['main']['App']['SetMainFile'](arg1);
+}
+
 export function SetupRepository(arg1) {
   return window['go']['main']['App']['SetupRepository'](arg1);
 }

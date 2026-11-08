@@ -19,6 +19,8 @@ export function SaveAsDialog(arg1:string):Promise<main.WorkspaceState>;
 
 export function SaveContent(arg1:string,arg2:string):Promise<main.SaveResult>;
 
+export function SetMainFile(arg1:string):Promise<main.WorkspaceState>;
+
 export function SetupRepository(arg1:string):Promise<main.WorkspaceState>;
 
 export function SystemHealthCheck():Promise<system.HealthStatus>;

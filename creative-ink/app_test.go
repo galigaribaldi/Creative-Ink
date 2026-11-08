@@ -381,3 +381,119 @@ func TestEmitWailsIsNoOpBeforeStartup(t *testing.T) {
 	// runtime.EventsEmit calls log.Fatalf with a nil context; this must not.
 	(&App{}).emitWails(EventCompileStarted)
 }
+
+// newProjectApp is a test app whose folder has main.tex and chapters/intro.tex,
+// with intro.tex open in the editor.
+func newProjectApp(t *testing.T) (a *App, events chan emittedEvent, mainTex, chapter string) {
+	t.Helper()
+	a, events = newTestApp(t, okCompile)
+	folder, mainTex := a.workspace()
+	chapter = filepath.Join(folder, "chapters", "intro.tex")
+	if err := os.MkdirAll(filepath.Dir(chapter), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(chapter, []byte("capítulo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.OpenFile(chapter); err != nil {
+		t.Fatal(err)
+	}
+	expectCompileOf(t, events, chapter) // no main yet: the active doc compiles
+	return a, events, mainTex, chapter
+}
+
+func TestSetMainFileCompilesMainWhileEditingAChapter(t *testing.T) {
+	a, events, mainTex, chapter := newProjectApp(t)
+	folder, _ := a.workspace()
+
+	st, err := a.SetMainFile(mainTex)
+	if err != nil || st.MainFilePath != mainTex || st.FilePath != chapter {
+		t.Fatalf("SetMainFile = %+v, %v", st, err)
+	}
+	expectCompileOf(t, events, mainTex)
+
+	// Saving the chapter recompiles the main document, not the chapter.
+	if _, err := a.SaveContent(chapter, "capítulo 2"); err != nil {
+		t.Fatal(err)
+	}
+	expectCompileOf(t, events, mainTex)
+	if a.pdfPath() != filepath.Join(folder, "main.pdf") {
+		t.Fatalf("preview must show the main PDF, got %q", a.pdfPath())
+	}
+
+	// Persisted, relative, in the hidden meta file.
+	meta, err := core.LoadProjectMeta(folder)
+	if err != nil || meta.MainFile != "main.tex" {
+		t.Fatalf("meta = %+v, %v", meta, err)
+	}
+}
+
+func TestMainFileIsReloadedWithTheFolder(t *testing.T) {
+	a, _, mainTex, _ := newProjectApp(t)
+	folder, _ := a.workspace()
+	if _, err := a.SetMainFile(mainTex); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another folder without meta: no main file there.
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, "x.tex"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a.pickFolder = func(string) (string, error) { return other, nil }
+	if st, err := a.OpenFolderDialog(); err != nil || st.MainFilePath != "" {
+		t.Fatalf("other folder = %+v, %v", st, err)
+	}
+
+	// Back to the project: the main file comes back from .creative-ink-meta.
+	a.pickFolder = func(string) (string, error) { return folder, nil }
+	if st, err := a.OpenFolderDialog(); err != nil || st.MainFilePath != mainTex {
+		t.Fatalf("project folder = %+v, %v", st, err)
+	}
+}
+
+func TestSetMainFileValidationAndClear(t *testing.T) {
+	a, events, mainTex, chapter := newProjectApp(t)
+	folder, _ := a.workspace()
+
+	bad := map[string]error{
+		filepath.Join(t.TempDir(), "x.tex"):  core.ErrOutsideFolder,
+		filepath.Join(folder, "notes.txt"):   core.ErrNotTeX,
+		filepath.Join(folder, "missing.tex"): nil, // any error
+	}
+	for path, want := range bad {
+		_, err := a.SetMainFile(path)
+		if err == nil || (want != nil && !errors.Is(err, want)) {
+			t.Errorf("SetMainFile(%q) err = %v, want %v", path, err, want)
+		}
+	}
+	expectNoEvent(t, events)
+
+	if _, err := a.SetMainFile(mainTex); err != nil {
+		t.Fatal(err)
+	}
+	expectCompileOf(t, events, mainTex)
+	st, err := a.SetMainFile("")
+	if err != nil || st.MainFilePath != "" {
+		t.Fatalf("clear = %+v, %v", st, err)
+	}
+	expectCompileOf(t, events, chapter) // back to the active document
+}
+
+func TestDeletedMainFileFallsBackToActiveDocument(t *testing.T) {
+	a, events, mainTex, chapter := newProjectApp(t)
+	if _, err := a.SetMainFile(mainTex); err != nil {
+		t.Fatal(err)
+	}
+	expectCompileOf(t, events, mainTex)
+
+	if err := os.Remove(mainTex); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.compileTarget(); got != chapter {
+		t.Fatalf("compile target = %q, want the active chapter", got)
+	}
+	if st, _ := a.workspaceState(); st.MainFilePath != "" {
+		t.Fatalf("a deleted main file must not be reported, got %q", st.MainFilePath)
+	}
+}

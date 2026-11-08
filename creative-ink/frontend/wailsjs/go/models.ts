@@ -74,6 +74,7 @@ export namespace main {
 	    canceled: boolean;
 	    folderPath: string;
 	    filePath: string;
+	    mainFilePath: string;
 	    tree: core.FileNode;
 	    truncated: boolean;
 	
@@ -87,6 +88,7 @@ export namespace main {
 	        this.canceled = source["canceled"];
 	        this.folderPath = source["folderPath"];
 	        this.filePath = source["filePath"];
+	        this.mainFilePath = source["mainFilePath"];
 	        this.tree = this.convertValues(source["tree"], core.FileNode);
 	        this.truncated = source["truncated"];
 	    }

@@ -59,6 +59,10 @@ type App struct {
 	mu      sync.RWMutex
 	folder  string // absolute path of the open folder
 	docPath string // absolute path of the active .tex ("" if none)
+	// mainFile is the project's root document (absolute, "" if none), read
+	// from <folder>/.creative-ink-meta whenever the folder changes. When set,
+	// it is compiled instead of the active document.
+	mainFile string
 
 	// compilingDoc is the document of the compilation in progress. It is only
 	// touched by the scheduler's worker goroutine (OnStarted → compile →
@@ -76,12 +80,15 @@ type SaveResult struct {
 type WorkspaceState struct {
 	// NeedsSetup: first run, the user has not chosen where the central
 	// repository lives yet (see GetRepositoryOptions / SetupRepository).
-	NeedsSetup bool          `json:"needsSetup"`
-	Canceled   bool          `json:"canceled"`   // the user closed the dialog
-	FolderPath string        `json:"folderPath"` // absolute
-	FilePath   string        `json:"filePath"`   // absolute active .tex, "" if none
-	Tree       core.FileNode `json:"tree"`
-	Truncated  bool          `json:"truncated"` // the tree hit its size limits
+	NeedsSetup bool   `json:"needsSetup"`
+	Canceled   bool   `json:"canceled"`   // the user closed the dialog
+	FolderPath string `json:"folderPath"` // absolute
+	FilePath   string `json:"filePath"`   // absolute active .tex, "" if none
+	// MainFilePath is the project's root document ("" if none). When set it
+	// is what gets compiled and previewed, whatever file is being edited.
+	MainFilePath string        `json:"mainFilePath"`
+	Tree         core.FileNode `json:"tree"`
+	Truncated    bool          `json:"truncated"` // the tree hit its size limits
 }
 
 // OpenedFile is a document loaded into the editor.
@@ -128,6 +135,9 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 		// Overridden by tests; production detects the host OS.
 		repoOptions: system.DetectRepositoryOptions,
 	}
+	if folder != "" {
+		a.mainFile = loadMainFile(folder)
+	}
 	a.compiles = compiler.NewScheduler(
 		func(ctx context.Context) (string, error) {
 			if a.compilingDoc == "" {
@@ -137,9 +147,10 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 		},
 		compiler.Hooks{
 			OnStarted: func() {
-				// Snapshot the active document at the moment the run starts:
-				// coalesced requests always compile the latest one.
-				_, a.compilingDoc = a.workspace()
+				// Snapshot the target at the moment the run starts: coalesced
+				// requests always compile the latest one. With a main file set,
+				// that is the main file, whatever chapter is being edited.
+				a.compilingDoc = a.compileTarget()
 				a.emit(EventCompileStarted, CompileStartedEvent{File: a.compilingDoc})
 			},
 			OnFinished: func(r compiler.Result) {
@@ -189,10 +200,11 @@ func (a *App) openConfiguredRepository() (configured bool, err error) {
 		return true, err
 	}
 
+	main := loadMainFile(settings.RepositoryPath)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.folder == "" {
-		a.folder, a.docPath = settings.RepositoryPath, doc
+		a.folder, a.docPath, a.mainFile = settings.RepositoryPath, doc, main
 	}
 	return true, nil
 }
@@ -331,7 +343,8 @@ func (a *App) SaveContent(path string, content string) (SaveResult, error) {
 	if err := a.files.SaveDocument(content, clean); err != nil {
 		return SaveResult{}, err
 	}
-	if clean == active {
+	// A chapter included with \input changes the main document's PDF too.
+	if clean == active || a.hasMainFile() {
 		a.compiles.Request()
 	}
 	return SaveResult{Saved: true}, nil
@@ -373,6 +386,52 @@ func (a *App) SaveAsDialog(content string) (WorkspaceState, error) {
 	return a.workspaceState()
 }
 
+// SetMainFile makes path (a .tex inside the open folder) the project's root
+// document, or clears it when path is "". The choice is saved in
+// <folder>/.creative-ink-meta, so it survives restarts and travels with the
+// folder. It queues a compilation of the new target.
+func (a *App) SetMainFile(path string) (WorkspaceState, error) {
+	folder, _ := a.workspace()
+	if folder == "" {
+		return WorkspaceState{}, core.ErrNoFolder
+	}
+
+	main := ""
+	if path != "" {
+		clean, err := a.validateTeXPath(folder, path)
+		if err != nil {
+			return WorkspaceState{}, err
+		}
+		if info, err := os.Stat(clean); err != nil || !info.Mode().IsRegular() {
+			return WorkspaceState{}, fmt.Errorf("el archivo %q no existe", filepath.Base(clean))
+		}
+		main = clean
+	}
+
+	meta, err := core.LoadProjectMeta(folder)
+	if err != nil {
+		meta = core.ProjectMeta{} // corrupt: overwrite it with a valid one
+	}
+	meta.MainFile = ""
+	if main != "" {
+		if meta.MainFile, err = core.RelativeMainFile(folder, main); err != nil {
+			return WorkspaceState{}, err
+		}
+	}
+	if err := core.SaveProjectMeta(folder, meta); err != nil {
+		return WorkspaceState{}, fmt.Errorf("guardar el archivo principal: %w", err)
+	}
+
+	a.mu.Lock()
+	if a.folder == folder { // the folder did not change meanwhile
+		a.mainFile = main
+	}
+	a.mu.Unlock()
+
+	a.compiles.Request()
+	return a.workspaceState()
+}
+
 // RequestCompile queues a background compilation of the active document as
 // it is on disk, without saving. It returns at once and reports false only
 // while the app is shutting down.
@@ -389,10 +448,59 @@ func (a *App) workspace() (folder, docPath string) {
 	return a.folder, a.docPath
 }
 
+// setWorkspace changes the open folder and active document. Entering a
+// different folder reloads its main file from .creative-ink-meta (read
+// before locking: it is disk I/O).
 func (a *App) setWorkspace(folder, docPath string) {
+	current, _ := a.workspace()
+	changed := folder != current
+	var main string
+	if changed {
+		main = loadMainFile(folder)
+	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.folder, a.docPath = folder, docPath
+	if changed {
+		a.mainFile = main
+	}
+}
+
+// loadMainFile returns the valid main file stored in folder's meta, or "".
+func loadMainFile(folder string) string {
+	meta, err := core.LoadProjectMeta(folder)
+	if err != nil {
+		log.Printf("[project] %v; se ignora el archivo principal", err)
+		return ""
+	}
+	return meta.MainFilePath(folder)
+}
+
+// effectiveMainFile is the main file if it still exists on disk, else "".
+func (a *App) effectiveMainFile() string {
+	a.mu.RLock()
+	main := a.mainFile
+	a.mu.RUnlock()
+	if main == "" {
+		return ""
+	}
+	if info, err := os.Stat(main); err != nil || !info.Mode().IsRegular() {
+		return "" // deleted or renamed outside the app: fall back to the active doc
+	}
+	return main
+}
+
+func (a *App) hasMainFile() bool { return a.effectiveMainFile() != "" }
+
+// compileTarget is what gets compiled and previewed: the main file when the
+// project has one, otherwise the active document.
+func (a *App) compileTarget() string {
+	if main := a.effectiveMainFile(); main != "" {
+		return main
+	}
+	_, doc := a.workspace()
+	return doc
 }
 
 func (a *App) workspaceState() (WorkspaceState, error) {
@@ -404,7 +512,13 @@ func (a *App) workspaceState() (WorkspaceState, error) {
 	if err != nil {
 		return WorkspaceState{}, err
 	}
-	return WorkspaceState{FolderPath: folder, FilePath: doc, Tree: tree, Truncated: truncated}, nil
+	return WorkspaceState{
+		FolderPath:   folder,
+		FilePath:     doc,
+		MainFilePath: a.effectiveMainFile(),
+		Tree:         tree,
+		Truncated:    truncated,
+	}, nil
 }
 
 // validateTeXPath accepts only .tex files inside the open folder.
@@ -419,13 +533,14 @@ func (a *App) validateTeXPath(folder, path string) (string, error) {
 	return clean, nil
 }
 
-// pdfPath is the PDF produced by latexmk for the active document ("" if none).
+// pdfPath is the PDF of the compile target ("" if none): the main file's
+// when the project has one, so the preview does not change per chapter.
 func (a *App) pdfPath() string {
-	_, doc := a.workspace()
-	if doc == "" {
+	target := a.compileTarget()
+	if target == "" {
 		return ""
 	}
-	return compiler.PDFPath(doc)
+	return compiler.PDFPath(target)
 }
 
 // emitWails is the production emitter. It is a no-op before startup.
