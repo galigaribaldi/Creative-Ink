@@ -3,6 +3,7 @@
 // can save, switch files or compile without holding a reference to
 // CodeMirror and without prop drilling.
 import {
+  ConfirmClose,
   GetWorkspace,
   OpenFolderDialog,
   RefreshWorkspace,
@@ -12,14 +13,16 @@ import {
   SetupRepository
 } from '../../wailsjs/go/main/App.js'
 import { EventsOn } from '../../wailsjs/runtime/runtime.js'
-import { applyTree, applyWorkspace, workspace } from './workspace.svelte.js'
+import { applyTree, applyWorkspace, compileTarget, workspace } from './workspace.svelte.js'
 
-// Event emitted by Go when files or folders change outside the app (app.go).
-export const WORKSPACE_CHANGED = 'workspace:changed'
+// Events emitted by Go (app.go).
+export const WORKSPACE_CHANGED = 'workspace:changed' // files changed outside the app
+export const APP_BEFORE_CLOSE = 'app:before-close' // the window is closing
 
 /**
  * @typedef {{
  *   save: () => void,
+ *   saveAndCompile: () => Promise<void>,
  *   waitIdle: () => Promise<boolean>,
  *   isDirty: () => boolean,
  *   getContent: () => string,
@@ -148,9 +151,13 @@ export async function setMainFile(path) {
   }
 }
 
-/** Saves now, skipping the autosave debounce. A save also queues a compile. */
+/**
+ * Cmd/Ctrl+S and the toolbar's Guardar: saves now, skipping the debounce,
+ * and then compiles. Without a document, it only compiles.
+ */
 export function saveDocument() {
-  editor?.save()
+  if (editor) void editor.saveAndCompile()
+  else if (compileTarget()) void RequestCompile()
 }
 
 /** Native "Guardar como…": writes the editor content to a new .tex. */
@@ -169,13 +176,27 @@ export async function saveAs() {
 }
 
 /**
- * Compiles the active document. Unsaved edits are saved first (the save
- * queues the compilation itself); otherwise Go compiles what is on disk.
+ * The toolbar's Compilar: pending edits are saved first, then Go compiles
+ * the target (main file or active document). Same as Cmd/Ctrl+S.
  */
 export function compileDocument() {
-  if (editor?.isDirty()) {
-    editor.save()
-  } else {
-    void RequestCompile()
-  }
+  saveDocument()
+}
+
+/**
+ * Safe close (Go's OnBeforeClose, see app.go): when the window is closing,
+ * flush CodeMirror to disk and tell Go whether everything was saved. Go
+ * quits anyway after 2 s, and asks before discarding a failed save.
+ * @returns {() => void} unsubscribe
+ */
+export function listenAppEvents() {
+  return EventsOn(APP_BEFORE_CLOSE, async () => {
+    let saved = true
+    try {
+      saved = editor ? await editor.waitIdle() : true
+    } catch {
+      saved = false
+    }
+    void ConfirmClose(saved)
+  })
 }

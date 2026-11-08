@@ -5,7 +5,14 @@
   import RepositorySetup from './components/RepositorySetup.svelte'
   import Sidebar from './components/Sidebar.svelte'
   import Workspace from './components/Workspace.svelte'
-  import { initWorkspace, listenWorkspaceEvents, openFolder, saveAs } from './lib/actions.js'
+  import {
+    initWorkspace,
+    listenAppEvents,
+    listenWorkspaceEvents,
+    openFolder,
+    saveAs,
+    saveDocument
+  } from './lib/actions.js'
   import { listenCompileEvents, resetCompilation } from './lib/compilation.svelte.js'
   import { toggleSidebar, ui } from './lib/ui.svelte.js'
   import { compileTarget, workspace } from './lib/workspace.svelte.js'
@@ -18,6 +25,8 @@
   onDestroy(listenCompileEvents())
   // External changes (a pasted image, a new chapter) refresh the explorer.
   onDestroy(listenWorkspaceEvents())
+  // Closing the window flushes CodeMirror first (Go's OnBeforeClose).
+  onDestroy(listenAppEvents())
   void initWorkspace()
 
   // A different compile target (another file, or the main file changed): the
@@ -29,13 +38,17 @@
   })
 
   /**
-   * Global shortcuts. Cmd/Ctrl+S is handled by CodeMirror itself.
-   * Cmd/Ctrl+B sidebar · Cmd/Ctrl+O open folder · Cmd/Ctrl+Shift+S save as.
+   * Global shortcuts (they also fire inside CodeMirror: its keydown bubbles).
+   * Cmd/Ctrl+S save + compile · Cmd/Ctrl+Shift+S save as
+   * Cmd/Ctrl+B sidebar · Cmd/Ctrl+O open folder
    */
   function onkeydown(event) {
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return
     const key = event.key.toLowerCase()
-    if (key === 'b' && !event.shiftKey) {
+    if (key === 's' && !event.shiftKey) {
+      event.preventDefault() // no "Save page" from the webview
+      saveDocument()
+    } else if (key === 'b' && !event.shiftKey) {
       event.preventDefault()
       toggleSidebar()
     } else if (key === 'o' && !event.shiftKey) {

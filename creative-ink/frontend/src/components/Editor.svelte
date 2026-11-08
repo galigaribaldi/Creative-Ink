@@ -13,13 +13,16 @@
   import { StreamLanguage, bracketMatching, indentOnInput } from '@codemirror/language'
   import { stex } from '@codemirror/legacy-modes/mode/stex'
   import { oneDark } from '@codemirror/theme-one-dark'
-  import { OpenFile, SaveContent } from '../../wailsjs/go/main/App.js'
+  import { OpenFile, RequestCompile, SaveContent } from '../../wailsjs/go/main/App.js'
   import { registerEditor } from '../lib/actions.js'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
-  // Inactivity window before autosaving. Each save of the active document
-  // also queues a background compilation in Go (reported through events).
+  // Two inactivity windows, both restarted by every keystroke:
+  //  - 1 s → save to disk (cheap: protects the text early).
+  //  - 3 s → ask Go to compile (expensive: latexmk must not run while the
+  //    user is still typing). Cmd/Ctrl+S skips both and does both now.
   const SAVE_DELAY_MS = 1000
+  const COMPILE_DELAY_MS = 3000
 
   const LABELS = {
     empty: 'Sin documento',
@@ -42,7 +45,8 @@
   // docFile is the file whose text is in CodeMirror. Every save captures it
   // at flush time, so text can never be written to another file.
   let docFile = ''
-  let timer = null // pending debounce timeout
+  let timer = null // pending save debounce
+  let compileTimer = null // pending compile debounce
   let saving = false // a SaveContent call is in flight
   let pending = false // a save was requested while another was in flight
   let dirty = false // the editor holds edits not yet sent to Go
@@ -56,13 +60,29 @@
   let fileName = $state('')
   let filePath = $state('')
 
-  // Called on every document change: restart the inactivity timer.
-  // Keystrokes only reset a timer; nothing crosses the IPC bridge here.
+  // Called on every document change: restart both inactivity timers.
+  // Keystrokes only reset timers; nothing crosses the IPC bridge here.
   function scheduleSave() {
     dirty = true
     status = 'dirty'
     clearTimeout(timer)
     timer = setTimeout(flush, SAVE_DELAY_MS)
+    clearTimeout(compileTimer)
+    compileTimer = setTimeout(saveAndCompile, COMPILE_DELAY_MS)
+  }
+
+  /**
+   * Saves pending edits now and, once they are on disk, asks Go to compile
+   * (Go compiles the project's main file when there is one). Used by
+   * Cmd/Ctrl+S, the toolbar and the 3 s idle timer. A failed save does not
+   * compile: the PDF would not match the text.
+   */
+  async function saveAndCompile() {
+    clearTimeout(compileTimer)
+    compileTimer = null
+    const clean = await waitIdle()
+    // Nothing to compile without a document (e.g. behind the first-run screen).
+    if (clean && (docFile || workspace.mainFilePath)) void RequestCompile()
   }
 
   // Sends the latest content of docFile to Go. At most one SaveContent is in
@@ -138,8 +158,6 @@
         EditorView.lineWrapping,
         editability.of(editabilityFor(canEdit)),
         keymap.of([
-          // Cmd/Ctrl+S saves immediately, skipping the debounce.
-          { key: 'Mod-s', preventDefault: true, run: () => (flush(), true) },
           ...defaultKeymap,
           ...historyKeymap,
           indentWithTab
@@ -158,6 +176,8 @@
 
   /** Shows `content` as the document `path`. setState fires no update listener (no autosave) and starts a fresh undo history for the file. */
   function load(path, content) {
+    clearTimeout(compileTimer) // OpenFile already queued a compile in Go
+    compileTimer = null
     docFile = path
     dirty = false
     view.setState(createState(content, path !== ''))
@@ -211,6 +231,7 @@
     view = new EditorView({ parent: container, state: createState('', false) })
     const unregister = registerEditor({
       save: flush,
+      saveAndCompile,
       waitIdle,
       isDirty: () => dirty || saving || timer !== null,
       getContent: () => view?.state.doc.toString() ?? '',
@@ -219,6 +240,7 @@
 
     return () => {
       unregister()
+      clearTimeout(compileTimer)
       switchSeq++ // abandon an in-flight switch
       if (dirty) flush() // persist edits still inside the debounce window
       view?.destroy()
