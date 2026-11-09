@@ -40,12 +40,21 @@ Those files win over this skill if they disagree.
 4. **Non-blocking execution.** Long-running work (compilation, scans, downloads) MUST NOT block the
    IPC return.
    - Bad: the frontend waits up to 60 s for a binding that compiles.
-   - Good: `SaveContent()` saves and returns at once. Go starts the compilation in a goroutine and
-     emits `compile:started` and `compile:finished` (with a result payload).
+   - Good: `SaveContent()` saves and returns at once (it never compiles). Compiling is a separate
+     request, `RequestCompile(trigger)` (`"auto"` from the idle timer, rejected while the
+     `compile.auto` setting is off; `"manual"` from ⌘S), which queues a background job that emits
+     `compile:started` and `compile:finished` (with a result payload).
    - Coalesce bursts: if a request arrives while a job runs, mark it dirty and run **one** more
      job with the latest state when the current one ends. Do not queue N jobs.
    - Reference implementation: `internal/compiler/scheduler.go` (`Scheduler`: single worker,
-     coalescing, panic recovery, `Close` with cancellation) wired in `app.go` through `Hooks`.
+     coalescing, bounded cancellation of young automatic runs, panic recovery, `Close` with
+     cancellation) wired in `app.go` through `Hooks`.
+   - Long output (terminal, manual builds): stream it to disk (`core.OutputSpool`) and emit
+     throttled progress events; let the UI pull the full text on demand (`ReadTerminalOutput`).
+     Never hold minutes of output in memory or return it in one IPC message.
+   - Settings: read and write them only through the config service (`internal/config`,
+     `App.GetConfig`/`SetConfig`, event `config:changed`), never by opening `settings.json` or
+     `.creative-ink-meta` directly.
    - Changing a binding or event alters the IPC contract: update `docs/MAP.md` §3 and the Svelte
      side in the same change.
 5. **Clean error handling.**

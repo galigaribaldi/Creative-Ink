@@ -31,7 +31,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     │   │   └── scheduler.go      ← Scheduler: compilación en segundo plano, una a la vez, juntando ráfagas
     │   ├── core/                 ← dominio: proyectos, archivos, (futuro) plugins
     │   │   ├── file_manager.go   ← FileManager: guardado atómico (tmp + rename) y carga de documentos
-    │   │   ├── workspace.go      ← ScanTree, ResolveInFolder, DefaultTeXFile, PrepareRepository
+    │   │   ├── workspace.go      ← ScanTree, ResolveInFolder, DefaultTeXFile, IsEditableFile
     │   │   ├── settings.go       ← <UserConfigDir>/creative-ink/settings.json: repositorio, autoCompile y recientes (UpdateSettings no pisa otros campos)
     │   │   ├── repository.go     ← estructura del repositorio, Slugify, CreateProject, CreateQuickDoc, StaleQuickDocs
     │   │   ├── hide_{windows,other}.go ← ocultar .creative-ink en Windows (atributo hidden)
@@ -67,9 +67,10 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   │   ├── StartScreen.svelte ← cada sesión: Nuevo proyecto, Documento rápido, proyectos, recientes y aviso de documentos rápidos antiguos
         │   │   └── Preview.svelte     ← PDF.js en <canvas>, doble buffer, conserva la página al recargar
         │   ├── lib/
-        │   │   ├── ui.svelte.js          ← estado visual ($state): sidebarOpen, activeTool, healthOpen. Nunca va a Go
-        │   │   ├── compilation.svelte.js ← reflejo de los eventos compile:* (status, logs, pdfTimestamp)
-        │   │   ├── workspace.svelte.js   ← reflejo de Go: currentFolderPath, currentFilePath, fileTree
+        │   │   ├── ui.svelte.js          ← estado visual ($state): sidebarOpen, activeTool, healthOpen, splitEditor, focusedPane, startOpen. Nunca va a Go
+        │   │   ├── compilation.svelte.js ← reflejo de los eventos compile:* (status, logs, pdfVersion, cached, disparador adaptativo)
+        │   │   ├── config.svelte.js      ← reflejo del servicio de configuración (autoCompile) y del evento config:changed
+        │   │   ├── workspace.svelte.js   ← reflejo de Go: carpeta, archivo de cada panel, último .tex, archivo principal, árbol, avisos de proyecto grande
         │   │   ├── actions.js            ← acciones globales y runCommand (atajos y menú nativo); registro de los dos paneles del editor
         │   │   ├── languages.js          ← resaltado por tipo de archivo (stex, BibTeX propio, lua, python, shell, yaml)
         │   │   ├── terminal.svelte.js    ← entradas y historial de la terminal (sobreviven al cambio de pestaña)
@@ -106,14 +107,14 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 
 | SO | "Solo para mí" (`user`) | "Para todos los usuarios" (`shared`) | Cómo se calcula |
 |----|-------------------------|--------------------------------------|-----------------|
-| macOS | `~/Documents/My Creative Ink Repository` | `/Users/Shared/My Creative Ink Repository` | Rutas fijas del sistema |
-| Linux | `<XDG_DOCUMENTS_DIR>/My Creative Ink Repository` (p. ej. `~/Documentos/…`) | **No disponible** (no hay una carpeta compartida estándar sin `sudo`) | `$XDG_CONFIG_HOME/user-dirs.dirs`; si falta, `~/Documents` |
-| Windows | `<FOLDERID_Documents>\My Creative Ink Repository` (puede estar en OneDrive) | `<FOLDERID_PublicDocuments>\My Creative Ink Repository` (normalmente `C:\Users\Public\Documents`) | Known Folders (`golang.org/x/sys/windows`), nunca `%USERPROFILE%` a mano |
+| macOS | `~/Documents/My-Creative-Ink-Repository` | `/Users/Shared/My-Creative-Ink-Repository` | Rutas fijas del sistema |
+| Linux | `<XDG_DOCUMENTS_DIR>/My-Creative-Ink-Repository` (p. ej. `~/Documentos/…`) | **No disponible** (no hay una carpeta compartida estándar sin `sudo`) | `$XDG_CONFIG_HOME/user-dirs.dirs`; si falta, `~/Documents` |
+| Windows | `<FOLDERID_Documents>\My-Creative-Ink-Repository` (puede estar en OneDrive) | `<FOLDERID_PublicDocuments>\My-Creative-Ink-Repository` (normalmente `C:\Users\Public\Documents`) | Known Folders (`golang.org/x/sys/windows`), nunca `%USERPROFILE%` a mano |
 
 - **Avisos del diagnóstico:** en macOS, si Documentos se sincroniza con iCloud; en Windows, si Documentos está en OneDrive (cada compilación subiría `.aux`/`.pdf`). En Linux, cuando la carpeta XDG no es `~/Documents`.
 - **Por qué en el primer arranque y no en el instalador:** Wails v2 solo genera instalador en Windows (NSIS); en macOS es un `.app` y en Linux un binario. El primer arranque funciona igual en los tres sistemas.
 - **La ruta la decide Go:** el frontend solo envía `"user"` o `"shared"` a `SetupRepository`; los ámbitos desconocidos o no disponibles se rechazan.
-- **Creación:** `core.PrepareRepository` con `MkdirAll(…, 0755)`. En modo compartido, la carpeta pasa a `0777` + sticky (como `/Users/Shared`: todos pueden crear documentos y solo su dueño puede borrarlos); en Windows mandan las ACL de Documentos públicos. Lleva un `main.tex` inicial con `O_EXCL` solo si no hay ningún `.tex`: **nunca sobrescribe**.
+- **Creación:** `core.EnsureRepositoryLayout` con `MkdirAll(…, 0755)`: crea `.creative-ink/` y `tmp-Workspaces/`, y **ningún documento en la raíz** (es el lanzador). En modo compartido, la raíz y `tmp-Workspaces` pasan a `0777` + sticky (como `/Users/Shared`: todos pueden crear documentos y solo su dueño puede borrarlos); en Windows mandan las ACL de Documentos públicos. Los archivos nuevos se crean con `O_EXCL`: **nunca sobrescribe**.
 - **Elección guardada** por usuario en `<os.UserConfigDir()>/creative-ink/settings.json` (macOS `~/Library/Application Support`, Linux `~/.config`, Windows `%AppData%`). Si el archivo está corrupto, se vuelve a preguntar.
 - El usuario puede abrir cualquier otra carpeta con ⌘O; el repositorio central es solo el punto de partida.
 
@@ -200,9 +201,9 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 - **Editor dividido (⌘\, botón en la ActionBar, menú Ver):** un segundo panel junto al principal para ver dos archivos lado a lado (por ejemplo, un capítulo y `referencias.bib`); el editor ocupa 2/3 del ancho y la vista previa 1/3. El panel principal es el documento activo de Go (`OpenFile`: decide qué se compila; Guardar como actúa sobre él); el segundo solo lee y guarda en su sitio (`LoadFile` + `SaveContent`). El explorador abre en el panel con el foco (marcado con una línea de acento). **Un mismo archivo nunca está en los dos paneles** (sus autoguardados se pisarían): elegirlo enfoca el panel que ya lo tiene. Guardar con ⌘S, cambiar de carpeta y cerrar la app vuelcan los dos paneles; cerrar la división guarda antes el segundo. *Pendiente:* divisor arrastrable y recordar la división entre sesiones.
 - **Dos debounces** que cada tecla reinicia (Sección 12):
   - **1 s → guardar** (`SAVE_DELAY_MS`): el documento se convierte en texto **una sola vez** y se envía con `SaveContent`. Nunca hay más de un guardado en curso; los que llegan mientras tanto se juntan en uno con el contenido más reciente.
-  - **3 s → compilar** (`COMPILE_DELAY_MS`): `saveAndCompile()` espera a que el guardado llegue a disco y llama a `RequestCompile()`. Mientras se escribe de corrido, latexmk no se ejecuta.
+  - **Compilar tras la inactividad** (adaptativo, 3 s como mínimo, §4.5): **solo si `compile.auto` está activado** (por defecto no, Sección 20). `saveAndCompile()` espera a que el guardado llegue a disco y llama a `RequestCompile('auto')`. Mientras se escribe de corrido, latexmk no se ejecuta.
 - **Cmd+S (macOS) / Ctrl+S (Linux y Windows) ya está soportado:** listener global en `App.svelte` con `preventDefault()`. Guarda al instante, sin esperar los debounces, y luego compila. También funciona dentro de CodeMirror (su `keydown` llega a `window`; se quitó el `Mod-s` del keymap del editor para que no haya dos manejadores). Los botones Guardar y Compilar hacen lo mismo. Si el guardado falla, no se compila.
-- **Seguridad de datos:** si falla `LoadContent`, el editor **no se monta**, para que el autoguardado no sobrescriba el archivo con un documento vacío.
+- **Seguridad de datos:** si falla `OpenFile` (o `LoadFile` en el segundo panel), el editor no cambia de archivo y queda de solo lectura hasta abrir otro, así el autoguardado nunca sobrescribe un archivo con un documento vacío.
 - **Cierre seguro (`OnBeforeClose`, Sección 12):** protocolo en dos fases sin bloquear (en Windows el hook corre en el hilo de la UI, y `runtime.Quit` vuelve a llamarlo en los tres sistemas):
   1. Primer cierre → `App.beforeClose` lo **previene**, emite `app:before-close` y arma un temporizador de 2 s (`closeFlushTimeout`).
   2. La UI hace `waitIdle()` (vuelca CodeMirror a disco) → `ConfirmClose(saved)` → `closeAllowed` → `runtime.Quit` → `beforeClose` ahora permite cerrar.
@@ -214,7 +215,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
   - **Resolución de binarios:** `system.FindBinary` encuentra latexmk; su directorio se antepone al `PATH` del subproceso para que latexmk encuentre xelatex y biber aunque la app se abra desde el Finder.
   - **Seguridad:** el nombre de archivo no puede tener directorios ni empezar con `-`. Las ejecuciones van en serie (mutex) y tienen un límite de 60 s.
   - **Logs:** stdout y stderr van al mismo buffer. Si falla, los bloques `! ...` hasta `l.<n>` (más su línea de continuación) salen primero de `<doc>.log` y, si el `.log` no tiene errores, de stdout. Después va la cola de la salida (máximo 32 KB). Un bloque sin `l.<n>` se corta a las 6 líneas o en el siguiente `! `.
-- **Flujo asíncrono:** autoguardado → `SaveContent` → `SaveDocument` → responde `{saved}` → `Scheduler.Request()` → goroutine: `compile:started` → `CompileLaTeXContext` → `compile:finished` → `App.svelte` actualiza `pdfTimestamp` → `Preview` recarga el canvas.
+- **Flujo asíncrono:** autoguardado → `SaveContent` → responde `{saved}` (no compila). Compilar es otra petición: `RequestCompile('auto'|'manual')` → `Scheduler.Request(trigger)` → goroutine: `compile:started` → `CompileLaTeXContext` → `compile:finished` → `compilation.svelte.js` actualiza `pdfVersion` → `Preview` recarga el canvas.
   - **Scheduler:** un solo worker. Si llegan peticiones mientras compila, se juntan en **una** compilación más, que lee el archivo más reciente del disco: tres guardados rápidos producen como mucho dos compilaciones. Un `panic` se recupera y se informa como fallo. Al cerrar la app, `OnShutdown` → `Close(3s)` cancela latexmk y descarta lo pendiente.
   - **Cancelación acotada (Sección 20):** cada compilación tiene su propio contexto y su *trigger* (`auto`/`manual`). Una petición nueva **cancela la compilación automática en curso** si todavía es joven (menos de la mitad de lo que tardó la última, o 5 s antes de la primera) y la siguiente empieza en cuanto latexmk muere. Límites contra la inanición: **nunca** se cancela una manual (⌘S), y la que sigue a una cancelada **no se puede cancelar** (nunca dos veces seguidas). La cancelada emite `compile:finished` con `canceled: true` y no publica PDF. *Riesgo conocido:* un `.aux` a medias puede costar una pasada extra; latexmk suele recuperarse solo.
   - **Árbol de procesos:** latexmk y las herramientas de `ci` se lanzan con `system.KillTreeOnCancel`. En macOS/Linux van en su propio grupo de procesos (`Setpgid`) y cancelar hace `kill(-pid)`; en Windows, `taskkill /T /F` (y sin ventana de consola). Antes, cancelar mataba latexmk pero dejaba **xelatex/biber huérfanos** escribiendo el mismo `.aux`.
@@ -271,7 +272,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 - **Fachada:** `RunTerminalCommand` ejecuta en la carpeta abierta, **un comando a la vez** (`termMu`), y devuelve `TerminalResult`. `CancelTerminalCommand` lo detiene; `OnShutdown` también. El binding puede tardar hasta 30 s: no bloquea otros bindings (Wails atiende cada llamada en su propia goroutine), y la UI muestra "Ejecutando…".
 - **Frontend:** `BottomPanel.svelte` bajo el editor, con pestañas **"Errores LaTeX" | "Terminal"**, siempre montado. Un error de compilación lo abre en su pestaña solo si estaba cerrado (si no, un punto rojo en la pestaña), y lo cierra al compilar bien si lo había abierto él. `TerminalPanel.svelte`: Enter ejecuta, ↑/↓ recorre el historial, Ctrl+C o "Detener" cancela, `clear`/`cls` limpia la vista. Atajos: **Ctrl+`** o **⌘J / Ctrl+J**, y botón en la ActionBar.
 - **Seguridad:** `RunTerminalCommand` es **ejecución arbitraria de comandos por diseño**. Si alguna vez se ejecutara JavaScript ajeno en el WebView (por ejemplo, por una vulnerabilidad de PDF.js con un PDF malicioso), podría usarla. Reglas: la UI **solo** le pasa lo que el usuario escribió en la terminal, **nunca** texto derivado de documentos, logs o nombres de archivo; mantener `pdfjs-dist` actualizado; y no renderizar HTML que no sea nuestro (`{@html}` está prohibido con contenido externo).
-- **Pendiente:** salida en streaming (eventos) en lugar de esperar al final, PTY real y `xterm.js` (requiere instalar dependencias), y Job Objects en Windows.
+- **Salida completa en disco (Sección 20):** cada comando se guarda mientras corre (`core.OutputSpool`, `ExecuteCommandStream`) y "Salida completa" la lee con `ReadTerminalOutput` (ver §4.3.6).
+- **Pendiente:** PTY real y `xterm.js` (requiere instalar dependencias), y Job Objects en Windows para la shell.
 
 ## 4.3.5 SyncTeX: navegación bidireccional (Sección 16)
 - **Compilación:** latexmk lleva ahora `-synctex=1` (escribe `<doc>.synctex.gz` junto al PDF). `<doc>.synctex(busy)`, que existe solo mientras TeX escribe, se filtra del explorador y del watcher.
@@ -340,60 +342,26 @@ Los comandos se aplican al **archivo principal (★)** o, si no hay, al `.tex` a
 - [ ] **Paso 4 — Registro de comandos `ci`** + guía autogenerada (`.creative-ink/guide/ci-guia.tex` → PDF) + `ci guide`. *La salida en disco y el progreso ya están hechos (Sección 20).*
 - [ ] **Paso 5 — Host de plugins** (JSON-RPC por stdio, manifiesto con contribuciones y capacidades).
 
-### Análisis original (propuesta del 2026-11-08)
-
-> **Solo análisis, nada implementado.** Resuelve tres problemas abiertos con una sola base: (1) `ci config autocompile` se guarda pero la UI no lo respeta; (2) el `.latexmkrc` de un proyecto ajeno es código Perl que latexmk ejecuta; (3) los plugins futuros necesitarán aportar comandos y ajustes.
-
-### Diagnóstico
-- **No hay una fuente única de configuración.** Hoy hay ajustes en tres sitios sin un contrato común: `settings.json` (usuario: repositorio, `autoCompile`), `.creative-ink-meta` (proyecto: archivo principal) y constantes del código (motor `-xelatex`, límites de tiempo, debounces). La terminal escribe en un archivo que la UI no escucha.
-- **Go no puede hacer cumplir `autoCompile`.** `RequestCompile()` no distingue un disparo automático de ⌘S.
-- **No hay noción de confianza.** Cualquier carpeta abierta se compila de inmediato con su `.latexmkrc`; lo mismo pasará con los plugins y con un futuro `shell-escape`.
-- **`ci` tiene sus comandos fijos en un `switch`.** Un plugin no podría añadir `ci check bib` sin tocar el núcleo, y la ayuda no se puede generar.
-- **El requisito del MVP "motor seleccionable" (pdflatex/xelatex/lualatex) sigue sin implementar** y necesita esta misma base.
-
-### Propuesta en 4 fases
-**Fase 1 — Servicio de configuración (base de todo lo demás).**
-- `internal/config`, sin Wails: un **registro de claves tipadas** declaradas en código (`id`, tipo, valor por defecto, ámbitos permitidos, descripción, si requiere confianza). Claves iniciales: `compile.auto` (bool), `compile.engine` (`xelatex`\|`pdflatex`\|`lualatex`), `compile.autoDelayMs`, `compile.shellEscape` (requiere confianza).
-- **Capas con precedencia:** valores por defecto < **usuario** (`settings.json`) < **proyecto** (`<carpeta>/.creative-ink/settings.json`) < sesión (memoria). Es el modelo de VS Code (*User* / *Workspace*).
-- **Una sola API para todos:** bindings `GetConfig()` / `SetConfig(key, value, scope)` y el evento `config:changed {key, value, scope}`. La terminal (`ci config list | get <k> | set <k> <v> [--user|--project]`), la UI y los plugins pasan por el mismo camino; nadie lee `settings.json` directamente.
-- **`autoCompile` con dos cerrojos:** la UI refleja `config:changed` en un store y no programa el temporizador; además Go rechaza las peticiones automáticas: `RequestCompile(trigger)` con `trigger: "auto" | "manual"` (cambio de contrato). Así un plugin o un frontend con fallos no puede saltárselo.
-- **Recomendación:** `compile.auto` por **proyecto** (la tesis pesada sí, un documento corto no), con el valor del usuario como respaldo.
-
-**Fase 2 — Confianza de carpetas (*workspace trust*).**
-- **Almacén de confianza** del usuario (en `settings.json`): ruta real de la carpeta + **hash del `.latexmkrc`**. Si alguien modifica el archivo (por ejemplo, tras un `git pull`), se vuelve a preguntar.
-- **Carpeta sin confianza y con `latexmkrc`/`.latexmkrc`:** se compila en **modo restringido** con `latexmk -norc` (más los rc del sistema y del usuario de forma explícita, con `-r`), sin compilación automática hasta decidir, y `compile.shellEscape` bloqueado. Una franja discreta en la UI ofrece "Confiar en esta carpeta"; en la terminal, `ci trust` / `ci trust status` / `ci untrust`.
-- **Sin `.latexmkrc`:** no se pregunta nada (no hay código del proyecto que ejecutar).
-- La misma confianza se aplicará a los plugins que pertenezcan al proyecto.
-
-**Fase 3 — Registro de comandos `ci`.**
-- Cada comando se registra con su nombre, uso, descripción, argumentos (una lista cerrada o un validador), si es largo y si **requiere confianza**. `ci help` se genera del registro, y un binding `ListTerminalCommands()` permitirá autocompletar en el panel.
-- **Salida en streaming:** evento `terminal:output {runId, chunk}` en lugar de devolver todo al final. Hace falta para builds largos y para plugins.
-
-**Fase 4 — Host de plugins (requiere la decisión pendiente del modelo de plugins).**
-- **Recomendación inicial (se mantiene):** procesos externos que hablan JSON-RPC por stdin/stdout, al estilo LSP. Son aislados, pueden escribirse en cualquier lenguaje y se pueden matar con timeout.
-- Un **manifiesto** declara sus **contribuciones** (comandos `ci <plugin> …` o subcomandos como `ci check bib`, claves de configuración `plugin.<id>.*`) y sus **capacidades** (leer o escribir dentro del proyecto, ejecutar herramientas, red). El host las hace cumplir y pide confianza.
-- `ci check` y `ci formatear` (los scripts `tools/*.py` de la tesis) serían el primer plugin de ejemplo.
-
-### Decisiones que necesita el usuario
-1. **Ámbito de `compile.auto`:** por proyecto con respaldo del usuario (recomendado) o solo por usuario.
-2. **Ubicación de la configuración del proyecto:** carpeta `<proyecto>/.creative-ink/` (recomendado; deja espacio para plugins y absorbería `.creative-ink-meta`) o ampliar `.creative-ink-meta`.
-3. **Carpeta sin confianza con `.latexmkrc`:** modo restringido con `-norc` y sin compilación automática hasta confiar (recomendado), o solo avisar.
-4. **Modelo de plugins:** confirmar procesos externos con JSON-RPC por stdio.
-5. **Orden de implementación:** Fase 1 → 2 → 3 → 4 (recomendado: la 1 desbloquea `autoCompile` y el motor seleccionable).
+### Diseño pendiente (pasos 3 a 5)
+El análisis original del 2026-11-08 quedó resuelto en los pasos 1 y 2: `compile.auto` por proyecto con respaldo del usuario, configuración del proyecto en `.creative-ink-meta` y orden 1 → 2 → 3 → 4. Queda como referencia para lo que falta:
+- **Confianza (paso 3):** almacén del usuario con la ruta real de la carpeta y el **hash del `.latexmkrc`** (si cambia, por ejemplo tras un `git pull`, se vuelve a preguntar). Una carpeta sin confianza y con `latexmkrc`/`.latexmkrc` se compila en **modo restringido** (`latexmk -norc`, con los rc del sistema y del usuario explícitos con `-r`), sin compilación automática y sin `shell-escape`. Una franja discreta en la UI ofrece "Confiar en esta carpeta"; en la terminal, `ci trust` / `ci trust status` / `ci untrust`. Sin `.latexmkrc` no se pregunta nada.
+- **Registro de comandos `ci` (paso 4):** cada comando con nombre, uso, descripción, argumentos y si requiere confianza. `ci help` y la guía en LaTeX se generan del registro, y `ListTerminalCommands()` permitirá autocompletar.
+- **Host de plugins (paso 5; el modelo sigue sin decidir):** recomendación, procesos externos con JSON-RPC por stdin/stdout, al estilo LSP. Un manifiesto declara contribuciones (comandos `ci <plugin> …`, claves `plugin.<id>.*`) y capacidades (leer o escribir en el proyecto, herramientas, red). `ci check` y `ci formatear` (los `tools/*.py` de la tesis) serían el primer plugin.
+- **Claves de configuración previstas:** `compile.engine` (`xelatex`\|`pdflatex`\|`lualatex`), `compile.timeoutMs`, `compile.shellEscape` (requerirá confianza).
 
 ## 4.4 Deuda técnica conocida (análisis del 2026-11-05)
 1. ~~**Guardar y compilar están acoplados en `SaveContent`.**~~ **Resuelto el 2026-11-06:** `SaveContent` responde de inmediato y la compilación va por el `Scheduler` con eventos (ver §4.3).
 2. ~~**Se compila con cada pausa de 1 s.**~~ **Resuelto el 2026-11-07:** guardar (1 s) y compilar (3 s) tienen debounces separados; `SaveContent` ya no compila. **Cmd+S / Ctrl+S ya está soportado** en la UI: guarda al instante y compila (ver §4.2).
 3. ~~**No se guarda al cerrar la ventana.**~~ **Resuelto el 2026-11-07:** `OnBeforeClose` con protocolo en dos fases (`app:before-close` → `waitIdle()` → `ConfirmClose`), un límite de 2 s y un diálogo nativo si el guardado falló (ver §4.2).
-4. ~~**La carpeta *inicial* depende del directorio de trabajo** (`./workspace`).~~ **Resuelto el 2026-11-07:** la app abre un repositorio central en `~/Documents/My Creative Ink Repository`, una ruta **absoluta** construida con `os.UserHomeDir()` y `filepath.Join` (válida en macOS y Linux). Se crea con `MkdirAll(0755)` si no existe y lleva un `main.tex` inicial si no hay ningún `.tex`, sin sobrescribir nunca. Funciona igual desde `wails dev` y desde el Finder. **Ampliado el mismo día:** la ruta depende del SO y de la elección del primer arranque ("Solo para mí" o "Para todos los usuarios"); en Linux se respeta XDG (`~/Documentos`) y en Windows, Known Folders (ver §1). *Pendiente menor:* recordar la última carpeta abierta y permitir cambiar el repositorio desde la UI (hoy hay que borrar `settings.json`).
+4. ~~**La carpeta *inicial* depende del directorio de trabajo** (`./workspace`).~~ **Resuelto el 2026-11-07:** la app abre un repositorio central en `~/Documents/My Creative Ink Repository`, una ruta **absoluta** construida con `os.UserHomeDir()` y `filepath.Join` (válida en macOS y Linux). Se crea con `MkdirAll(0755)` si no existe y lleva un `main.tex` inicial si no hay ningún `.tex`, sin sobrescribir nunca. Funciona igual desde `wails dev` y desde el Finder. **Ampliado el mismo día:** la ruta depende del SO y de la elección del primer arranque ("Solo para mí" o "Para todos los usuarios"); en Linux se respeta XDG (`~/Documentos`) y en Windows, Known Folders (ver §1). **Desde la Sección 18** se llama `My-Creative-Ink-Repository`, la raíz es un lanzador (sin `main.tex`) y los recientes se recuerdan en `settings.json`. *Pendiente menor:* cambiar el repositorio desde la UI (hoy hay que borrar `settings.json`).
 5. ~~**El PDF se carga entero en memoria (`fetch` → `data`).**~~ **Resuelto el 2026-11-07:** PDF.js carga por **rangos HTTP** (`getDocument({ url, rangeChunkSize, disableAutoFetch, disableStream: true })`) desde instantáneas inmutables (`?v=<pdfVersion>`) que sirve `preview.go` con `206 Partial Content`. *Pendiente:* medirlo con un PDF grande en la app (ver §4.5) y, en Linux, compilar con `-tags webkit2_41` para tener rangos.
 6. ~~**Proyectos de varios archivos:** se compila el `.tex` **activo**.~~ **Resuelto el 2026-11-07:** cada carpeta puede tener un **archivo principal** (`SetMainFile`, guardado en `.creative-ink-meta`). Se compila y se muestra ese archivo mientras se edita cualquier capítulo (ver §4.3.2). Texto original: Si editas un capítulo que se incluye con `\input`, se compila el capítulo y no el documento principal. Falta definir un "archivo principal" por carpeta.
 7. ~~**El árbol no se actualiza solo** (no hay `fsnotify`).~~ **Resuelto el 2026-11-07:** `core.FolderWatcher` (fsnotify) avisa con `workspace:changed`, con debounce y solo si el árbol visible cambió, y la UI refresca el explorador sola (ver §4.3.3). El botón Actualizar se mantiene como respaldo.
-8. **Escalabilidad de la compilación automática y la vista previa con documentos grandes** (tesis, libros, muchas imágenes o TikZ). Analizado el 2026-11-07. **Parcialmente resuelto**: disparador adaptativo y prevención de recarga implementados; el resto sigue pendiente (ver §4.5).
+8. **Escalabilidad de la compilación automática y la vista previa con documentos grandes** (tesis, libros, muchas imágenes o TikZ). Analizado el 2026-11-07. **En gran parte resuelto:** disparador adaptativo y sin recarga (Sección 14); `compile.auto` apagado por defecto, PDF dibujado en un worker, cancelación acotada, terminal en disco con progreso y detector de proyecto grande (Sección 20). Lo pendiente y las mediciones, en §4.5 (rama `DEV-feat-Rendimiento-latex`).
 
-## 4.5 Escalabilidad con documentos grandes (análisis del 2026-11-07; implementación parcial)
+## 4.5 Escalabilidad con documentos grandes (análisis del 2026-11-07; Secciones 14 y 20)
 
-> **Implementado (Sección 14):** el **disparador adaptativo** de la compilación (opción 1) y la **prevención de recarga visual** cuando el PDF no cambió (primer punto de la opción 7). El resto sigue siendo análisis. Antes de decidir lo demás, hay que **medir** con un documento de prueba representativo (ver al final).
+> **Implementado:** disparador adaptativo y sin recarga si el PDF no cambió (Sección 14); las cuatro decisiones del 2026-11-08 y el detector de proyecto grande (Sección 20). **Siguiente paso: medir** con la tesis en la rama `DEV-feat-Rendimiento-latex` (ver "Cómo medir" al final) antes de decidir lo que queda.
 
 ### Implementado
 - **Sección 20 (decisiones del 2026-11-08 sobre los 4 cuellos de botella):**
@@ -417,18 +385,18 @@ La compilación automática (3 s sin escribir) funciona bien con documentos pequ
 | Pieza | Comportamiento actual | Por qué escala mal |
 |-------|-----------------------|--------------------|
 | Disparador (`Editor.svelte`) | ~~3 s fijos~~ → **adaptativo** desde la Sección 14: `max(3 s, 2 × duración)`, y pausa por encima de 10 s | Resuelto para el caso típico. Pendiente: un documento justo por debajo de 10 s sigue compilando en cada pausa de unos 20 s |
-| Scheduler (`scheduler.go`) | Un solo worker; una petición nueva **no cancela** la compilación en curso, solo deja una pendiente (`pending = true`) | Encadena compilaciones casi sin pausa: la CPU queda ocupada de forma continua (ventiladores, batería) y el resultado ya está viejo cuando llega |
+| Scheduler (`scheduler.go`) | ~~no cancelaba~~ → desde la Sección 20, **cancelación acotada** de las automáticas jóvenes y árbol de procesos con `KillTreeOnCancel`; `compile.auto` apagado por defecto | Resuelto en lo principal. Pendiente: medir cuántas cancelaciones hay al escribir con pausas y si algún `.aux` queda inconsistente |
 | latexmk (`orchestrator.go`) | Compilación completa con `-xelatex`; latexmk repite pasadas para referencias, índices y biber | xelatex es de un solo hilo y vuelve a procesar todas las imágenes y las figuras TikZ en cada pasada |
-| Límite de tiempo | `compileTimeout = 60 s`, fijo | Un documento grande puede superarlo **siempre**: la compilación se corta y el usuario solo ve "superó el límite" |
+| Límite de tiempo | `compileTimeout = 60 s`, fijo (las de `ci` tienen 10 min) | Un documento grande puede superarlo **siempre** en la compilación con ⌘S: se corta y el usuario solo ve "superó el límite". Alternativa hoy: `ci compile completo` |
 | Prioridad del proceso | latexmk corre con prioridad normal | Compite con la UI (WebView, CodeMirror) por la CPU |
-| Vista previa (`pdf.js`, `Preview.svelte`) | ~~`fetch` del PDF completo~~ → desde la Sección 13, **carga por rangos** de una instantánea | Ya no se copia el PDF entero en RAM (deuda #5 resuelta). Siguen pendientes: copiar la instantánea en disco en cada compilación (coste de E/S proporcional al tamaño) y decodificar las imágenes de la página visible en el hilo principal (`disableWorkerRendering: true`) |
+| Vista previa (`pdf.js`, `Preview.svelte`) | ~~`fetch` del PDF completo~~ → desde la Sección 13, **carga por rangos** de una instantánea | Ya no se copia el PDF entero en RAM (deuda #5) y, desde la Sección 20, se dibuja en el renderer worker (fuera del hilo de CodeMirror). Sigue pendiente: copiar la instantánea en disco en cada compilación (coste de E/S proporcional al tamaño) |
 | Recarga sin cambios | ~~se recargaba en cada éxito~~ → desde la Sección 14 se reutiliza `pdfVersion` si el `ModTime` no cambió | Resuelto: ni copia en disco ni recarga del canvas |
 
-Ya existe un dato útil: `compile:finished` incluye `durationMs`, todavía sin usar.
+`compile:finished` incluye `durationMs`, que ya usa el disparador adaptativo y que es el primer dato que hay que medir.
 
 ### Opciones para más adelante (no decididas)
 1. ~~**Disparador adaptativo.**~~ **Implementado** (umbral de 10 s, en memoria; ver "Implementado"). *Posible mejora:* recordar la pausa por proyecto en `.creative-ink-meta`.
-2. **Cancelar compilaciones viejas.** Si llega una petición y la compilación en curso supera cierto tiempo, cancelarla y empezar de nuevo. *Riesgo:* un latexmk cortado a mitad puede dejar `.aux` inconsistentes; latexmk suele recuperarse en la pasada siguiente, pero hay que probarlo.
+2. ~~**Cancelar compilaciones viejas.**~~ **Implementado** en la Sección 20 (cancelación acotada, §4.3). Falta comprobar con la tesis que latexmk se recupera bien de un `.aux` a medias.
 3. **Límite de tiempo configurable** por proyecto en lugar de 60 s fijos, o un límite más amplio cuando la compilación la pide el usuario (Cmd+S) frente a la automática.
 4. **Modo borrador para la vista previa automática** (requiere decisión del usuario, porque cambia los flags de latexmk; ver la skill `latex-toolchain-orchestrator`):
    - `graphicx` con la opción `draft` en las compilaciones automáticas (marcos en lugar de imágenes), y compilación completa con Cmd+S. Ejemplo: `latexmk -usepretex='\PassOptionsToPackage{draft}{graphicx}'`.
@@ -438,9 +406,9 @@ Ya existe un dato útil: `compile:finished` incluye `durationMs`, todavía sin u
 6. **Valores por defecto según el hardware:** usar el tier de `SystemHealthCheck` (`basic` / `advanced`) y `cpuCores` para elegir debounce y modo (borrador por defecto en equipos `basic`).
 7. **Vista previa más barata:**
    - ~~No recargar si el PDF no cambió.~~ **Implementado** con `pdfModTime` y la reutilización de `pdfVersion`.
-   - Cargar por rangos (`PDFDataRangeTransport`, deuda #5) para no copiar el PDF entero.
-   - Dibujar en el worker (`GlobalWorkerOptions.rendererSrc` + `OffscreenCanvas`) para que las imágenes pesadas no bloqueen el hilo principal.
-8. **Visibilidad:** emitir el progreso de latexmk (pasada actual, biber) como eventos, para que una compilación larga no parezca colgada.
+   - ~~Cargar por rangos~~ **Implementado** en la Sección 13.
+   - ~~Dibujar en el worker~~ **Implementado** en la Sección 20 (renderer worker).
+8. **Visibilidad:** ~~progreso como eventos~~ **implementado para `ci compile`** en la Sección 20 (`terminal:progress`). Falta para la compilación automática (latexmk).
 
 ### Cómo medir antes de decidir
 - **Documento de prueba:** unas 200 páginas, unas 50 imágenes PNG/JPEG de varios MB, algunas figuras TikZ, bibliografía con biber y archivo principal con capítulos en `\input`.
