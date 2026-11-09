@@ -7,6 +7,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // recorder captures hook calls in order.
@@ -276,4 +279,108 @@ func TestSchedulerNeverCancelsManualOrOldRuns(t *testing.T) {
 	close(release2)
 	rec.waitFinished(t)
 	rec.waitFinished(t)
+}
+
+// ── Archetype tests (testify) ──────────────────────────────────────────────
+
+// compileEvent is what the mock compile:started / compile:finished
+// channels carry: which run, and which version of the "file" it compiled.
+type compileEvent struct {
+	run     int
+	version string
+	result  Result
+}
+
+// TestSchedulerThreeRapidAutoRequestsKeepOnlyTheLatest: three automatic
+// requests in < 500 ms while a run is in progress. The intermediate state
+// is never compiled to the end: the running compilation is aborted (its
+// context is cancelled, as KillTreeOnCancel would kill latexmk) and only
+// the last run finishes, with the newest data.
+func TestSchedulerThreeRapidAutoRequestsKeepOnlyTheLatest(t *testing.T) {
+	var disk atomic.Value // the document on disk, as latexmk would read it
+	disk.Store("v1")
+
+	started := make(chan compileEvent, 8)  // mock compile:started
+	finished := make(chan compileEvent, 8) // mock compile:finished
+	firstRunning := make(chan struct{})
+	firstKilled := make(chan struct{})
+	dying := make(chan struct{}) // killing latexmk is not instantaneous
+
+	var runs atomic.Int32
+	var current atomic.Value // version of the run in progress
+	s := NewScheduler(func(ctx context.Context) (string, error) {
+		n := runs.Add(1)
+		version := disk.Load().(string)
+		current.Store(compileEvent{run: int(n), version: version})
+		if n == 1 {
+			close(firstRunning)
+			select {
+			case <-ctx.Done():
+				close(firstKilled)
+				<-dying
+				return "", ctx.Err()
+			case <-time.After(5 * time.Second):
+				return "v1 terminada", nil // must not happen
+			}
+		}
+		return version, nil
+	}, Hooks{
+		OnStarted: func() {
+			// OnStarted runs before the CompileFunc reads the disk: report the run number only.
+			started <- compileEvent{run: int(runs.Load()) + 1}
+		},
+		OnFinished: func(r Result) {
+			ev := current.Load().(compileEvent)
+			ev.result = r
+			finished <- ev
+		},
+	})
+	defer s.Close(time.Second)
+
+	receive := func(ch chan compileEvent, what string) compileEvent {
+		t.Helper()
+		select {
+		case ev := <-ch:
+			return ev
+		case <-time.After(2 * time.Second):
+			require.FailNow(t, "timed out waiting for "+what)
+			return compileEvent{}
+		}
+	}
+
+	start := time.Now()
+	require.True(t, s.Request(TriggerAuto))
+	<-firstRunning
+	disk.Store("v2")
+	require.True(t, s.Request(TriggerAuto)) // aborts run 1
+	disk.Store("v3")
+	require.True(t, s.Request(TriggerAuto)) // coalesces with the previous one
+	assert.Less(t, time.Since(start), 500*time.Millisecond, "the three requests must be rapid")
+
+	select {
+	case <-firstKilled:
+	case <-time.After(time.Second):
+		require.FailNow(t, "the running compilation's context was not cancelled")
+	}
+	close(dying)
+
+	assert.Equal(t, 1, receive(started, "started #1").run)
+	first := receive(finished, "finished #1")
+	assert.True(t, first.result.Canceled, "run 1 must be aborted, not finished")
+	assert.False(t, first.result.Success)
+	assert.Equal(t, "v1", first.version)
+
+	assert.Equal(t, 2, receive(started, "started #2").run)
+	last := receive(finished, "finished #2")
+	assert.True(t, last.result.Success)
+	assert.False(t, last.result.Canceled)
+	assert.Equal(t, "v3", last.version, "the only finished run must see the newest data")
+	assert.Equal(t, "v3", last.result.Logs)
+
+	select {
+	case ev := <-started:
+		assert.Failf(t, "unexpected extra run", "%+v", ev) // v2 was never compiled on its own
+	case <-time.After(150 * time.Millisecond):
+	}
+	assert.EqualValues(t, 2, runs.Load())
 }
