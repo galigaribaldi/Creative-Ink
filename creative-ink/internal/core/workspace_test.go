@@ -59,8 +59,8 @@ func TestScanTreeOrderAndFilters(t *testing.T) {
 	for _, n := range tree.Children {
 		byName[n.Name] = n
 	}
-	if !byName["main.tex"].Editable || byName["refs.bib"].Editable || byName["chapters"].Editable {
-		t.Errorf("only .tex files must be editable: %+v", byName)
+	if !byName["main.tex"].Editable || !byName["refs.bib"].Editable || byName["main.pdf"].Editable || byName["chapters"].Editable {
+		t.Errorf("only text files must be editable: %+v", byName)
 	}
 	if ch := byName["chapters"].Children; len(ch) != 1 || ch[0].Path != filepath.Join(root, "chapters", "intro.tex") {
 		t.Errorf("nested children = %+v", ch)
@@ -207,5 +207,16 @@ func TestAddRecentFolder(t *testing.T) {
 	}
 	if len(s.RecentFolders) != maxRecentFolders || s.RecentFolders[0] != "/p19" {
 		t.Fatalf("recent = %v", s.RecentFolders)
+	}
+}
+
+func TestIsEditableFile(t *testing.T) {
+	for name, want := range map[string]bool{
+		"main.tex": true, "refs.BIB": true, "estilo.sty": true, "notas.txt": true, "Makefile": true,
+		"latexmkrc": true, "main.pdf": false, "foto.png": false, "datos.xlsx": false, "sinext": false,
+	} {
+		if got := IsEditableFile(name); got != want {
+			t.Errorf("IsEditableFile(%q) = %v, want %v", name, got, want)
+		}
 	}
 }

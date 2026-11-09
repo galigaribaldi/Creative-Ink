@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/wailsapp/wails/v2/pkg/menu"
 	"io"
 	"os"
 	"path/filepath"
@@ -42,6 +43,7 @@ func newTestApp(t *testing.T, compile compileFunc) (*App, chan emittedEvent) {
 	a.emit = func(name string, data ...any) { events <- emittedEvent{name: name, data: data} }
 	a.pickFolder = func(string) (string, error) { return "", errors.New("unexpected folder dialog") }
 	a.pickSavePath = func(string, string) (string, error) { return "", errors.New("unexpected save dialog") }
+	a.pickNewPath = func(string, string) (string, error) { return "", errors.New("unexpected new-file dialog") }
 	t.Cleanup(func() { a.compiles.Close(time.Second) })
 	return a, events
 }
@@ -127,7 +129,7 @@ func TestSaveContentValidatesPath(t *testing.T) {
 	cases := map[string]error{
 		outside:                              core.ErrOutsideFolder,
 		filepath.Join(folder, "..", "x.tex"): core.ErrOutsideFolder,
-		filepath.Join(folder, "notes.txt"):   core.ErrNotTeX,
+		filepath.Join(folder, "main.pdf"):    core.ErrNotEditable,
 	}
 	for path, want := range cases {
 		if _, err := a.SaveContent(path, "x"); !errors.Is(err, want) {
@@ -242,9 +244,9 @@ func TestSaveAsDialog(t *testing.T) {
 	expectCompileOf(t, events, filepath.Join(elsewhere, "otro.tex"))
 
 	// Wrong extension and cancel.
-	a.pickSavePath = func(string, string) (string, error) { return filepath.Join(elsewhere, "a.txt"), nil }
-	if _, err := a.SaveAsDialog("x"); !errors.Is(err, core.ErrNotTeX) {
-		t.Errorf(".txt: err = %v", err)
+	a.pickSavePath = func(string, string) (string, error) { return filepath.Join(elsewhere, "a.pdf"), nil }
+	if _, err := a.SaveAsDialog("x"); !errors.Is(err, core.ErrNotEditable) {
+		t.Errorf(".pdf: err = %v", err)
 	}
 	a.pickSavePath = func(string, string) (string, error) { return "", nil }
 	if st, err := a.SaveAsDialog("x"); err != nil || !st.Canceled {
@@ -959,5 +961,157 @@ func TestStartScreenReportsStaleQuickDocs(t *testing.T) {
 	}
 	if screen, _ := a.GetStartScreen(); len(screen.Warnings) == 0 {
 		t.Fatal("loose documents at the root must be reported")
+	}
+}
+
+// ── Text files other than .tex, second pane, new files and menu ───────────
+
+func TestOpenBibKeepsCompilingTheLastTeX(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	folder, doc := a.workspace()
+	bib := filepath.Join(folder, "referencias.bib")
+	if err := os.WriteFile(bib, []byte("@book{clave, title={Título}}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opened, err := a.OpenFile(bib)
+	if err != nil || opened.Content != "@book{clave, title={Título}}" {
+		t.Fatalf("OpenFile(.bib) = %+v, %v", opened, err)
+	}
+	// The .bib is the active document, but main.tex is still compiled.
+	expectCompileOf(t, events, doc)
+	st, _ := a.workspaceState()
+	if st.FilePath != bib || st.TexFilePath != doc {
+		t.Fatalf("state = file %q, tex %q", st.FilePath, st.TexFilePath)
+	}
+	if _, err := a.SaveContent(bib, "@misc{otra}"); err != nil {
+		t.Fatalf("SaveContent(.bib): %v", err)
+	}
+	if data, _ := os.ReadFile(bib); string(data) != "@misc{otra}" {
+		t.Fatalf("bib = %q", data)
+	}
+	if _, err := a.SetMainFile(bib); !errors.Is(err, core.ErrNotTeX) {
+		t.Errorf("a .bib can never be the main file: err = %v", err)
+	}
+}
+
+func TestOpenFileRejectsBinaryAndNonUTF8(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	folder, _ := a.workspace()
+	cases := map[string][]byte{
+		"latin1.bib": {'@', 'b', 'o', 'o', 'k', '{', 'a', 0xF1, 'o', '}'}, // "año" in Latin-1
+		"nul.txt":    {'a', 0, 'b'},
+	}
+	for name, data := range cases {
+		path := filepath.Join(folder, name)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.OpenFile(path); !errors.Is(err, core.ErrNotUTF8) {
+			t.Errorf("%s: err = %v, want ErrNotUTF8", name, err)
+		}
+	}
+	if _, err := a.OpenFile(filepath.Join(folder, "main.pdf")); !errors.Is(err, core.ErrNotEditable) {
+		t.Errorf("pdf: err = %v", err)
+	}
+	expectNoEvent(t, events)
+}
+
+func TestLoadFileDoesNotChangeTheActiveDocument(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	folder, doc := a.workspace()
+	other := filepath.Join(folder, "otro.sty")
+	if err := os.WriteFile(other, []byte("\\ProvidesPackage{otro}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := a.LoadFile(other)
+	if err != nil || file.Path != other {
+		t.Fatalf("LoadFile = %+v, %v", file, err)
+	}
+	if _, active := a.workspace(); active != doc {
+		t.Fatalf("active = %q, want %q (the second pane must not change it)", active, doc)
+	}
+	if _, err := a.LoadFile(filepath.Join(t.TempDir(), "x.tex")); !errors.Is(err, core.ErrOutsideFolder) {
+		t.Errorf("outside: err = %v", err)
+	}
+	expectNoEvent(t, events)
+}
+
+func TestNewFileDialog(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	folder, doc := a.workspace()
+
+	// The native dialog creates folders itself (CanCreateDirectories).
+	if err := os.Mkdir(filepath.Join(folder, "capitulos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a.pickNewPath = func(dir, name string) (string, error) {
+		if dir != folder || name != "nuevo-archivo.tex" {
+			t.Errorf("dialog dir=%q name=%q", dir, name)
+		}
+		return filepath.Join(folder, "capitulos", "Capítulo Dos"), nil
+	}
+	st, err := a.NewFileDialog()
+	want := filepath.Join(folder, "capitulos", "Capitulo-Dos.tex")
+	if err != nil || st.FilePath != want || st.TexFilePath != want {
+		t.Fatalf("NewFileDialog = %+v, %v; want %q (normalized, .tex by default)", st.FilePath, err, want)
+	}
+	if data, err := os.ReadFile(want); err != nil || len(data) != 0 {
+		t.Fatalf("new file = %q, %v", data, err)
+	}
+	expectNoEvent(t, events) // an empty file is not compiled
+
+	// Never replaces an existing file, even if the dialog confirmed it.
+	a.pickNewPath = func(string, string) (string, error) { return doc, nil }
+	if _, err := a.NewFileDialog(); !errors.Is(err, core.ErrFileExists) {
+		t.Errorf("existing: err = %v", err)
+	}
+	for _, bad := range []string{filepath.Join(t.TempDir(), "fuera.tex"), filepath.Join(folder, "foto.png")} {
+		a.pickNewPath = func(string, string) (string, error) { return bad, nil }
+		if _, err := a.NewFileDialog(); err == nil {
+			t.Errorf("%s must be rejected", bad)
+		}
+	}
+	a.pickNewPath = func(string, string) (string, error) { return "", nil }
+	if st, err := a.NewFileDialog(); err != nil || !st.Canceled {
+		t.Errorf("cancel: %+v, %v", st, err)
+	}
+	a.setWorkspace("", "")
+	if _, err := a.NewFileDialog(); !errors.Is(err, core.ErrNoFolder) {
+		t.Errorf("no folder: err = %v", err)
+	}
+}
+
+func TestMenuOnlyOnMacAndEmitsCommands(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	for _, goos := range []string{"linux", "windows"} {
+		if m := a.buildMenu(goos); m != nil {
+			t.Errorf("%s: a menu bar would change the window layout", goos)
+		}
+	}
+	m := a.buildMenu("darwin")
+	if m == nil {
+		t.Fatal("macOS needs a menu (the Edit role enables ⌘C/⌘V)")
+	}
+	var newFile *menu.MenuItem
+	hasEdit := false
+	for _, top := range m.Items {
+		hasEdit = hasEdit || top.Role == menu.EditMenuRole
+		if top.SubMenu == nil {
+			continue
+		}
+		for _, item := range top.SubMenu.Items {
+			if item.Label == "Nuevo archivo…" {
+				newFile = item
+			}
+		}
+	}
+	if !hasEdit || newFile == nil || newFile.Accelerator == nil || newFile.Accelerator.Key != "n" {
+		t.Fatalf("edit=%v newFile=%+v", hasEdit, newFile)
+	}
+	newFile.Click(&menu.CallbackData{MenuItem: newFile})
+	ev := nextEvent(t, events)
+	if ev.name != EventMenuCommand || ev.data[0].(MenuCommandEvent).ID != "new-file" {
+		t.Fatalf("event = %+v", ev)
 	}
 }

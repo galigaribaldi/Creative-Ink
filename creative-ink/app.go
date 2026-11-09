@@ -73,6 +73,7 @@ type App struct {
 	// Native dialogs, injected for the same reason. "" means cancelled.
 	pickFolder   func(defaultDir string) (string, error)
 	pickSavePath func(defaultDir, defaultName string) (string, error)
+	pickNewPath  func(defaultDir, defaultName string) (string, error)
 	// repoOptions proposes repository locations for this OS (injectable).
 	repoOptions func() system.RepositoryOptions
 	// settingsPath is the per-user settings file ("" = cannot persist).
@@ -89,7 +90,11 @@ type App struct {
 	// goroutine, and the compile worker and preview middleware read them too.
 	mu      sync.RWMutex
 	folder  string // absolute path of the open folder
-	docPath string // absolute path of the active .tex ("" if none)
+	docPath string // absolute path of the active document, any editable file ("" if none)
+	// texDoc is the last .tex made active in this folder. Without a main
+	// file it is the compile target, so opening refs.bib keeps compiling
+	// and previewing the chapter that was open before.
+	texDoc string
 	// mainFile is the project's root document (absolute, "" if none), read
 	// from <folder>/.creative-ink-meta whenever the folder changes. When set,
 	// it is compiled instead of the active document.
@@ -147,7 +152,10 @@ type WorkspaceState struct {
 	RepositoryPath string `json:"repositoryPath"`
 	Canceled       bool   `json:"canceled"`   // the user closed the dialog
 	FolderPath     string `json:"folderPath"` // absolute
-	FilePath       string `json:"filePath"`   // absolute active .tex, "" if none
+	FilePath       string `json:"filePath"`   // absolute active document (any editable file), "" if none
+	// TexFilePath is the last .tex made active: the compile target when the
+	// project has no main file (editing a .bib keeps it).
+	TexFilePath string `json:"texFilePath"`
 	// MainFilePath is the project's root document ("" if none). When set it
 	// is what gets compiled and previewed, whatever file is being edited.
 	MainFilePath string `json:"mainFilePath"`
@@ -259,6 +267,7 @@ func NewApp() *App {
 	a.emit = a.emitWails
 	a.pickFolder = a.dialogPickFolder
 	a.pickSavePath = a.dialogPickSavePath
+	a.pickNewPath = a.dialogPickNewPath
 	a.watchFolder = func(root string, onChange func()) (io.Closer, error) {
 		return core.WatchFolder(root, core.WatchDebounce, onChange)
 	}
@@ -278,6 +287,7 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 		files:   core.NewFileManager(),
 		folder:  folder,
 		docPath: docPath,
+		texDoc:  texOnly(docPath),
 		emit:    func(string, ...any) {},
 		quit:    func() {},
 		// Overridden by tests; production detects the host OS.
@@ -743,35 +753,106 @@ func (a *App) OpenFolderDialog() (WorkspaceState, error) {
 	return a.workspaceState()
 }
 
-// OpenFile loads a .tex inside the open folder into the editor, makes it the
-// active document and queues its compilation.
+// OpenFile loads a text file inside the open folder (.tex, .bib, .sty…)
+// into the main editor pane, makes it the active document and queues a
+// compilation of the target (a .bib keeps the last .tex as target).
 func (a *App) OpenFile(path string) (OpenedFile, error) {
 	folder, _ := a.workspace()
-	clean, err := a.validateTeXPath(folder, path)
+	clean, content, err := a.readEditable(folder, path)
 	if err != nil {
 		return OpenedFile{}, err
 	}
-	if info, err := os.Stat(clean); err != nil || !info.Mode().IsRegular() {
-		return OpenedFile{}, fmt.Errorf("el archivo %q no existe", filepath.Base(clean))
-	}
-	content, err := a.files.LoadDocument(clean)
-	if err != nil {
-		return OpenedFile{}, err
-	}
-
 	a.setWorkspace(folder, clean)
-	a.compiles.Request()
+	if a.compileTarget() != "" {
+		a.compiles.Request()
+	}
 	return OpenedFile{Path: clean, Content: content}, nil
 }
 
-// SaveContent writes content to path (a .tex inside the open folder) and
+// LoadFile reads a text file inside the open folder for the second editor
+// pane. Unlike OpenFile it does not change the active document nor compile:
+// the main pane keeps deciding what is compiled.
+func (a *App) LoadFile(path string) (OpenedFile, error) {
+	folder, _ := a.workspace()
+	clean, content, err := a.readEditable(folder, path)
+	if err != nil {
+		return OpenedFile{}, err
+	}
+	return OpenedFile{Path: clean, Content: content}, nil
+}
+
+// readEditable validates path (editable, inside folder) and reads it.
+func (a *App) readEditable(folder, path string) (clean, content string, err error) {
+	if clean, err = a.validateEditablePath(folder, path); err != nil {
+		return "", "", err
+	}
+	if content, err = a.files.LoadText(clean); err != nil {
+		return "", "", err
+	}
+	return clean, content, nil
+}
+
+// NewFileDialog ("Nuevo archivo…", ⌘N) asks for a name with the native
+// dialog, inside the open folder, and creates an empty text file there
+// (.tex if no extension is given). The name is normalized with "-" like
+// every name the editor creates, and an existing file is never replaced.
+// The new file becomes the active document; nothing is compiled yet.
+func (a *App) NewFileDialog() (WorkspaceState, error) {
+	folder, _ := a.workspace()
+	if folder == "" {
+		return WorkspaceState{}, core.ErrNoFolder
+	}
+	target, err := a.pickNewPath(folder, "nuevo-archivo.tex")
+	if err != nil {
+		return WorkspaceState{}, fmt.Errorf("nuevo archivo: %w", err)
+	}
+	if target == "" {
+		return WorkspaceState{Canceled: true}, nil
+	}
+	clean, err := a.newFilePath(folder, target)
+	if err != nil {
+		return WorkspaceState{}, err
+	}
+	if err := core.CreateEmptyFile(clean); err != nil {
+		return WorkspaceState{}, err
+	}
+	a.setWorkspace(folder, clean)
+	return a.workspaceState()
+}
+
+// newFilePath normalizes the name picked for a new file and checks that it
+// is an editable type inside the open folder.
+func (a *App) newFilePath(folder, target string) (string, error) {
+	target = filepath.Clean(target)
+	ext := filepath.Ext(target)
+	if ext == "" {
+		ext = ".tex"
+	}
+	stem := core.Slugify(strings.TrimSuffix(filepath.Base(target), filepath.Ext(target)))
+	if stem == "" {
+		return "", errors.New("el nombre del archivo no tiene caracteres válidos")
+	}
+	candidate := filepath.Join(filepath.Dir(target), stem+strings.ToLower(ext))
+	if !filepath.IsAbs(candidate) {
+		return "", fmt.Errorf("ruta inválida %q: debe ser absoluta", candidate)
+	}
+	if _, err := core.ResolveInFolder(folder, candidate); err != nil {
+		return "", fmt.Errorf("el archivo nuevo debe ir dentro de la carpeta abierta: %w", err)
+	}
+	if !core.IsEditableFile(candidate) {
+		return "", core.ErrNotEditable
+	}
+	return candidate, nil
+}
+
+// SaveContent writes content to path (a text file inside the open folder) and
 // returns immediately. The path travels with every save so a late autosave
 // can never land in another file. It does NOT compile: the UI calls
 // RequestCompile after 3 s without typing or on Cmd/Ctrl+S, so typing does
 // not keep the compile worker busy. A failure rejects the promise.
 func (a *App) SaveContent(path string, content string) (SaveResult, error) {
 	folder, _ := a.workspace()
-	clean, err := a.validateTeXPath(folder, path)
+	clean, err := a.validateEditablePath(folder, path)
 	if err != nil {
 		return SaveResult{}, err
 	}
@@ -786,9 +867,9 @@ func (a *App) SaveContent(path string, content string) (SaveResult, error) {
 // open folder, its directory becomes the open folder.
 func (a *App) SaveAsDialog(content string) (WorkspaceState, error) {
 	folder, active := a.workspace()
-	defaultName := "documento.tex"
+	defaultName, defaultExt := "documento.tex", ".tex"
 	if active != "" {
-		defaultName = filepath.Base(active)
+		defaultName, defaultExt = filepath.Base(active), filepath.Ext(active)
 	}
 
 	target, err := a.pickSavePath(folder, defaultName)
@@ -800,10 +881,10 @@ func (a *App) SaveAsDialog(content string) (WorkspaceState, error) {
 	}
 	target = filepath.Clean(target)
 	if filepath.Ext(target) == "" {
-		target += ".tex"
+		target += defaultExt // same type as the document being saved
 	}
-	if !filepath.IsAbs(target) || !core.IsTeXFile(target) {
-		return WorkspaceState{}, core.ErrNotTeX
+	if !filepath.IsAbs(target) || !core.IsEditableFile(target) {
+		return WorkspaceState{}, core.ErrNotEditable
 	}
 
 	if err := a.files.SaveDocument(content, target); err != nil {
@@ -813,7 +894,9 @@ func (a *App) SaveAsDialog(content string) (WorkspaceState, error) {
 		folder = filepath.Dir(target) // saved elsewhere: open that folder
 	}
 	a.setWorkspace(folder, target)
-	a.compiles.Request()
+	if a.compileTarget() != "" {
+		a.compiles.Request()
+	}
 	return a.workspaceState()
 }
 
@@ -1167,6 +1250,10 @@ func (a *App) setWorkspace(folder, docPath string) {
 	a.folder, a.docPath = folder, docPath
 	if changed {
 		a.mainFile = main
+		a.texDoc = ""
+	}
+	if core.IsTeXFile(docPath) {
+		a.texDoc = docPath
 	}
 	a.mu.Unlock()
 
@@ -1268,13 +1355,20 @@ func (a *App) effectiveMainFile() string {
 }
 
 // compileTarget is what gets compiled and previewed: the main file when the
-// project has one, otherwise the active document.
+// project has one, otherwise the last .tex made active (never a .bib).
 func (a *App) compileTarget() string {
 	if main := a.effectiveMainFile(); main != "" {
 		return main
 	}
-	_, doc := a.workspace()
-	return doc
+	return a.lastTeX()
+}
+
+// texOnly returns path if it is a .tex file, else "".
+func texOnly(path string) string {
+	if core.IsTeXFile(path) {
+		return path
+	}
+	return ""
 }
 
 func (a *App) workspaceState() (WorkspaceState, error) {
@@ -1291,11 +1385,31 @@ func (a *App) workspaceState() (WorkspaceState, error) {
 		FolderPath:     folder,
 		RepositoryPath: a.repository(),
 		FilePath:       doc,
+		TexFilePath:    a.lastTeX(),
 		MainFilePath:   a.effectiveMainFile(),
 		AutoCompile:    a.autoCompileEnabled(),
 		Tree:           tree,
 		Truncated:      truncated,
 	}, nil
+}
+
+// lastTeX is the last .tex made active in the open folder (see texDoc).
+func (a *App) lastTeX() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.texDoc
+}
+
+// validateEditablePath accepts only text files inside the open folder.
+func (a *App) validateEditablePath(folder, path string) (string, error) {
+	clean, err := core.ResolveInFolder(folder, path)
+	if err != nil {
+		return "", err
+	}
+	if !core.IsEditableFile(clean) {
+		return "", core.ErrNotEditable
+	}
+	return clean, nil
 }
 
 // validateTeXPath accepts only .tex files inside the open folder.
@@ -1348,6 +1462,17 @@ func (a *App) dialogPickSavePath(defaultDir, defaultName string) (string, error)
 		DefaultDirectory:     defaultDir,
 		DefaultFilename:      defaultName,
 		CanCreateDirectories: true,
-		Filters:              []runtime.FileFilter{{DisplayName: "Documentos LaTeX (*.tex)", Pattern: "*.tex"}},
+	})
+}
+
+func (a *App) dialogPickNewPath(defaultDir, defaultName string) (string, error) {
+	if a.ctx == nil {
+		return "", errNoContext
+	}
+	return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:                "Nuevo archivo (.tex, .bib, .sty, .txt…)",
+		DefaultDirectory:     defaultDir,
+		DefaultFilename:      defaultName,
+		CanCreateDirectories: true,
 	})
 }

@@ -16,7 +16,7 @@ import (
 
 func TestPreviewMiddleware(t *testing.T) {
 	dir := t.TempDir()
-	app := &App{docPath: filepath.Join(dir, "main.tex")}
+	app := &App{docPath: filepath.Join(dir, "main.tex"), texDoc: filepath.Join(dir, "main.tex")}
 
 	nextCalled := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +62,7 @@ func TestPreviewMiddleware(t *testing.T) {
 
 func TestPreviewMiddlewareServesRanges(t *testing.T) {
 	dir := t.TempDir()
-	app := &App{docPath: filepath.Join(dir, "main.tex")}
+	app := &App{docPath: filepath.Join(dir, "main.tex"), texDoc: filepath.Join(dir, "main.tex")}
 	content := []byte("%PDF-1.7 0123456789abcdef")
 	if err := os.WriteFile(filepath.Join(dir, "main.pdf"), content, 0o644); err != nil {
 		t.Fatal(err)
