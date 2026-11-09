@@ -28,6 +28,7 @@
   import { LoadFile, OpenFile, RequestCompile, SaveContent } from '../../wailsjs/go/main/App.js'
   import { registerEditor } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
+  import { config } from '../lib/config.svelte.js'
   import { languageFor } from '../lib/languages.js'
   import { sync, syncForward } from '../lib/synctex.svelte.js'
   import { ui } from '../lib/ui.svelte.js'
@@ -121,6 +122,13 @@
   let fileName = $state('')
   let filePath = $state('')
 
+  // Tooltip of the large-project warning ("" = no warning).
+  let healthTooltip = $derived(
+    workspace.healthWarnings.length
+      ? [...workspace.healthWarnings.map((w) => `• ${w.message}`), '', 'Solo es un aviso: no cambia nada.'].join('\n')
+      : ''
+  )
+
   // Called on every document change: restart both inactivity timers.
   // Keystrokes only reset timers; nothing crosses the IPC bridge here.
   function scheduleSave() {
@@ -131,7 +139,8 @@
     clearTimeout(compileTimer)
     compileTimer = null
     // Read at scheduling time: the delay adapts after every compilation.
-    if (!compilation.autoCompilePaused) {
+    // compile.auto off (the default): typing never compiles; ⌘S does.
+    if (config.autoCompile && !compilation.autoCompilePaused) {
       compileTimer = setTimeout(saveAndCompile, compilation.autoCompileDelayMs)
     }
   }
@@ -147,7 +156,9 @@
     compileTimer = null
     const clean = await waitIdle()
     // Nothing to compile without a document (e.g. behind the first-run screen).
-    if (clean && compileTarget()) void RequestCompile()
+    // "auto": Go rejects it if compile.auto was turned off meanwhile, and
+    // may cancel it if a newer request makes it obsolete.
+    if (clean && compileTarget()) void RequestCompile('auto')
   }
 
   function cancelScheduledCompile() {
@@ -399,10 +410,10 @@
     if (reveal) untrack(() => reveal.file === docFile && revealLine(reveal.line))
   })
 
-  // A heavy result pauses auto-compile: drop a compile already scheduled
-  // with the old (short) delay, so it does not fire one more time.
+  // A heavy result pauses auto-compile, and `ci config autocompile off`
+  // disables it: drop a compile already scheduled so it does not fire.
   $effect(() => {
-    if (compilation.autoCompilePaused) {
+    if (compilation.autoCompilePaused || !config.autoCompile) {
       untrack(() => {
         clearTimeout(compileTimer)
         compileTimer = null
@@ -429,7 +440,15 @@
   {/if}
   <footer class="statusbar">
     <span class="file" title={filePath}>{fileName}</span>
-    {#if compilation.autoCompilePaused && status !== 'empty'}
+    {#if isPrimary && healthTooltip}
+      <!-- Large-project detector: only a warning with a tooltip, it changes nothing. -->
+      <span class="health" role="note" title={healthTooltip} aria-label={healthTooltip}>⚠ Proyecto grande</span>
+    {/if}
+    {#if isPrimary && !config.autoCompile && status !== 'empty'}
+      <span class="auto-off" title="Actívala en la terminal: ci config autocompile on (o --project solo para este proyecto)">
+        Compilación automática: off · {SAVE_SHORTCUT} compila
+      </span>
+    {:else if compilation.autoCompilePaused && status !== 'empty'}
       <span
         class="paused"
         role="status"
@@ -497,6 +516,22 @@
     white-space: nowrap;
     color: #fbbf24;
     opacity: 0.85;
+  }
+
+  .health {
+    flex-shrink: 0;
+    color: #fbbf24;
+    cursor: help;
+  }
+
+  .auto-off {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #6b6b6b;
+    cursor: help;
   }
 
   .file {

@@ -7,12 +7,22 @@
 //    Worker owned by the task. We pass ONE shared PDFWorker instead, so
 //    destroying a task frees that document (pages, fonts, worker-side state)
 //    while the worker thread is reused across compilations.
+//  - Rendering also happens off the main thread (renderer worker, v6): the
+//    page is painted on an OffscreenCanvas in its own Web Worker and only
+//    the finished ImageBitmap is copied to our canvas (`drawImage`, cheap).
+//    Heavy images or TikZ paths no longer block CodeMirror while typing.
+//    PDF.js creates one renderer worker per document and terminates it in
+//    `loadingTask.destroy()` (releasePdf). Where OffscreenCanvas 2D is
+//    missing (old WebKitGTK), PDF.js falls back to main-thread rendering
+//    by itself, with no error.
 import { GlobalWorkerOptions, PDFWorker, getDocument } from 'pdfjs-dist'
-// `?url` makes Vite emit the worker as a static asset and give us its URL,
-// both in `wails dev` and inside the embedded production build (offline).
+// `?url` makes Vite emit the workers as static assets and give us their
+// URLs, both in `wails dev` and inside the embedded production build (offline).
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import rendererUrl from 'pdfjs-dist/build/pdf.renderer.min.mjs?url'
 
 GlobalWorkerOptions.workerSrc = workerUrl
+GlobalWorkerOptions.rendererSrc = rendererUrl
 
 /** @type {PDFWorker | null} */
 let sharedWorker = null
@@ -64,10 +74,8 @@ export async function loadPdf(url) {
     rangeChunkSize: RANGE_CHUNK_SIZE,
     disableAutoFetch: true,
     disableStream: true,
-    worker: getSharedWorker(),
-    // Explicit main-thread rendering: v6 would otherwise try a second
-    // "renderer worker" per document when GlobalWorkerOptions.rendererSrc is set.
-    disableWorkerRendering: true
+    worker: getSharedWorker()
+    // disableWorkerRendering is left at false: render in the renderer worker.
   })
   try {
     return await task.promise

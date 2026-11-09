@@ -6,6 +6,7 @@ import {
   ConfirmClose,
   CreateProject,
   CreateQuickDocument,
+  GetProjectHealth,
   GetWorkspace,
   NewFileDialog,
   OpenFolderDialog,
@@ -24,6 +25,7 @@ import { applyTree, applyWorkspace, compileTarget, workspace } from './workspace
 export const WORKSPACE_CHANGED = 'workspace:changed' // files changed outside the app
 export const APP_BEFORE_CLOSE = 'app:before-close' // the window is closing
 export const MENU_COMMAND = 'menu:command' // a native menu item was clicked (macOS)
+export const PROJECT_HEALTH = 'project:health' // large-project detector (informative)
 
 /**
  * @typedef {{
@@ -75,9 +77,16 @@ function report(err) {
 export async function initWorkspace() {
   try {
     applyWorkspace(await GetWorkspace())
+    // After a reload (wails dev) the last analysis is not re-emitted.
+    applyHealth(await GetProjectHealth())
   } catch (err) {
     report(err)
   }
+}
+
+/** @param {{ folder: string, warnings: import('./workspace.svelte.js').ProjectWarning[] }} health */
+function applyHealth(health) {
+  if (health.folder === workspace.currentFolderPath) workspace.healthWarnings = health.warnings ?? []
 }
 
 /**
@@ -174,9 +183,14 @@ export async function refreshWorkspace() {
  * @returns {() => void} unsubscribe
  */
 export function listenWorkspaceEvents() {
-  return EventsOn(WORKSPACE_CHANGED, (/** @type {{ folder: string }} */ event) => {
-    if (event.folder === workspace.currentFolderPath) void refreshWorkspace()
-  })
+  const offs = [
+    EventsOn(WORKSPACE_CHANGED, (/** @type {{ folder: string }} */ event) => {
+      if (event.folder === workspace.currentFolderPath) void refreshWorkspace()
+    }),
+    // The large-project warning only informs: it changes nothing else.
+    EventsOn(PROJECT_HEALTH, applyHealth)
+  ]
+  return () => offs.forEach((off) => off())
 }
 
 /**
@@ -263,7 +277,8 @@ export async function saveDocument() {
   // This compile replaces the ones the panes had scheduled after typing.
   for (const e of [editors.primary, editors.secondary]) e?.cancelScheduledCompile()
   if (!(await persistPendingEdits())) return // the PDF would not match the text
-  if (compileTarget()) void RequestCompile()
+  // "manual": always compiles (and is never cancelled), whatever compile.auto says.
+  if (compileTarget()) void RequestCompile('manual')
 }
 
 /**

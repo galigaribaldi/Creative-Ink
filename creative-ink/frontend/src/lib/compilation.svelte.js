@@ -36,7 +36,10 @@ export const compilation = $state({
   pdfModTime: 0,
   // Read by Editor.svelte each time it schedules an automatic compilation.
   autoCompileDelayMs: BASE_COMPILE_DELAY_MS,
-  autoCompilePaused: false
+  autoCompilePaused: false,
+  // The PDF shown was not compiled now: it is the one already on disk
+  // (project opened with compile.auto off).
+  cached: false
 })
 
 /**
@@ -52,18 +55,26 @@ export function listenCompileEvents() {
     EventsOn(COMPILE_STARTED, (event) => {
       if (event.file !== compileTarget()) return
       compilation.status = 'compiling'
+      compilation.cached = false
     }),
-    /** @param {{ file: string, success: boolean, logs: string, durationMs: number, pdfVersion: number, pdfModTime: number }} result */
+    /** @param {{ file: string, success: boolean, logs: string, durationMs: number, pdfVersion: number, pdfModTime: number, canceled: boolean, cached: boolean }} result */
     EventsOn(COMPILE_FINISHED, (result) => {
       // A result for another document (e.g. the file that was active before
       // a switch) must not touch the preview: it is not the PDF shown.
       if (result.file !== compileTarget()) return
+      // An obsolete automatic run was cancelled and the next one already
+      // started (Go's bounded cancellation): stay in "compiling".
+      if (result.canceled) return
       compilation.logs = result.logs
-      compilation.durationMs = result.durationMs
+      compilation.cached = result.cached === true
 
-      // Adaptive trigger: a failed run costs CPU too, so every result counts.
-      compilation.autoCompileDelayMs = adaptiveDelay(result.durationMs)
-      compilation.autoCompilePaused = result.durationMs > HEAVY_COMPILE_MS
+      // Adaptive trigger: a failed run costs CPU too, so every real result
+      // counts. A cached preview compiled nothing: it measures nothing.
+      if (!result.cached) {
+        compilation.durationMs = result.durationMs
+        compilation.autoCompileDelayMs = adaptiveDelay(result.durationMs)
+        compilation.autoCompilePaused = result.durationMs > HEAVY_COMPILE_MS
+      }
 
       if (result.success) {
         compilation.status = 'success'
@@ -94,4 +105,5 @@ export function resetCompilation() {
   compilation.pdfModTime = 0
   compilation.autoCompileDelayMs = BASE_COMPILE_DELAY_MS
   compilation.autoCompilePaused = false
+  compilation.cached = false
 }

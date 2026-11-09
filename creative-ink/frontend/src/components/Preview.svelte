@@ -1,5 +1,7 @@
 <script>
   import { onMount, tick, untrack } from 'svelte'
+  import { compilation } from '../lib/compilation.svelte.js'
+  import { config } from '../lib/config.svelte.js'
   import { loadPdf, releasePdf } from '../lib/pdf.js'
   import { sync, syncBackward } from '../lib/synctex.svelte.js'
 
@@ -8,6 +10,7 @@
   // Horizontal padding of .viewer (keep in sync with the CSS below).
   const VIEWER_PADDING_PX = 16
   const RESIZE_DEBOUNCE_MS = 150
+  const SAVE_SHORTCUT = navigator.platform.toUpperCase().includes('MAC') ? '⌘S' : 'Ctrl+S'
 
   /**
    * @type {{
@@ -261,7 +264,11 @@
       {#if pageCount}<span class="pages">· página {currentPageNumber} de {pageCount}</span>{/if}
     </span>
     {#if sync.notice}<span class="sync-notice" role="status">{sync.notice}</span>{/if}
-    <span class="state-{compileState}">{LABELS[compileState]}</span>
+    {#if compileState === 'success' && compilation.cached}
+      <span class="state-cached" title={compilation.logs}>Último PDF guardado · sin compilar</span>
+    {:else}
+      <span class="state-{compileState}">{LABELS[compileState]}</span>
+    {/if}
   </header>
 
   <div class="viewer" bind:this={viewer}>
@@ -291,7 +298,13 @@
     </div>
     {#if !hasPage}
       <p class="placeholder">
-        {compileState === 'compiling' ? 'Compilando el documento…' : 'Escribe un documento LaTeX válido para ver el PDF.'}
+        {#if compileState === 'compiling'}
+          Compilando el documento…
+        {:else if !config.autoCompile}
+          La compilación automática está desactivada: pulsa {SAVE_SHORTCUT} para compilar y ver el PDF.
+        {:else}
+          Escribe un documento LaTeX válido para ver el PDF.
+        {/if}
       </p>
     {/if}
   </div>
@@ -338,6 +351,11 @@
 
   .state-error {
     color: #f87171;
+  }
+
+  .state-cached {
+    color: #9d9d9d;
+    cursor: help;
   }
 
   .viewer {
