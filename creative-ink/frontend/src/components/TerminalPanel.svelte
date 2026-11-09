@@ -167,8 +167,9 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 0.75rem;
+    background: var(--surface-editor);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
   }
 
   .output {
@@ -180,13 +181,15 @@
 
   .hint {
     margin: 0;
-    color: #6b6b6b;
+    color: var(--text-muted);
     line-height: 1.5;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
   }
 
   .hint code {
-    color: #9d9d9d;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
   }
 
   .entry + .entry {
@@ -194,23 +197,25 @@
   }
 
   .command {
-    color: #e5e5e5;
+    color: var(--text-primary);
   }
 
+  /* Neutral prompt: the accent is reserved (A2). */
   .prompt {
-    color: #4ade80;
+    color: var(--text-muted);
   }
 
   pre {
     margin: 0.15rem 0 0;
-    color: #bdbdbd;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
     white-space: pre-wrap;
     word-break: break-word;
   }
 
   .meta {
     margin-top: 0.1rem;
-    font-size: 0.65rem;
+    font-size: var(--text-xs);
   }
 
   .meta-row {
@@ -219,14 +224,30 @@
     gap: 0.75rem;
   }
 
+  /* Links are not accent-coloured (A2): secondary text, underlined on hover. */
   .link {
     padding: 0;
     border: 0;
+    border-radius: var(--radius-sm);
     background: none;
-    color: var(--accent);
+    color: var(--text-secondary);
     font: inherit;
-    font-size: 0.65rem;
+    font-size: var(--text-xs);
+    text-decoration: underline transparent;
+    text-underline-offset: 2px;
     cursor: pointer;
+    transition: color var(--transition), text-decoration-color var(--transition);
+  }
+
+  .link:hover {
+    color: var(--text-primary);
+    text-decoration-color: currentColor;
+  }
+
+  .link:focus-visible,
+  .stop:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   .progress {
@@ -234,44 +255,48 @@
     align-items: center;
     gap: 0.6rem;
     margin-top: 0.2rem;
-    color: #fbbf24;
-    font-size: 0.7rem;
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
   }
 
   .bar {
     flex: 0 0 120px;
     height: 4px;
     border-radius: 2px;
-    background: #2b2b2b;
+    background: var(--surface-active);
     overflow: hidden;
   }
 
+  /* Continuous progress: a linear width transition is allowed (A4). */
   .bar span {
     display: block;
     height: 100%;
-    background: #fbbf24;
-    transition: width 200ms linear;
+    background: var(--text-secondary);
+    transition: width var(--duration) linear;
   }
 
   pre.full {
     max-height: 40vh;
     overflow-y: auto;
     padding: 0.3rem 0.5rem;
-    border-left: 2px solid #2b2b2b;
-    color: #9d9d9d;
+    border-left: 2px solid var(--border-strong);
+    color: var(--text-muted);
   }
 
   .meta-ok {
-    color: #6b6b6b;
+    color: var(--text-muted);
   }
 
-  .meta-running,
+  .meta-running {
+    color: var(--text-secondary);
+  }
+
   .meta-warn {
-    color: #fbbf24;
+    color: var(--warning);
   }
 
   .meta-bad {
-    color: #f87171;
+    color: var(--danger);
   }
 
   .input-row {
@@ -279,7 +304,7 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.3rem 0.75rem;
-    border-top: 1px solid #2b2b2b;
+    border-top: 1px solid var(--border);
   }
 
   .input-row .prompt {
@@ -297,22 +322,29 @@
     border: 0;
     outline: none;
     background: transparent;
-    color: #e5e5e5;
+    color: var(--text-primary);
     font: inherit;
   }
 
   input::placeholder {
-    color: #5a5a5a;
+    color: var(--text-disabled);
   }
 
+  /* Secondary action (A2): neutral, outlined. */
   .stop {
     flex-shrink: 0;
     padding: 0.1rem 0.6rem;
-    border: 1px solid #5c4a1f;
-    border-radius: 4px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
     background: transparent;
-    color: #fbbf24;
+    color: var(--text-primary);
     font: inherit;
+    font-size: var(--text-xs);
     cursor: pointer;
+    transition: background-color var(--transition), border-color var(--transition);
+  }
+
+  .stop:hover {
+    background: var(--surface-hover);
   }
 </style>

@@ -92,15 +92,23 @@
   .row {
     display: flex;
     align-items: center;
+    min-height: 24px;
+    margin: 0 0.35rem;
     padding-right: 0.25rem;
+    border-radius: var(--radius-sm);
+    transition: background-color var(--transition), box-shadow var(--transition);
   }
 
   .row:hover:not(.disabled) {
-    background: #252526;
+    background: var(--surface-hover);
   }
 
-  .row.active {
-    background: #37373d;
+  /* Active item (A2, accent rule 2): soft accent fill, primary text and a
+     2px accent mark on the left, drawn inset so the row does not shift. */
+  .row.active,
+  .row.active:hover {
+    background: var(--accent-soft);
+    box-shadow: inset 2px 0 0 var(--accent);
   }
 
   .entry {
@@ -111,38 +119,43 @@
     gap: 0.4rem;
     padding: 0.2rem 0.25rem 0.2rem 0;
     border: 0;
+    border-radius: var(--radius-sm);
     background: transparent;
-    color: #cccccc;
+    color: var(--text-secondary);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--text-sm);
     text-align: left;
     cursor: pointer;
+    transition: color var(--transition);
   }
 
+  .row:hover:not(.disabled) .entry,
   .row.active .entry {
-    color: #ffffff;
+    color: var(--text-primary);
   }
 
   .row.disabled .entry {
-    color: #6b6b6b;
+    color: var(--text-disabled);
     cursor: default;
   }
 
+  /* Inset: the tree scrolls inside the drawer, an outer ring would be clipped. */
   .entry:focus-visible,
   .main-toggle:focus-visible {
-    outline: 1px solid var(--accent);
-    outline-offset: -1px;
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
+  /* Neutral marker: the main file is information, not an action (A3 badges). */
   .main-badge {
     flex-shrink: 0;
     margin-left: auto;
     padding: 0 0.3rem;
-    border-radius: 3px;
-    background: rgba(251, 191, 36, 0.15);
-    color: #fbbf24;
-    font-size: 0.55rem;
-    font-weight: 700;
+    border-radius: var(--radius-sm);
+    background: var(--surface-active);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    font-weight: 600;
     letter-spacing: 0.04em;
   }
 
@@ -154,13 +167,14 @@
     height: 20px;
     padding: 0;
     border: 0;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     background: transparent;
-    color: #8a8a8a;
-    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
     line-height: 1;
     cursor: pointer;
     opacity: 0;
+    transition: opacity var(--transition), color var(--transition), background-color var(--transition);
   }
 
   .row:hover .main-toggle,
@@ -169,41 +183,42 @@
   }
 
   .main-toggle:hover {
-    color: #fbbf24;
-    background: #2f2f2f;
+    color: var(--text-primary);
+    background: var(--surface-hover);
   }
 
   .main-toggle.is-main {
-    color: #fbbf24;
+    color: var(--text-primary);
   }
 
   .chevron {
     width: 0.8rem;
     display: inline-block;
-    color: #8a8a8a;
-    transition: transform 100ms ease-out;
+    color: var(--text-muted);
+    transition: transform var(--transition);
   }
 
   .chevron.open {
     transform: rotate(90deg);
   }
 
+  /* File-type badges: muted, never the accent (A3). One width for all, so
+     the names line up. */
   .badge {
-    width: 0.8rem;
-    font-size: 0.55rem;
-    font-weight: 700;
-    text-align: center;
-    color: #6b6b6b;
+    flex-shrink: 0;
+    width: 1.75rem;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-disabled);
   }
 
   .badge.tex {
-    width: auto;
-    color: #4ade80;
+    color: var(--text-secondary);
   }
 
   .badge.text {
-    width: auto;
-    color: #60a5fa;
+    color: var(--text-muted);
   }
 
   .name {

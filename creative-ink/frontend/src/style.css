@@ -1,27 +1,138 @@
+/* Creative-ink design tokens (.claude/skills/ui-svelte-architect/SKILL.md, A2).
+   Components consume ONLY these variables: never a hex or rgb value.
+   The theme is <html data-theme="light|dark">, set by lib/theme.svelte.js
+   before the app mounts (main.js). */
+
+/* Theme-independent tokens */
 :root {
-    --bg: #1e1e1e;
-    --fg: #d4d4d4;
-    --accent: #3b82f6;
-    color-scheme: dark;
+  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Ubuntu, Cantarell, 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono',
+    'Liberation Mono', monospace;
+  --text-xs: 11px;      /* badges, meta lines */
+  --text-sm: 12px;      /* status bars, tree, tabs */
+  --text-md: 13px;      /* UI body, dialogs */
+  --text-lg: 15px;      /* dialog titles */
+  --text-editor: 14px;  /* CodeMirror */
+  --line-editor: 1.6;
+
+  --radius-sm: 4px;     /* buttons, inputs, tree rows, badges */
+  --radius-md: 6px;     /* cards, menus, modals, the preview sheet */
+
+  --duration: 0.15s;
+  --ease: ease;
+  --transition: var(--duration) var(--ease);
+
+  --icon-size: 18px;
+  --icon-stroke: 1.5;
+
+  /* Legacy aliases: keep the components not migrated yet working (A6).
+     The --accent name is shared with the themes below. */
+  --bg: var(--surface-base);
+  --fg: var(--text-primary);
+}
+
+/* Dark theme */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --surface-base: #181818;    /* app background, ActionBar, Sidebar, status bars */
+  --surface-editor: #202020;  /* CodeMirror, terminal, preview viewer */
+  --surface-raised: #262626;  /* menus, modals, popovers */
+  --surface-hover: rgb(255 255 255 / 0.05);
+  --surface-active: rgb(255 255 255 / 0.08); /* pressed or selected without accent */
+  --border: rgb(255 255 255 / 0.07);         /* hairlines */
+  --border-strong: rgb(255 255 255 / 0.14);  /* inputs */
+
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0a0;
+  --text-muted: #858585;      /* ≥ 4.5:1 on --surface-base */
+  --text-disabled: #5a5a5a;
+
+  --accent: #50c878;          /* emerald */
+  --accent-hover: #66d48b;
+  --accent-contrast: #0b1f14; /* text/icons ON the accent (white fails contrast here) */
+  --accent-soft: rgb(80 200 120 / 0.14);
+
+  --warning: #e5b454;
+  --danger: #f07178;
+  --selection: rgb(130 170 255 / 0.25);      /* text selection: never the accent */
+
+  --shadow-overlay: 0 4px 16px rgb(0 0 0 / 0.35);
+  --shadow-page: 0 1px 4px rgb(0 0 0 / 0.45); /* the PDF sheet */
+  --scrim: rgb(0 0 0 / 0.5);                  /* modal backdrop */
+
+  /* LaTeX syntax (CodeMirror): calm, and never the accent */
+  --syntax-command: #82aaff;  /* \section, \begin */
+  --syntax-bracket: #c792ea;  /* { } [ ] */
+  --syntax-string: #e0c08c;   /* arguments, BibTeX values */
+  --syntax-number: #f78c6c;
+  --syntax-math: #89ddff;     /* $…$ */
+  --syntax-comment: #8a8a8a;  /* % … (italic) */
+}
+
+/* Light theme */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --surface-base: #f9f9f9;    /* ice grey */
+  --surface-editor: #ffffff;
+  --surface-raised: #ffffff;  /* + --border, since white on white needs an edge */
+  --surface-hover: rgb(0 0 0 / 0.04);
+  --surface-active: rgb(0 0 0 / 0.06);
+  --border: rgb(0 0 0 / 0.08);
+  --border-strong: rgb(0 0 0 / 0.16);
+
+  --text-primary: #111111;
+  --text-secondary: #555555;
+  --text-muted: #6b6b6b;
+  --text-disabled: #a8a8a8;
+
+  --accent: #1f7a4d;          /* deep emerald: 5.3:1 on white */
+  --accent-hover: #19663f;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgb(31 122 77 / 0.1);
+
+  --warning: #9a6700;
+  --danger: #c62828;
+  --selection: rgb(31 95 191 / 0.18);
+
+  --shadow-overlay: 0 4px 16px rgb(0 0 0 / 0.08);
+  --shadow-page: 0 1px 3px rgb(0 0 0 / 0.12);
+  --scrim: rgb(0 0 0 / 0.25);
+
+  --syntax-command: #1f5fbf;
+  --syntax-bracket: #7b3fb5;
+  --syntax-string: #8a5a00;
+  --syntax-number: #b5490f;
+  --syntax-math: #0b7285;
+  --syntax-comment: #757575;
+}
+
+/* A4: every transition reads --duration, so this switches all motion off. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration: 0s;
+  }
 }
 
 *,
 *::before,
 *::after {
-    box-sizing: border-box;
+  box-sizing: border-box;
 }
 
 html,
 body {
-    margin: 0;
-    height: 100%;
-    overflow: hidden;
-    background-color: var(--bg);
-    color: var(--fg);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Ubuntu",
-    "Cantarell", "Helvetica Neue", sans-serif;
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--surface-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+}
+
+::selection {
+  background: var(--selection);
 }
 
 #app {
-    height: 100vh;
+  height: 100vh;
 }

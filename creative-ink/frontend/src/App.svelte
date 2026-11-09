@@ -105,19 +105,15 @@
     height: 100%;
     display: grid;
     grid-template-columns: var(--actionbar-w) var(--sidebar-w) minmax(0, 1fr);
+    background: var(--surface-base);
     /* Short slide: Preview's ResizeObserver is debounced (150 ms), so the
-       PDF re-renders once after the drawer settles, not on every frame. */
-    transition: grid-template-columns 120ms ease-out;
+       PDF re-renders once after the drawer settles, not on every frame.
+       --duration is 0s with prefers-reduced-motion (style.css). */
+    transition: grid-template-columns var(--transition);
   }
 
   .main {
     min-width: 0;
     min-height: 0;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .shell {
-      transition: none;
-    }
   }
 </style>

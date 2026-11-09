@@ -66,11 +66,12 @@
 </aside>
 
 <style>
+  /* Chrome: --surface-base like the ActionBar; the editor's own surface
+     separates it from the Workspace, so no border is needed (A3). */
   .sidebar {
     min-width: 0;
     overflow: hidden;
-    border-right: 1px solid #2b2b2b;
-    background: #1b1b1b;
+    background: var(--surface-base);
   }
 
   /* Fixed inner width: the drawer clips its content while it animates
@@ -88,11 +89,11 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.4rem 0.5rem 0.4rem 0.9rem;
-    font-size: 0.7rem;
-    font-weight: 600;
+    font-size: var(--text-xs);
+    font-weight: 500;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #9d9d9d;
+    color: var(--text-muted);
   }
 
   .tools {
@@ -103,32 +104,43 @@
   .tools button {
     display: grid;
     place-items: center;
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     padding: 0;
     border: 0;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background: transparent;
-    color: #8a8a8a;
+    color: var(--text-secondary);
     cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
   }
 
   .tools button:hover:not(:disabled) {
-    color: #e5e5e5;
-    background: #2a2a2a;
+    color: var(--text-primary);
+    background: var(--surface-hover);
+  }
+
+  .tools button:active:not(:disabled) {
+    background: var(--surface-active);
+  }
+
+  .tools button:focus-visible,
+  .primary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   .tools button:disabled {
-    opacity: 0.4;
+    color: var(--text-disabled);
     cursor: default;
   }
 
   svg {
-    width: 16px;
-    height: 16px;
+    width: var(--icon-size);
+    height: var(--icon-size);
     fill: none;
     stroke: currentColor;
-    stroke-width: 1.6;
+    stroke-width: var(--icon-stroke);
     stroke-linecap: round;
     stroke-linejoin: round;
   }
@@ -136,9 +148,9 @@
   .folder {
     margin: 0;
     padding: 0.2rem 0.9rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: #bdbdbd;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -151,36 +163,43 @@
 
   .empty {
     padding: 1rem 0.9rem;
-    font-size: 0.8rem;
-    color: #9d9d9d;
+    font-size: var(--text-md);
+    color: var(--text-secondary);
   }
 
   .empty p {
     margin: 0 0 0.75rem;
   }
 
+  /* The one primary action of the empty state: filled with the accent (A2). */
   .primary {
     width: 100%;
     padding: 0.4rem 0.75rem;
     border: 0;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-contrast);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--text-md);
+    font-weight: 500;
     cursor: pointer;
+    transition: background-color var(--transition);
+  }
+
+  .primary:hover {
+    background: var(--accent-hover);
   }
 
   .hint,
   .error {
     margin: 0;
     padding: 0.6rem 0.9rem;
-    font-size: 0.7rem;
+    font-size: var(--text-xs);
     line-height: 1.4;
-    color: #6b6b6b;
+    color: var(--text-muted);
   }
 
   .error {
-    color: #f87171;
+    color: var(--danger);
   }
 </style>
