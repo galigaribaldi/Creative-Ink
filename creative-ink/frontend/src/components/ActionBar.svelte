@@ -115,14 +115,14 @@
 </nav>
 
 <style>
+  /* Chrome: same surface as the Sidebar, no border (A3: surfaces separate). */
   .actionbar {
     display: flex;
     flex-direction: column;
     justify-content: space-between;
     align-items: center;
     padding: 0.5rem 0;
-    border-right: 1px solid #2b2b2b;
-    background: #181818;
+    background: var(--surface-base);
   }
 
   .group {
@@ -139,53 +139,53 @@
     height: 36px;
     padding: 0;
     border: 0;
-    border-left: 2px solid transparent;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background: transparent;
-    color: #8a8a8a;
+    color: var(--text-secondary);
     cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
   }
 
   button:hover:not(:disabled) {
-    color: #e5e5e5;
-    background: #242424;
+    color: var(--text-primary);
+    background: var(--surface-hover);
   }
 
+  /* Keyboard only: the one place besides A2's list where the accent shows. */
   button:focus-visible {
-    outline: 1px solid var(--accent);
-    outline-offset: -1px;
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
-  button.active {
-    color: #e5e5e5;
-    border-left-color: var(--accent);
-    border-radius: 0 4px 4px 0;
+  /* Active tool (open drawer, split editor, terminal): neutral, never the accent. */
+  button.active,
+  button:active:not(:disabled) {
+    color: var(--text-primary);
+    background: var(--surface-active);
   }
 
   button:disabled {
+    color: var(--text-disabled);
     cursor: default;
   }
 
   svg {
-    width: 20px;
-    height: 20px;
+    width: var(--icon-size);
+    height: var(--icon-size);
     fill: none;
     stroke: currentColor;
-    stroke-width: 1.6;
+    stroke-width: var(--icon-stroke);
     stroke-linecap: round;
     stroke-linejoin: round;
   }
 
+  /* Compiling: the icon turns into a quiet spinner (A1: success and progress are neutral). */
   .compile.busy {
-    color: #fbbf24;
+    color: var(--text-primary);
   }
 
   .compile.busy svg {
     animation: spin 0.9s linear infinite;
-  }
-
-  .badge.busy {
-    background: #fbbf24;
   }
 
   .badge {
@@ -195,7 +195,11 @@
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: #f87171;
+    background: var(--danger); /* last compilation failed */
+  }
+
+  .badge.busy {
+    background: var(--text-secondary); /* a terminal command is running */
   }
 
   @keyframes spin {

@@ -66,13 +66,15 @@
 </section>
 
 <style>
+  /* Tabs on the chrome surface; the content (log, terminal) on the editor's
+     surface, like a text canvas. One hairline separates it from the editor. */
   .panel {
     height: 35%;
     min-height: 120px;
     display: flex;
     flex-direction: column;
-    border-top: 1px solid #333;
-    background: #181818;
+    border-top: 1px solid var(--border);
+    background: var(--surface-editor);
   }
 
   .panel.closed {
@@ -81,40 +83,44 @@
 
   .tabs {
     display: flex;
-    align-items: stretch;
-    gap: 0.1rem;
-    padding: 0 0.4rem;
-    border-bottom: 1px solid #2b2b2b;
+    align-items: center;
+    gap: 0.15rem;
+    padding: 0.2rem 0.4rem;
+    background: var(--surface-base);
   }
 
   .tabs button {
     display: flex;
     align-items: center;
     gap: 0.35rem;
-    padding: 0.3rem 0.6rem;
+    padding: 0.2rem 0.6rem;
     border: 0;
-    border-bottom: 1px solid transparent;
+    border-radius: var(--radius-sm);
     background: transparent;
-    color: #8a8a8a;
+    color: var(--text-muted);
     font: inherit;
-    font-size: 0.7rem;
+    font-size: var(--text-xs);
+    font-weight: 500;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
   }
 
   .tabs button:hover {
-    color: #e5e5e5;
+    color: var(--text-primary);
+    background: var(--surface-hover);
   }
 
+  /* Active tab: neutral (A2: the accent is not for tabs). */
   .tabs button.selected {
-    color: #e5e5e5;
-    border-bottom-color: var(--accent);
+    color: var(--text-primary);
+    background: var(--surface-active);
   }
 
   .tabs button:focus-visible {
-    outline: 1px solid var(--accent);
-    outline-offset: -1px;
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .tabs .close {
@@ -129,11 +135,11 @@
   }
 
   .dot-error {
-    background: #f87171;
+    background: var(--danger);
   }
 
   .dot-busy {
-    background: #fbbf24;
+    background: var(--text-secondary);
   }
 
   .content {

@@ -11,23 +11,26 @@
 {/if}
 
 <style>
+  /* The log is content: primary text in the editor's font. The tab's dot
+     and the role already say it is an error, so it is not painted red. */
   .log {
     height: 100%;
     margin: 0;
     padding: 0.5rem 0.75rem;
     overflow: auto;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 0.75rem;
-    line-height: 1.45;
-    color: #e5c0c0;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--text-primary);
     white-space: pre-wrap;
     word-break: break-word;
   }
 
+  /* Quiet success (A1). */
   .clean {
     margin: 0;
     padding: 0.75rem;
-    font-size: 0.8rem;
-    color: #6b6b6b;
+    font-size: var(--text-md);
+    color: var(--text-muted);
   }
 </style>
