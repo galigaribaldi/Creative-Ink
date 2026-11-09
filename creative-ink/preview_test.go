@@ -104,7 +104,7 @@ func TestPreviewMiddlewareServesImmutableSnapshots(t *testing.T) {
 	a.previews = previews
 	folder, _ := a.workspace()
 
-	a.RequestCompile()
+	a.RequestCompile("manual")
 	nextEvent(t, events) // started
 	fin := nextEvent(t, events).data[0].(CompileFinishedEvent)
 	if fin.PDFVersion == 0 {
@@ -143,7 +143,7 @@ func TestFailedCompileDoesNotPublish(t *testing.T) {
 	t.Cleanup(func() { _ = previews.Close() })
 	a.previews = previews
 
-	a.RequestCompile()
+	a.RequestCompile("manual")
 	nextEvent(t, events)
 	if fin := nextEvent(t, events).data[0].(CompileFinishedEvent); fin.Success || fin.PDFVersion != 0 {
 		t.Fatalf("finished = %+v, want failure without a snapshot", fin)
@@ -178,7 +178,7 @@ func TestUnchangedPDFKeepsItsVersion(t *testing.T) {
 	compile := func(m string) CompileFinishedEvent {
 		t.Helper()
 		mode = m // set before RequestCompile: the worker reads it afterwards
-		a.RequestCompile()
+		a.RequestCompile("manual")
 		nextEvent(t, events) // started
 		return nextEvent(t, events).data[0].(CompileFinishedEvent)
 	}
@@ -207,7 +207,7 @@ func TestPreviewVersionWithoutSnapshotStore(t *testing.T) {
 		return "ok", os.WriteFile(filepath.Join(workdir, "main.pdf"), []byte("%PDF"), 0o644)
 	})
 	// previews == nil: the ModTime doubles as the version (live PDF served).
-	a.RequestCompile()
+	a.RequestCompile("manual")
 	nextEvent(t, events)
 	fin := nextEvent(t, events).data[0].(CompileFinishedEvent)
 	if fin.PDFVersion == 0 || int64(fin.PDFVersion) != fin.PDFModTime {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"creative-ink/internal/config"
 	"creative-ink/internal/core"
 	"creative-ink/internal/system"
 )
@@ -39,6 +41,15 @@ func newTestApp(t *testing.T, compile compileFunc) (*App, chan emittedEvent) {
 	}
 
 	a := newApp(folder, doc, compile)
+	// These tests exercise compile-on-open: turn compile.auto on (the
+	// product default is off, see TestAutoCompileIsOffByDefault).
+	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	if _, err := core.UpdateSettings(a.settingsPath, func(s *core.Settings) {
+		s.SetUserConfig(config.CompileAuto, json.RawMessage("true"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.healthDelay = time.Hour // health checks are tested on their own
 	events := make(chan emittedEvent, 32)
 	a.emit = func(name string, data ...any) { events <- emittedEvent{name: name, data: data} }
 	a.pickFolder = func(string) (string, error) { return "", errors.New("unexpected folder dialog") }
@@ -108,7 +119,7 @@ func TestRequestCompileDoesNotBlock(t *testing.T) {
 	_, doc := a.workspace()
 
 	done := make(chan bool, 1)
-	go func() { done <- a.RequestCompile() }()
+	go func() { done <- a.RequestCompile("manual") }()
 	select {
 	case ok := <-done:
 		if !ok {
@@ -259,7 +270,7 @@ func TestRequestCompileQueuesWithoutSaving(t *testing.T) {
 	_, doc := a.workspace()
 	before, _ := os.Stat(doc)
 
-	if !a.RequestCompile() {
+	if !a.RequestCompile("manual") {
 		t.Fatal("RequestCompile must be accepted while the app is running")
 	}
 	expectCompileOf(t, events, doc)
@@ -268,7 +279,7 @@ func TestRequestCompileQueuesWithoutSaving(t *testing.T) {
 	}
 
 	a.compiles.Close(time.Second)
-	if a.RequestCompile() {
+	if a.RequestCompile("manual") {
 		t.Fatal("RequestCompile after shutdown must report false")
 	}
 }
@@ -295,6 +306,7 @@ func fakeRepoOptions(t *testing.T, shared bool) (func() system.RepositoryOptions
 func newFirstRunApp(t *testing.T, shared bool) (*App, string, string) {
 	t.Helper()
 	a := newApp("", "", okCompile)
+	a.healthDelay = time.Hour
 	t.Cleanup(func() { a.compiles.Close(time.Second) })
 	var userPath, sharedPath string
 	a.repoOptions, userPath, sharedPath = fakeRepoOptions(t, shared)
@@ -440,7 +452,7 @@ func TestSetMainFileCompilesMainWhileEditingAChapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectNoEvent(t, events)
-	a.RequestCompile()
+	a.RequestCompile("manual")
 	expectCompileOf(t, events, mainTex)
 	if a.pdfPath() != filepath.Join(folder, "main.pdf") {
 		t.Fatalf("preview must show the main PDF, got %q", a.pdfPath())
@@ -781,7 +793,7 @@ func TestHybridTerminalRoutesCiInternally(t *testing.T) {
 	if st, _ := a.workspaceState(); st.AutoCompile {
 		t.Fatal("WorkspaceState.AutoCompile must reflect the saved setting")
 	}
-	if s, _ := core.ReadSettings(a.settingsPath); s.AutoCompileEnabled() {
+	if s, _ := core.ReadSettings(a.settingsPath); string(s.Config[config.CompileAuto]) != "false" {
 		t.Fatal("the setting must be saved")
 	}
 
@@ -806,7 +818,7 @@ func TestHybridTerminalCiWorksWithoutAFolder(t *testing.T) {
 func TestCiBuildFailureEndsCompilingState(t *testing.T) {
 	a, events := newTestApp(t, okCompile)
 	_, doc := a.workspace()
-	env := a.ciEnv()
+	env := a.ciEnv(0, nil)
 
 	env.BuildStarted()
 	env.BuildFinished(time.Second, errors.New("xelatex falló"), "▶ xelatex …")
@@ -895,12 +907,18 @@ func TestCreateProjectAndQuickDocument(t *testing.T) {
 	if st.FolderPath != project || st.MainFilePath != filepath.Join(project, "main.tex") || st.NeedsStart {
 		t.Fatalf("project state = %+v", st)
 	}
-	expectCompileOf(t, events, filepath.Join(project, "main.tex"))
+	// compile.auto is off by default: a new project is not compiled (there
+	// is no PDF to show yet either). ⌘S compiles it.
+	expectNoEvent(t, events)
 
 	st, err = a.CreateQuickDocument()
 	quick := filepath.Join(root, "tmp-Workspaces", "unnamed-tmp1")
 	if err != nil || st.FolderPath != quick || st.FilePath != filepath.Join(quick, "main.tex") {
 		t.Fatalf("quick state = %+v, %v", st, err)
+	}
+	expectNoEvent(t, events)
+	if !a.RequestCompile("manual") {
+		t.Fatal("manual compile")
 	}
 	expectCompileOf(t, events, filepath.Join(quick, "main.tex"))
 
@@ -1114,4 +1132,115 @@ func TestMenuOnlyOnMacAndEmitsCommands(t *testing.T) {
 	if ev.name != EventMenuCommand || ev.data[0].(MenuCommandEvent).ID != "new-file" {
 		t.Fatalf("event = %+v", ev)
 	}
+}
+
+// ── Config service, auto-compile gate, terminal spool, project health ─────
+
+func TestAutoCompileIsOffByDefault(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	a.settingsPath = filepath.Join(t.TempDir(), "vacio.json") // no user value: default
+	folder, doc := a.workspace()
+	if a.autoCompileEnabled() {
+		t.Fatal("compile.auto must default to off")
+	}
+
+	// Opening a file compiles nothing; an existing PDF is shown as cached.
+	if err := os.WriteFile(filepath.Join(folder, "main.pdf"), []byte("%PDF-1.7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.OpenFile(doc); err != nil {
+		t.Fatal(err)
+	}
+	ev := nextEvent(t, events)
+	fin, ok := ev.data[0].(CompileFinishedEvent)
+	if ev.name != EventCompileFinished || !ok || !fin.Cached || !fin.Success || fin.File != doc {
+		t.Fatalf("event = %+v, want a cached preview of main.pdf", ev)
+	}
+	expectNoEvent(t, events) // no compile:started: latexmk never ran
+
+	// Go rejects automatic requests (second lock); manual ones always run.
+	if a.RequestCompile("auto") || a.RequestCompile("otro") {
+		t.Fatal("auto (with compile.auto off) and unknown triggers must be rejected")
+	}
+	if !a.RequestCompile("manual") {
+		t.Fatal("⌘S must always compile")
+	}
+	expectCompileOf(t, events, doc)
+}
+
+func TestSetConfigLayersAndEvent(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	folder, _ := a.workspace()
+
+	e, err := a.SetConfig("autocompile", "off", "project")
+	if err != nil || e.Value != false || e.Scope != config.ScopeProject {
+		t.Fatalf("project = %+v, %v", e, err)
+	}
+	ev := nextEvent(t, events)
+	if changed := ev.data[0].(ConfigChangedEvent); ev.name != EventConfigChanged || changed.Written != config.ScopeProject || changed.Folder != folder {
+		t.Fatalf("event = %+v", ev)
+	}
+	if a.autoCompileEnabled() {
+		t.Fatal("the project layer must win over the user's (on)")
+	}
+	if meta, _ := core.LoadProjectMeta(folder); string(meta.Config[config.CompileAuto]) != "false" {
+		t.Fatalf("meta = %+v", meta)
+	}
+	if e, _ := a.SetConfig(config.CompileAuto, "", "project"); e.Value != true || e.Scope != config.ScopeUser {
+		t.Fatalf("after unset = %+v (back to the user value)", e)
+	}
+	for _, bad := range [][3]string{{"nada", "on", "user"}, {"compile.auto", "quizá", "user"}, {"compile.auto", "on", "default"}} {
+		if _, err := a.SetConfig(bad[0], bad[1], bad[2]); err == nil {
+			t.Errorf("SetConfig%v must fail", bad)
+		}
+	}
+	if st, _ := a.workspaceState(); !st.AutoCompile {
+		t.Fatal("WorkspaceState.AutoCompile is the effective value")
+	}
+}
+
+func TestTerminalOutputIsSpooled(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	spool, err := core.NewOutputSpool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.spool = spool
+	t.Cleanup(func() { _ = spool.Close() })
+
+	res, err := a.RunTerminalCommand("echo hola-spool")
+	if err != nil || res.RunID == 0 {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	ev := nextEvent(t, events)
+	if started := ev.data[0].(TerminalStartedEvent); ev.name != EventTerminalStarted || started.RunID != res.RunID {
+		t.Fatalf("event = %+v", ev)
+	}
+	chunk, err := a.ReadTerminalOutput(res.RunID, 0)
+	if err != nil || !strings.Contains(chunk.Data, "hola-spool") || !chunk.Done {
+		t.Fatalf("chunk = %+v, %v", chunk, err)
+	}
+	if _, err := a.ReadTerminalOutput(999, 0); !errors.Is(err, core.ErrUnknownRun) {
+		t.Fatalf("unknown run: %v", err)
+	}
+}
+
+func TestProjectHealthWarnsWithoutChangingAnything(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	folder, doc := a.workspace()
+	body := "\\documentclass{article}\n" + strings.Repeat("\\includegraphics{fig}\n", 61)
+	if err := os.WriteFile(doc, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a.checkProjectHealth()
+	ev := nextEvent(t, events)
+	h, ok := ev.data[0].(core.ProjectHealth)
+	if ev.name != EventProjectHealth || !ok || h.Folder != folder || len(h.Warnings) != 1 || h.Warnings[0].Kind != core.HealthManyImages {
+		t.Fatalf("event = %+v", ev)
+	}
+	if got := a.GetProjectHealth(); len(got.Warnings) != 1 {
+		t.Fatalf("GetProjectHealth = %+v", got)
+	}
+	a.checkProjectHealth() // same result: no new event
+	expectNoEvent(t, events)
 }

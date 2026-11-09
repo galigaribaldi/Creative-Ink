@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"creative-ink/internal/compiler"
+	"creative-ink/internal/config"
 )
 
 // tikzCacheDir is the TikZ externalization cache of the project (Makefile
@@ -43,18 +44,30 @@ type Env struct {
 	// Target is the absolute path of the document to build: the project's
 	// main file, or the active .tex ("" if none).
 	Target string
-	// AutoCompile reads and SetAutoCompile persists the setting.
-	AutoCompile    func() (bool, error)
-	SetAutoCompile func(on bool) error
+	// Config is the configuration service (nil = `ci config` unavailable).
+	Config ConfigService
 	// BuildStarted / BuildFinished let the App keep the preview in sync
 	// (compile:started / compile:finished). On success (err == nil)
 	// BuildFinished runs under the compile lock, right after the build wrote
 	// Target's PDF; on failure it receives the error and the report.
 	BuildStarted  func()
 	BuildFinished func(duration time.Duration, err error, report string)
+	// Output receives the full output and the progress of builds while
+	// they run (the App spools it and emits terminal:progress). The zero
+	// value discards them.
+	Output compiler.BuildOutput
 
 	// Overridable in tests.
-	runPasses func(ctx context.Context, workdir string, passes []compiler.Pass, after func() string) (string, error)
+	runPasses func(ctx context.Context, workdir string, passes []compiler.Pass, after func() string, out compiler.BuildOutput) (string, error)
+}
+
+// ConfigService is the configuration service as the App exposes it.
+type ConfigService interface {
+	// List resolves every key (effective value and the layer it comes from).
+	List() []config.Entry
+	// Set writes value to scope ("" removes the scope's value) and returns
+	// the key's new effective entry, which may come from another layer.
+	Set(key, value string, scope config.Scope) (config.Entry, error)
 }
 
 // IsCommand reports whether a terminal line is a reserved `ci` command
@@ -89,37 +102,98 @@ func Run(ctx context.Context, line string, env Env) (string, error) {
 
 // ── config ─────────────────────────────────────────────────────────────────
 
+const configUsage = `ci config [list]
+  ci config get <clave>
+  ci config set <clave> <valor> [--project]
+  ci config unset <clave> [--project]
+  ci config <clave> [valor] [--project]     (p. ej. ci config autocompile on)`
+
 func runConfig(args []string, env Env) (string, error) {
-	if len(args) == 0 || args[0] != "autocompile" || len(args) > 2 {
-		return "", usage("ci config autocompile [on|off]")
+	if env.Config == nil {
+		return "", errors.New("la configuración no está disponible")
 	}
-	if len(args) == 1 {
-		on, err := env.AutoCompile()
-		if err != nil {
-			return "", err
+	scope := config.ScopeUser
+	var rest []string
+	for _, a := range args {
+		switch a {
+		case "--project", "--proyecto":
+			scope = config.ScopeProject
+		case "--user", "--usuario":
+			scope = config.ScopeUser
+		default:
+			rest = append(rest, a)
 		}
-		return fmt.Sprintf("autocompile: %s\n", onOff(on)), nil
 	}
-	var on bool
-	switch args[1] {
-	case "on":
-		on = true
-	case "off":
-		on = false
-	default:
-		return "", usage("ci config autocompile [on|off]")
+
+	switch {
+	case len(rest) == 0 || (rest[0] == "list" && len(rest) == 1):
+		return listConfig(env.Config.List()), nil
+	case rest[0] == "get" && len(rest) == 2:
+		return getConfig(env, rest[1])
+	case rest[0] == "set" && len(rest) == 3:
+		return setConfig(env, rest[1], rest[2], scope)
+	case rest[0] == "unset" && len(rest) == 2:
+		return setConfig(env, rest[1], "", scope)
+	case rest[0] != "get" && rest[0] != "set" && rest[0] != "unset" && rest[0] != "list" && len(rest) <= 2:
+		if len(rest) == 1 {
+			return getConfig(env, rest[0])
+		}
+		return setConfig(env, rest[0], rest[1], scope)
 	}
-	if err := env.SetAutoCompile(on); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("✓ autocompile: %s (guardado en settings.json)\n", onOff(on)), nil
+	return "", usage("%s", configUsage)
 }
 
-func onOff(on bool) string {
-	if on {
-		return "on"
+func listConfig(entries []config.Entry) string {
+	var b strings.Builder
+	for _, e := range entries {
+		fmt.Fprintf(&b, "%-14s = %-4s (%s)  %s\n", e.ID, config.Format(e.Value), scopeLabel(e.Scope), e.Description)
 	}
-	return "off"
+	b.WriteString("\nCambiar: ci config set <clave> <valor> [--project] · Quitar: ci config unset <clave> [--project]\n")
+	return b.String()
+}
+
+func getConfig(env Env, name string) (string, error) {
+	k, err := config.Lookup(name)
+	if err != nil {
+		return "", usage("%v", err)
+	}
+	for _, e := range env.Config.List() {
+		if e.ID == k.ID {
+			return fmt.Sprintf("%s = %s (%s)\n  %s\n", e.ID, config.Format(e.Value), scopeLabel(e.Scope), e.Description), nil
+		}
+	}
+	return "", usage("clave %q", name)
+}
+
+func setConfig(env Env, name, value string, scope config.Scope) (string, error) {
+	e, err := env.Config.Set(name, value, scope)
+	switch {
+	case errors.Is(err, config.ErrUnknownKey), errors.Is(err, config.ErrValue), errors.Is(err, config.ErrScope):
+		return "", usage("%v", err)
+	case err != nil:
+		return "", err
+	}
+	var b strings.Builder
+	if value == "" {
+		fmt.Fprintf(&b, "✓ %s: se quitó el valor de %s → ahora %s (%s)\n", e.ID, scopeLabel(scope), config.Format(e.Value), scopeLabel(e.Scope))
+	} else {
+		fmt.Fprintf(&b, "✓ %s = %s (%s)\n", e.ID, value, scopeLabel(scope))
+	}
+	if scope == config.ScopeUser && e.Scope == config.ScopeProject {
+		fmt.Fprintf(&b, "⚠ El proyecto la fija en %s y manda sobre tu valor de usuario. Para usar el tuyo: ci config unset %s --project\n",
+			config.Format(e.Value), e.ID)
+	}
+	return b.String(), nil
+}
+
+func scopeLabel(s config.Scope) string {
+	switch s {
+	case config.ScopeUser:
+		return "usuario · settings.json"
+	case config.ScopeProject:
+		return "proyecto · .creative-ink-meta"
+	}
+	return "por defecto"
 }
 
 // ── compile ────────────────────────────────────────────────────────────────
@@ -189,13 +263,16 @@ func runCompile(ctx context.Context, args []string, env Env) (string, error) {
 	if updatesPreview && env.BuildStarted != nil {
 		env.BuildStarted()
 	}
+	out := env.Output
+	// "página 143 de 212": the previous build of the same job knows the total.
+	out.ExpectedPages = compiler.PagesFromLog(filepath.Join(dir, strings.TrimSuffix(resultPDF, ".pdf")+".log"))
 	start := time.Now()
 	report, err := env.runPasses(ctx, dir, passes, func() string {
 		if updatesPreview && env.BuildFinished != nil {
 			env.BuildFinished(time.Since(start), nil, "")
 		}
 		return fmt.Sprintf("→ PDF: %s (%.1f s en total)\n", resultPDF, time.Since(start).Seconds())
-	})
+	}, out)
 	// A failed build must end the "compiling" state in the UI too.
 	if err != nil && updatesPreview && env.BuildFinished != nil {
 		env.BuildFinished(time.Since(start), err, report)
@@ -241,7 +318,7 @@ func runClean(ctx context.Context, args []string, env Env) (string, error) {
 				}
 			}
 			return fmt.Sprintf("✓ %d archivos auxiliares adicionales eliminados\n", removed)
-		})
+		}, env.Output)
 	}
 	return "", usage("ci clean <tikz|all>")
 }
@@ -279,7 +356,9 @@ func usage(format string, a ...any) error {
 
 const helpText = `Creative Ink — comandos internos (no usan la shell ni make):
 
-  ci config autocompile [on|off]   Ver o cambiar la compilación automática
+  ci config [list]                 Ver la configuración (valor y de dónde sale)
+  ci config autocompile [on|off]   Compilación automática (por defecto off) [--project]
+  ci config set|unset <clave> …    Cambiar o quitar un valor [--project]
   ci compile rapido                Una pasada de XeLaTeX
   ci compile borrador              Sin imágenes (el preámbulo debe usar \borrador)
   ci compile completo              XeLaTeX → BibTeX → XeLaTeX → XeLaTeX
@@ -288,5 +367,6 @@ const helpText = `Creative Ink — comandos internos (no usan la shell ni make):
   ci clean all                     latexmk -C y auxiliares restantes (incluye el PDF)
 
 Se aplican al archivo principal (★) o, si no hay, al .tex abierto.
+La salida completa de cada comando se guarda en disco: "Salida completa" la muestra.
 Cualquier otra línea se ejecuta en la shell del sistema.
 `
