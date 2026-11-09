@@ -3,6 +3,7 @@
 
 /** @typedef {'explorer'} SidebarTool */
 /** @typedef {'problems' | 'terminal'} BottomTab */
+/** @typedef {'primary' | 'secondary'} EditorPane */
 
 export const ui = $state({
   sidebarOpen: false,
@@ -19,7 +20,11 @@ export const ui = $state({
   /** Opened by a compile error (not by the user): closes again on success. */
   bottomAutoOpened: false,
   /** Start screen reopened by the user while a project is open. */
-  startOpen: false
+  startOpen: false,
+  /** Two editor panes side by side (⌘\). The main one decides what compiles. */
+  splitEditor: false,
+  /** Pane that last had the focus: the explorer opens files there. @type {EditorPane} */
+  focusedPane: 'primary'
 })
 
 /**

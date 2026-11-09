@@ -7,17 +7,25 @@
 
 /**
  * @typedef {{ name: string, path: string, isDir: boolean, editable: boolean, children?: FileNode[] }} FileNode
- * @typedef {{ needsSetup: boolean, needsStart: boolean, repositoryPath: string, canceled: boolean, folderPath: string, filePath: string, mainFilePath: string, tree: FileNode, truncated: boolean }} WorkspaceState
+ * @typedef {{ needsSetup: boolean, needsStart: boolean, repositoryPath: string, canceled: boolean, folderPath: string, filePath: string, texFilePath: string, mainFilePath: string, tree: FileNode, truncated: boolean }} WorkspaceState
  */
 
 export const workspace = $state({
   /** Absolute path of the open folder ("" before the first load). */
   currentFolderPath: '',
   /**
-   * Absolute path of the .tex shown in the editor ("" = none). Changing it
-   * makes Editor.svelte save pending edits and load the new file.
+   * Absolute path of the file shown in the main editor pane ("" = none):
+   * any text file (.tex, .bib, .sty…). Changing it makes Editor.svelte save
+   * pending edits and load the new file.
    */
   currentFilePath: '',
+  /**
+   * Last .tex opened in the main pane: what Go compiles when the project has
+   * no main file. Opening refs.bib keeps it, so the preview does not change.
+   */
+  texFilePath: '',
+  /** File of the second editor pane ("" = none or split closed). Never equal to currentFilePath. */
+  secondaryFilePath: '',
   /**
    * Absolute path of the project's root document ("" = none). When set, Go
    * compiles and previews it whatever file is being edited.
@@ -38,6 +46,11 @@ export const workspace = $state({
 
 /** Applies a WorkspaceState returned by Go. */
 export function applyWorkspace(/** @type {WorkspaceState} */ state) {
+  // Another folder: the second pane's file belongs to the old one (its edits
+  // were saved before the switch, see actions.js persistPendingEdits).
+  if (state.folderPath !== workspace.currentFolderPath || state.filePath === workspace.secondaryFilePath) {
+    workspace.secondaryFilePath = ''
+  }
   workspace.needsSetup = state.needsSetup
   workspace.needsStart = state.needsStart
   workspace.repositoryPath = state.repositoryPath
@@ -45,6 +58,7 @@ export function applyWorkspace(/** @type {WorkspaceState} */ state) {
   workspace.fileTree = state.tree
   workspace.truncated = state.truncated
   workspace.currentFilePath = state.filePath
+  workspace.texFilePath = state.texFilePath
   workspace.mainFilePath = state.mainFilePath
   workspace.error = ''
 }
@@ -64,10 +78,16 @@ export function applyTree(/** @type {WorkspaceState} */ state) {
 
 /**
  * What Go compiles and previews: the main file if the project has one,
- * otherwise the file being edited. Reactive when read inside $derived/$effect.
+ * otherwise the last .tex of the main pane (App.compileTarget in Go).
+ * Reactive when read inside $derived/$effect.
  */
 export function compileTarget() {
-  return workspace.mainFilePath || workspace.currentFilePath
+  return workspace.mainFilePath || workspace.texFilePath
+}
+
+/** LaTeX source (can be compiled, be the main file, use SyncTeX). */
+export function isTeXPath(/** @type {string} */ path) {
+  return /\.tex$/i.test(path)
 }
 
 /** Last path segment, for display. */

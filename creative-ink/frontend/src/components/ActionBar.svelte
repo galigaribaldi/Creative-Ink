@@ -1,5 +1,5 @@
 <script>
-  import { compileDocument, openFolder, saveAs, saveDocument } from '../lib/actions.js'
+  import { compileDocument, openFolder, saveAs, saveDocument, toggleSplitEditor } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
   import { terminal } from '../lib/terminal.svelte.js'
   import { toggleBottomTab, toggleTool, ui } from '../lib/ui.svelte.js'
@@ -76,6 +76,18 @@
   </div>
 
   <div class="group">
+    <button
+      class:active={ui.splitEditor}
+      onclick={toggleSplitEditor}
+      aria-label="Dividir el editor"
+      aria-pressed={ui.splitEditor}
+      title="Dividir el editor: dos archivos lado a lado ({MOD}\)"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM12 5v14" />
+      </svg>
+    </button>
+
     <button
       class:active={terminalOpen}
       onclick={() => toggleBottomTab('terminal')}

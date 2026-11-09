@@ -1,10 +1,11 @@
 <script>
   import FileTreeItem from './FileTreeItem.svelte'
-  import { openFolder, refreshWorkspace } from '../lib/actions.js'
+  import { newFile, openFolder, refreshWorkspace } from '../lib/actions.js'
   import { ui } from '../lib/ui.svelte.js'
   import { workspace } from '../lib/workspace.svelte.js'
 
   const TITLES = { explorer: 'Explorador' }
+  const MOD = navigator.platform.toUpperCase().includes('MAC') ? '⌘' : 'Ctrl+'
 
   let tree = $derived(workspace.fileTree)
 </script>
@@ -16,6 +17,12 @@
     <header>
       <span>{TITLES[ui.activeTool]}</span>
       <div class="tools">
+        <button onclick={newFile} aria-label="Nuevo archivo" title="Nuevo archivo… ({MOD}N)" disabled={!tree}>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+            <path d="M14 3v5h5M12 11v6M9 14h6" />
+          </svg>
+        </button>
         <button onclick={openFolder} aria-label="Abrir carpeta" title="Abrir carpeta">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
