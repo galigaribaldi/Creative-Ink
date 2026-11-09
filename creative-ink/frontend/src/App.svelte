@@ -9,13 +9,12 @@
   import {
     initWorkspace,
     listenAppEvents,
+    listenMenuEvents,
     listenWorkspaceEvents,
-    openFolder,
-    saveAs,
-    saveDocument
+    runCommand
   } from './lib/actions.js'
   import { listenCompileEvents, resetCompilation } from './lib/compilation.svelte.js'
-  import { toggleBottomTab, toggleSidebar, ui } from './lib/ui.svelte.js'
+  import { ui } from './lib/ui.svelte.js'
   import { compileTarget, workspace } from './lib/workspace.svelte.js'
 
   const ACTIONBAR_WIDTH = '44px'
@@ -28,6 +27,8 @@
   onDestroy(listenWorkspaceEvents())
   // Closing the window flushes CodeMirror first (Go's OnBeforeClose).
   onDestroy(listenAppEvents())
+  // Native menu clicks (macOS): same commands as the shortcuts below.
+  onDestroy(listenMenuEvents())
   void initWorkspace()
 
   // A different compile target (another file, or the main file changed): the
@@ -40,29 +41,30 @@
 
   /**
    * Global shortcuts (they also fire inside CodeMirror: its keydown bubbles).
+   * Editing commands (undo, find, ⌘D, ⌘/…) belong to CodeMirror's keymap.
+   * Cmd/Ctrl+N new file · Cmd/Ctrl+Shift+N quick document
    * Cmd/Ctrl+S save + compile · Cmd/Ctrl+Shift+S save as
-   * Cmd/Ctrl+B sidebar · Cmd/Ctrl+O open folder
+   * Cmd/Ctrl+B sidebar · Cmd/Ctrl+O open folder · Cmd/Ctrl+\ split editor
    * Ctrl+` or Cmd/Ctrl+J terminal (` is a dead key on Spanish layouts)
+   *
+   * preventDefault also keeps the macOS menu (menu.go) from running the same
+   * command again: WKWebView only passes unhandled keys to the menu.
    */
   function onkeydown(event) {
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return
     const key = event.key.toLowerCase()
-    if ((event.ctrlKey && event.code === 'Backquote') || (key === 'j' && !event.shiftKey)) {
-      event.preventDefault()
-      toggleBottomTab('terminal')
-    } else if (key === 's' && !event.shiftKey) {
-      event.preventDefault() // no "Save page" from the webview
-      saveDocument()
-    } else if (key === 'b' && !event.shiftKey) {
-      event.preventDefault()
-      toggleSidebar()
-    } else if (key === 'o' && !event.shiftKey) {
-      event.preventDefault()
-      void openFolder()
-    } else if (key === 's' && event.shiftKey) {
-      event.preventDefault()
-      void saveAs()
-    }
+    const shift = event.shiftKey
+    let command = ''
+    if ((event.ctrlKey && event.code === 'Backquote') || (key === 'j' && !shift)) command = 'toggle-terminal'
+    else if (key === 'n') command = shift ? 'new-quick-doc' : 'new-file'
+    else if (key === 's') command = shift ? 'save-as' : 'save' // no "Save page" from the webview
+    else if (key === 'b' && !shift) command = 'toggle-sidebar'
+    else if (key === 'o' && !shift) command = 'open-folder'
+    // ⇧⌘\ is CodeMirror's "go to matching bracket".
+    else if ((key === '\\' || event.code === 'Backslash') && !shift) command = 'split-editor'
+    if (!command) return
+    event.preventDefault()
+    runCommand(command)
   }
 </script>
 

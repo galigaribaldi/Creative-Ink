@@ -7,17 +7,41 @@
     lineNumbers,
     highlightActiveLine,
     highlightActiveLineGutter,
-    drawSelection
+    highlightSpecialChars,
+    drawSelection,
+    dropCursor,
+    rectangularSelection
   } from '@codemirror/view'
-  import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-  import { StreamLanguage, bracketMatching, indentOnInput } from '@codemirror/language'
-  import { stex } from '@codemirror/legacy-modes/mode/stex'
+  import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from '@codemirror/commands'
+  import { bracketMatching, indentOnInput } from '@codemirror/language'
+  import {
+    search,
+    searchKeymap,
+    highlightSelectionMatches,
+    openSearchPanel,
+    findNext,
+    findPrevious,
+    selectNextOccurrence,
+    gotoLine
+  } from '@codemirror/search'
   import { oneDark } from '@codemirror/theme-one-dark'
-  import { OpenFile, RequestCompile, SaveContent } from '../../wailsjs/go/main/App.js'
+  import { LoadFile, OpenFile, RequestCompile, SaveContent } from '../../wailsjs/go/main/App.js'
   import { registerEditor } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
+  import { languageFor } from '../lib/languages.js'
   import { sync, syncForward } from '../lib/synctex.svelte.js'
-  import { baseName, workspace } from '../lib/workspace.svelte.js'
+  import { ui } from '../lib/ui.svelte.js'
+  import { baseName, compileTarget, isTeXPath, workspace } from '../lib/workspace.svelte.js'
+
+  /**
+   * pane: 'primary' is Go's active document (OpenFile: it decides what is
+   * compiled); 'secondary' is the second pane of the split editor
+   * (LoadFile: it only edits and saves in place).
+   * @type {{ pane?: import('../lib/ui.svelte.js').EditorPane }}
+   */
+  let { pane = 'primary' } = $props()
+  // A pane never changes role: read once.
+  const isPrimary = untrack(() => pane) === 'primary'
 
   // Two inactivity windows, both restarted by every keystroke:
   //  - 1 s → save to disk (cheap: protects the text early).
@@ -29,6 +53,37 @@
   const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
   // macOS shows ⌘S, Linux/Windows Ctrl+S in the paused-compile notice.
   const SAVE_SHORTCUT = IS_MAC ? '⌘S' : 'Ctrl+S'
+
+  // Commands the native menu (macOS) can run in the focused pane.
+  const COMMANDS = {
+    find: openSearchPanel,
+    'find-next': findNext,
+    'find-previous': findPrevious,
+    'select-next': selectNextOccurrence,
+    'goto-line': gotoLine,
+    'toggle-comment': toggleComment
+  }
+
+  // Spanish labels for the search panel and "go to line" dialog.
+  const PHRASES = {
+    Find: 'Buscar',
+    Replace: 'Reemplazar',
+    next: 'siguiente',
+    previous: 'anterior',
+    all: 'todas',
+    'match case': 'mayúsculas',
+    regexp: 'expresión regular',
+    'by word': 'palabra completa',
+    replace: 'reemplazar',
+    'replace all': 'reemplazar todas',
+    close: 'cerrar',
+    'current match': 'coincidencia actual',
+    'replaced $ matches': '$ coincidencias reemplazadas',
+    'replaced match on line $': 'coincidencia reemplazada en la línea $',
+    'on line': 'en la línea',
+    'Go to line': 'Ir a la línea',
+    go: 'ir'
+  }
 
   const LABELS = {
     empty: 'Sin documento',
@@ -92,7 +147,12 @@
     compileTimer = null
     const clean = await waitIdle()
     // Nothing to compile without a document (e.g. behind the first-run screen).
-    if (clean && (docFile || workspace.mainFilePath)) void RequestCompile()
+    if (clean && compileTarget()) void RequestCompile()
+  }
+
+  function cancelScheduledCompile() {
+    clearTimeout(compileTimer)
+    compileTimer = null
   }
 
   // Sends the latest content of docFile to Go. At most one SaveContent is in
@@ -153,25 +213,51 @@
     view?.dispatch({ effects: editability.reconfigure(editabilityFor(canEdit)) })
   }
 
-  function createState(doc, canEdit) {
+  /** Selects the file of this pane ("" = none) in the shared state. */
+  function select(path) {
+    if (isPrimary) workspace.currentFilePath = path
+    else workspace.secondaryFilePath = path
+  }
+
+  /**
+   * Basic editor commands, all built into CodeMirror (no shortcuts of our own
+   * except SyncTeX): undo/redo, find & replace (⌘F, ⌘G, ⇧⌘G), go to line
+   * (⌥⌘G), next occurrence (⌘D), extra cursors with ⌥-click and column
+   * selection with ⇧⌥-drag (like VS Code; ⌘-click stays SyncTeX), toggle
+   * comment (⌘/), move/copy lines (⌥↑/↓, ⇧⌥↑/↓), delete line (⇧⌘K), indent
+   * (⌘[ / ⌘]). On Linux/Windows ⌘ is Ctrl and ⌥ is Alt.
+   */
+  function createState(doc, canEdit, path = '') {
     return EditorState.create({
       doc,
       extensions: [
         lineNumbers(),
         highlightActiveLineGutter(),
         highlightActiveLine(),
+        highlightSpecialChars(),
         drawSelection(),
+        dropCursor(),
+        EditorState.allowMultipleSelections.of(true),
+        EditorView.clickAddsSelectionRange.of((event) => event.altKey && !event.shiftKey),
+        rectangularSelection({ eventFilter: (event) => event.altKey && event.shiftKey }),
         history(),
         indentOnInput(),
         bracketMatching(),
-        StreamLanguage.define(stex),
+        highlightSelectionMatches(),
+        search({ top: true }),
+        EditorState.phrases.of(PHRASES),
+        languageFor(path),
         EditorView.lineWrapping,
         editability.of(editabilityFor(canEdit)),
         // SyncTeX forward: ⌘-click (Ctrl-click on Linux/Windows) on a line.
         EditorView.domEventHandlers({
+          focus() {
+            ui.focusedPane = pane
+            return false
+          },
           mousedown(event, v) {
             const mod = IS_MAC ? event.metaKey : event.ctrlKey
-            if (!mod || event.button !== 0 || !docFile) return false
+            if (!mod || event.button !== 0 || !isTeXPath(docFile)) return false
             const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
             if (pos == null) return false
             event.preventDefault()
@@ -185,12 +271,13 @@
             key: 'Mod-Alt-j',
             preventDefault: true,
             run: (v) => {
-              if (docFile) void syncForward(docFile, v.state.doc.lineAt(v.state.selection.main.head).number)
+              if (isTeXPath(docFile)) void syncForward(docFile, v.state.doc.lineAt(v.state.selection.main.head).number)
               return true
             }
           },
           ...defaultKeymap,
           ...historyKeymap,
+          ...searchKeymap,
           indentWithTab
         ]),
         oneDark,
@@ -211,7 +298,9 @@
     compileTimer = null
     docFile = path
     dirty = false
-    view.setState(createState(content, path !== ''))
+    view.setState(createState(content, path !== '', path))
+    // Go's compile target without a main file is the last .tex of this pane.
+    if (isPrimary && isTeXPath(path)) workspace.texFilePath = path
     adopt(path)
     status = path ? 'saved' : 'empty'
     errorMsg = ''
@@ -251,14 +340,15 @@
       // The current file could not be saved: stay on it instead of losing edits.
       sync.reveal = null // a pending SyncTeX jump must not fire later
       setEditable(docFile !== '')
-      workspace.currentFilePath = docFile
+      select(docFile)
       return
     }
 
     if (!target) return load('', '')
     status = 'loading'
     try {
-      const file = await OpenFile(target)
+      // The main pane makes it Go's active document; the second one only reads it.
+      const file = await (isPrimary ? OpenFile(target) : LoadFile(target))
       if (seq !== switchSeq) return
       load(file.path, file.content)
     } catch (err) {
@@ -268,7 +358,7 @@
       sync.reveal = null
       setEditable(docFile !== '')
       // Keep the explorer selection truthful: the old file is still open.
-      workspace.currentFilePath = docFile
+      select(docFile)
     }
   }
 
@@ -276,13 +366,20 @@
   // exists when the first file switch happens.
   onMount(() => {
     view = new EditorView({ parent: container, state: createState('', false) })
-    const unregister = registerEditor({
+    const unregister = registerEditor(pane, {
       save: flush,
-      saveAndCompile,
+      cancelScheduledCompile,
       waitIdle,
       isDirty: () => dirty || saving || timer !== null,
       getContent: () => view?.state.doc.toString() ?? '',
-      adopt
+      adopt,
+      focus: () => view?.focus(),
+      run: (id) => {
+        const command = COMMANDS[id]
+        if (!view || !command) return false
+        view.focus()
+        return command(view)
+      }
     })
 
     return () => {
@@ -316,15 +413,19 @@
   // The only place where the editor's document changes: when the selected
   // file changes. CodeMirror itself is never remounted.
   $effect(() => {
-    const target = workspace.currentFilePath
+    const target = isPrimary ? workspace.currentFilePath : workspace.secondaryFilePath
     untrack(() => void switchTo(target))
   })
 </script>
 
-<div class="editor">
+<div class="editor" class:focused={ui.splitEditor && ui.focusedPane === pane}>
   <div class="surface" bind:this={container}></div>
   {#if status === 'empty'}
-    <p class="empty">Abre una carpeta y elige un archivo <code>.tex</code> en el explorador.</p>
+    {#if isPrimary}
+      <p class="empty">Abre una carpeta y elige un archivo (<code>.tex</code>, <code>.bib</code>…) en el explorador.</p>
+    {:else}
+      <p class="empty">Elige en el explorador el archivo que quieres ver junto al otro.</p>
+    {/if}
   {/if}
   <footer class="statusbar">
     <span class="file" title={filePath}>{fileName}</span>
@@ -348,6 +449,11 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+  }
+
+  /* Split editor: a thin accent marks the pane the explorer opens files in. */
+  .editor.focused {
+    box-shadow: inset 0 2px 0 var(--accent);
   }
 
   .surface {

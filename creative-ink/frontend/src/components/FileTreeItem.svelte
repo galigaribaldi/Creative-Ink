@@ -2,14 +2,20 @@
   import FileTreeItem from './FileTreeItem.svelte'
   import { openFile, setMainFile } from '../lib/actions.js'
   import { setDirExpanded, ui } from '../lib/ui.svelte.js'
-  import { workspace } from '../lib/workspace.svelte.js'
+  import { isTeXPath, workspace } from '../lib/workspace.svelte.js'
 
   /** @type {{ node: import('../lib/workspace.svelte.js').FileNode, depth: number }} */
   let { node, depth } = $props()
 
   // Folders start collapsed; the user's choice is kept in ui.expandedDirs.
   let expanded = $derived(ui.expandedDirs[node.path] ?? false)
-  let active = $derived(!node.isDir && node.path === workspace.currentFilePath)
+  // Shown in one of the editor panes (main or the split one).
+  let active = $derived(
+    !node.isDir && (node.path === workspace.currentFilePath || node.path === workspace.secondaryFilePath)
+  )
+  let isTeX = $derived(!node.isDir && isTeXPath(node.name))
+  // Short type label: TeX, BIB, STY… ("·" for files the editor cannot open).
+  let kind = $derived(isTeX ? 'TeX' : node.editable ? (/\.([^.]+)$/.exec(node.name)?.[1] ?? 'txt').slice(0, 3).toUpperCase() : '·')
   let isMain = $derived(!node.isDir && node.path === workspace.mainFilePath)
   let disabled = $derived(!node.isDir && !node.editable)
 
@@ -35,14 +41,14 @@
     <button
       class="entry"
       {onclick}
-      title={disabled ? `${node.name} (solo se pueden abrir archivos .tex)` : node.path}
+      title={disabled ? `${node.name} (no es un archivo de texto: no se puede editar)` : node.path}
       tabindex={disabled ? -1 : 0}
     >
       {#if node.isDir}
         <span class="chevron" class:open={expanded} aria-hidden="true">›</span>
       {:else}
-        <span class="badge" class:tex={node.editable} aria-hidden="true">
-          {node.editable ? 'TeX' : '·'}
+        <span class="badge" class:tex={isTeX} class:text={node.editable && !isTeX} aria-hidden="true">
+          {kind}
         </span>
       {/if}
       <span class="name">{node.name}</span>
@@ -51,7 +57,7 @@
       {/if}
     </button>
 
-    {#if node.editable}
+    {#if isTeX}
       <button
         class="main-toggle"
         class:is-main={isMain}
@@ -193,6 +199,11 @@
   .badge.tex {
     width: auto;
     color: #4ade80;
+  }
+
+  .badge.text {
+    width: auto;
+    color: #60a5fa;
   }
 
   .name {

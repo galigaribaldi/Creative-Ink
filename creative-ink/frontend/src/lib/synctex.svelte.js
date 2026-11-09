@@ -4,7 +4,7 @@
 //
 // Coordinates are PDF points (1/72 in) from the page's top-left corner.
 import { SyncTexBackward, SyncTexForward } from '../../wailsjs/go/main/App.js'
-import { workspace } from './workspace.svelte.js'
+import { openFile } from './actions.js'
 
 const NOTICE_MS = 4000
 
@@ -59,9 +59,9 @@ export async function syncBackward(page, x, y) {
     const result = await SyncTexBackward(page, x, y)
     if (!result.found) return notify(result.reason)
     sync.reveal = { file: result.file, line: result.line, nonce: ++nonce }
-    // The Editor saves the current file and loads this one if it differs;
-    // it reveals the line once that file is in CodeMirror.
-    workspace.currentFilePath = result.file
+    // The pane already showing that file reveals the line; otherwise the
+    // focused pane saves its file, loads this one and then reveals it.
+    openFile(result.file)
   } catch (err) {
     notify(String(err))
   }
