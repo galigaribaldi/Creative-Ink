@@ -42,6 +42,9 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 ## Gotchas técnicos
 - **Svelte 5 (runes):** en `<!-- svelte-ignore a, b -->` los códigos se separan con **coma**. Después de un espacio, el compilador trata el resto como comentario.
 - **Svelte 5:** no llames `state` (ni `props`, `derived`, `effect`) a una prop o variable si usas la runa correspondiente: `$state` se interpretaría como un *store*.
+- **pdfjs-dist 6.5, renderer worker:** se pinta en un Web Worker propio (`GlobalWorkerOptions.rendererSrc`), uno por documento, que termina `loadingTask.destroy()`. No vuelvas a poner `disableWorkerRendering: true`: el pintado volvería al hilo de CodeMirror.
+- **Compilación automática apagada por defecto** (`compile.auto`, `internal/config`). Lee y escribe la configuración solo a través del servicio (`GetConfig`/`SetConfig`, `ci config`), nunca de `settings.json` o `.creative-ink-meta` a mano. Las peticiones del temporizador van con `RequestCompile('auto')`; las del usuario, con `'manual'`.
+- **Procesos externos que se puedan cancelar** (latexmk, herramientas de `ci`): usa `system.KillTreeOnCancel(cmd)`; si no, cancelar deja huérfanos a xelatex/biber.
 - **pdfjs-dist 6:** `PDFDocumentProxy.destroy()` **no existe**. Se libera con `doc.loadingTask.destroy()` (vía `releasePdf()` en `src/lib/pdf.js`). Usa siempre el `PDFWorker` compartido: sin él, cada documento crea un Web Worker nuevo.
 - **fsnotify en macOS (kqueue):** abre un descriptor por carpeta **y por archivo** vigilado, y no es recursivo. Respeta `maxWatchedDirs` y los filtros de `isIgnoredEntry`; nunca vigiles carpetas de build ni `node_modules`.
 - **pdfjs-dist 6 por rangos:** `disableAutoFetch: true` **exige** `disableStream: true`. Sirve siempre instantáneas inmutables (`?v=`), nunca el `<doc>.pdf` que latexmk reescribe. En Linux sin `-tags webkit2_41`, Wails no pasa cabeceras: no hay rangos (se descarga entero).
@@ -192,3 +195,9 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] Editor dividido (⌘\, botón en la ActionBar): dos paneles, sin el mismo archivo en ambos; botón "Nuevo archivo" en el explorador
   - [ ] Programador: `cd frontend && npm install @codemirror/search`
   - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 20 — Escalabilidad: configuración, PDF en un worker, cancelación y terminal en disco** (decisiones del 2026-11-08; código listo, falta validar con `wails dev`)
+  - [x] `internal/config`: claves tipadas y capas (por defecto < usuario < proyecto); `GetConfig`, `SetConfig`, `config:changed`; `ci config list|get|set|unset [--project]`. **`compile.auto` apagado por defecto**, con cerrojo en la UI y en Go (`RequestCompile('auto'|'manual')`); al abrir sin compilación automática se muestra el PDF existente (`cached`)
+  - [x] PDF.js con renderer worker (`pdf.renderer.min.mjs`) y detector de proyecto grande (`core.AnalyzeProject`: archivos, tamaño, imágenes) → `project:health` y "⚠ Proyecto grande" con tooltip (solo avisa)
+  - [x] Scheduler con cancelación acotada (solo automáticas, solo jóvenes, nunca dos seguidas; `canceled`) y `system.KillTreeOnCancel` para latexmk y `ci`
+  - [x] Terminal: salida completa en disco (`core.OutputSpool`, `ReadTerminalOutput`, `terminal:started`), progreso de `ci compile` (`terminal:progress`: pasada, página, total) y cola acotada de 256 KB en Go; botón "Salida completa" en la UI
+  - [ ] Validación del programador: reiniciar `wails dev` y medir con la tesis (§4.5)
