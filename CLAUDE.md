@@ -22,7 +22,7 @@ Un editor LaTeX funcional "al estilo VS Code": explorador de archivos, editor, c
 - **Editor decidido:** CodeMirror 6 (sin `basicSetup`; las extensiones se eligen a mano en `Editor.svelte`).
 - **Repositorio central** `My-Creative-Ink-Repository`: en el **primer arranque** el usuario elige "Solo para mí" (sus Documentos) o "Para todos los usuarios" (Documentos compartidos; no existe en Linux). Go calcula la ruta según el sistema operativo y guarda la elección en la configuración del usuario.
 - **La raíz del repositorio es un lanzador:** cada sesión empieza en la pantalla de inicio. Un proyecto es una carpeta `<repo>/<Nombre-Normalizado>/`; los documentos rápidos van en `<repo>/tmp-Workspaces/unnamed-tmpN/`. Datos del editor en `<repo>/.creative-ink/`. Diseño completo en `docs/MAP.md` §4.6.
-- **Un solo archivo activo** (sin pestañas, por minimalismo). Se compila el **archivo principal** del proyecto si está definido (`.creative-ink-meta`); si no, el `.tex` activo.
+- **Un archivo activo** (sin pestañas, por minimalismo), más un **segundo panel opcional** para ver dos archivos lado a lado (⌘\). Se edita cualquier archivo de texto (`.tex`, `.bib`, `.sty`…). Se compila el **archivo principal** del proyecto si está definido (`.creative-ink-meta`); si no, el último `.tex` activo.
 - **Visor PDF decidido:** PDF.js (`pdfjs-dist`) en `<canvas>`; el PDF lo sirve el middleware de Go (`preview.go`).
 - Decisiones **pendientes** (no las asumas, espera instrucciones): modelo de plugins, migración a TypeScript, licencia y patrón final de IPC.
 
@@ -46,6 +46,9 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 - **fsnotify en macOS (kqueue):** abre un descriptor por carpeta **y por archivo** vigilado, y no es recursivo. Respeta `maxWatchedDirs` y los filtros de `isIgnoredEntry`; nunca vigiles carpetas de build ni `node_modules`.
 - **pdfjs-dist 6 por rangos:** `disableAutoFetch: true` **exige** `disableStream: true`. Sirve siempre instantáneas inmutables (`?v=`), nunca el `<doc>.pdf` que latexmk reescribe. En Linux sin `-tags webkit2_41`, Wails no pasa cabeceras: no hay rangos (se descarga entero).
 - **Terminal integrada (`RunTerminalCommand`):** es la **única** excepción a "nunca `sh -c`" y es ejecución arbitraria por diseño. Pásale solo lo que el usuario escribió en la terminal; nunca construyas comandos a partir de documentos, logs o nombres de archivo, y nunca uses `{@html}` con contenido externo.
+- **macOS necesita el menú nativo (`menu.go`):** sin el rol Edición, ⌘C/⌘X/⌘V no funcionan en WKWebView. Los atajos de la app viven en `App.svelte` (`runCommand`) y hacen `preventDefault`, así el menú no los repite. En Linux y Windows no se crea menú.
+- **Archivos de texto:** Go solo abre UTF-8 sin bytes nulos y de hasta 8 MB (`FileManager.LoadText`). Nunca abras un archivo que el puente pueda alterar: el autoguardado lo reescribiría.
+- **Editor dividido:** un mismo archivo nunca puede estar en los dos paneles (los autoguardados se pisarían). Usa siempre `openFile()` de `actions.js`; no asignes `workspace.currentFilePath` directamente desde otros módulos.
 - **Convención de nombres:** todo lo que crea el editor usa `-` en lugar de espacios y sin acentos (`core.Slugify`). Nunca crees carpetas o archivos con espacios.
 - **Template de Wails v2.17.1:** venía con `vite-plugin-svelte@6` (no acepta Vite 8), con `new App()` (Svelte 4) y con un `jsconfig` obsoleto. Ya está corregido.
 
@@ -179,4 +182,13 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
   - [x] Bindings `GetStartScreen`, `CreateProject`, `CreateQuickDocument`, `OpenProject` (solo dentro del repositorio o recientes), `RevealQuickDocuments`; `WorkspaceState.needsStart/repositoryPath`; recientes en `settings.json`
   - [x] Plugins por usuario: `<repo>/.creative-ink/plugins` o `<UserConfigDir>/creative-ink/plugins` si el repositorio es compartido
   - [x] Frontend: `StartScreen.svelte` en cada sesión y botón Inicio en la ActionBar
+  - [ ] Validación del programador: reiniciar `wails dev`
+- [ ] **Sección 19 — Comandos básicos de editor, archivos de texto y editor dividido** (código listo; falta instalar `@codemirror/search` y validar con `wails dev`)
+  - [x] `core.IsEditableFile` y `FileManager.LoadText` (8 MB, UTF-8, sin bytes nulos): se abren y editan `.bib`, `.sty`, `.cls`, `.txt`, `.md`…; `OpenFile`/`SaveContent`/`SaveAsDialog` aceptan texto; `SetMainFile` y SyncTeX siguen solo con `.tex`
+  - [x] Objetivo de compilación = principal o **último `.tex`** (`App.texDoc`, `WorkspaceState.texFilePath`)
+  - [x] Bindings `NewFileDialog` (⌘N, nombre normalizado, nunca reemplaza) y `LoadFile` (segundo panel)
+  - [x] `menu.go`: menú nativo en macOS (Archivo, Edición, Buscar, Ver, Ventana) → `menu:command`
+  - [x] Frontend: `runCommand` (atajos y menú), ⌘N / ⇧⌘N, búsqueda y reemplazo, ir a la línea, ⌘D, varios cursores, ⌘/ y resaltado por tipo (`lib/languages.js`, modo BibTeX propio)
+  - [x] Editor dividido (⌘\, botón en la ActionBar): dos paneles, sin el mismo archivo en ambos; botón "Nuevo archivo" en el explorador
+  - [ ] Programador: `cd frontend && npm install @codemirror/search`
   - [ ] Validación del programador: reiniciar `wails dev`
