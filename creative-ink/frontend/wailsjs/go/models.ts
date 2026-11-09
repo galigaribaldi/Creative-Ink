@@ -1,3 +1,32 @@
+export namespace config {
+	
+	export class Entry {
+	    id: string;
+	    type: string;
+	    default: any;
+	    scopes: string[];
+	    description: string;
+	    value: any;
+	    scope: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Entry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.type = source["type"];
+	        this.default = source["default"];
+	        this.scopes = source["scopes"];
+	        this.description = source["description"];
+	        this.value = source["value"];
+	        this.scope = source["scope"];
+	    }
+	}
+
+}
+
 export namespace core {
 	
 	export class FileNode {
@@ -18,6 +47,92 @@ export namespace core {
 	        this.isDir = source["isDir"];
 	        this.editable = source["editable"];
 	        this.children = this.convertValues(source["children"], FileNode);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OutputChunk {
+	    runId: number;
+	    data: string;
+	    offset: number;
+	    next: number;
+	    size: number;
+	    done: boolean;
+	    dropped: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new OutputChunk(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.data = source["data"];
+	        this.offset = source["offset"];
+	        this.next = source["next"];
+	        this.size = source["size"];
+	        this.done = source["done"];
+	        this.dropped = source["dropped"];
+	    }
+	}
+	export class ProjectWarning {
+	    kind: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectWarning(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.message = source["message"];
+	    }
+	}
+	export class ProjectHealth {
+	    folder: string;
+	    warnings: ProjectWarning[];
+	    files: number;
+	    texFiles: number;
+	    largestFile: string;
+	    largestBytes: number;
+	    largestLines: number;
+	    imageCalls: number;
+	    imageBytes: number;
+	    truncated: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectHealth(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.folder = source["folder"];
+	        this.warnings = this.convertValues(source["warnings"], ProjectWarning);
+	        this.files = source["files"];
+	        this.texFiles = source["texFiles"];
+	        this.largestFile = source["largestFile"];
+	        this.largestBytes = source["largestBytes"];
+	        this.largestLines = source["largestLines"];
+	        this.imageCalls = source["imageCalls"];
+	        this.imageBytes = source["imageBytes"];
+	        this.truncated = source["truncated"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -200,6 +315,7 @@ export namespace main {
 	    timedOut: boolean;
 	    canceled: boolean;
 	    durationMs: number;
+	    runId: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new TerminalResult(source);
@@ -214,6 +330,7 @@ export namespace main {
 	        this.timedOut = source["timedOut"];
 	        this.canceled = source["canceled"];
 	        this.durationMs = source["durationMs"];
+	        this.runId = source["runId"];
 	    }
 	}
 	export class WorkspaceState {
@@ -223,6 +340,7 @@ export namespace main {
 	    canceled: boolean;
 	    folderPath: string;
 	    filePath: string;
+	    texFilePath: string;
 	    mainFilePath: string;
 	    autoCompile: boolean;
 	    tree: core.FileNode;
@@ -240,6 +358,7 @@ export namespace main {
 	        this.canceled = source["canceled"];
 	        this.folderPath = source["folderPath"];
 	        this.filePath = source["filePath"];
+	        this.texFilePath = source["texFilePath"];
 	        this.mainFilePath = source["mainFilePath"];
 	        this.autoCompile = source["autoCompile"];
 	        this.tree = this.convertValues(source["tree"], core.FileNode);
