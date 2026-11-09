@@ -21,9 +21,26 @@ var (
 	ErrNoFolder = errors.New("no hay ninguna carpeta abierta")
 	// ErrOutsideFolder is returned for paths that escape the open folder.
 	ErrOutsideFolder = errors.New("la ruta está fuera de la carpeta abierta")
-	// ErrNotTeX is returned when a non-.tex file is opened or saved.
-	ErrNotTeX = errors.New("solo se pueden editar archivos .tex")
+	// ErrNotTeX is returned when an operation needs a .tex file (main file,
+	// SyncTeX, compilation).
+	ErrNotTeX = errors.New("solo se admiten archivos .tex")
+	// ErrNotEditable is returned when a file that is not plain text (PDF,
+	// images…) is opened or saved in the editor.
+	ErrNotEditable = errors.New("ese tipo de archivo no se puede editar en Creative-ink")
 )
+
+// editableExts are the plain-text files the editor opens: LaTeX sources and
+// packages, bibliographies, and common text/config files of a project.
+var editableExts = map[string]bool{
+	".tex": true, ".ltx": true, ".sty": true, ".cls": true, ".dtx": true, ".ins": true,
+	".def": true, ".cfg": true, ".clo": true, ".fd": true,
+	".bib": true, ".bst": true, ".bbx": true, ".cbx": true, ".lbx": true,
+	".txt": true, ".md": true, ".csv": true, ".tsv": true, ".json": true, ".yaml": true, ".yml": true,
+	".lua": true, ".py": true, ".sh": true, ".mk": true,
+}
+
+// editableNames are text files usually written without an extension.
+var editableNames = map[string]bool{"makefile": true, "latexmkrc": true, "readme": true, "license": true}
 
 // FileNode is one entry of the folder tree sent to the frontend.
 type FileNode struct {
@@ -32,7 +49,7 @@ type FileNode struct {
 	// always validated with ResolveInFolder before touching the disk.
 	Path     string     `json:"path"`
 	IsDir    bool       `json:"isDir"`
-	Editable bool       `json:"editable"` // can be opened in the editor (.tex)
+	Editable bool       `json:"editable"` // plain text: can be opened in the editor (IsEditableFile)
 	Children []FileNode `json:"children,omitempty"`
 }
 
@@ -49,6 +66,16 @@ var buildArtifacts = map[string]bool{
 // IsTeXFile reports whether name is a LaTeX source file.
 func IsTeXFile(name string) bool {
 	return strings.EqualFold(filepath.Ext(name), ".tex")
+}
+
+// IsEditableFile reports whether name is a plain-text file the editor can
+// open and save (.tex, .bib, .sty, .txt…). Binary files never are.
+func IsEditableFile(name string) bool {
+	base := filepath.Base(name)
+	if ext := strings.ToLower(filepath.Ext(base)); ext != "" {
+		return editableExts[ext]
+	}
+	return editableNames[strings.ToLower(base)]
 }
 
 func isBuildArtifact(name string) bool {
@@ -115,7 +142,7 @@ func (s *treeScanner) children(dir string, depth int) []FileNode {
 		s.count++
 
 		path := filepath.Join(dir, name)
-		node := FileNode{Name: name, Path: path, IsDir: e.IsDir(), Editable: !e.IsDir() && IsTeXFile(name)}
+		node := FileNode{Name: name, Path: path, IsDir: e.IsDir(), Editable: !e.IsDir() && IsEditableFile(name)}
 		if e.IsDir() {
 			node.Children = s.children(path, depth+1)
 		}

@@ -35,8 +35,12 @@ const (
 	QuickDocMaxAge = 8 * time.Hour
 )
 
-// ErrProjectExists is returned when a project folder already exists.
-var ErrProjectExists = errors.New("ya existe un proyecto con ese nombre")
+var (
+	// ErrProjectExists is returned when a project folder already exists.
+	ErrProjectExists = errors.New("ya existe un proyecto con ese nombre")
+	// ErrFileExists is returned when a new file would replace an existing one.
+	ErrFileExists = errors.New("ya existe un archivo con ese nombre (Creative-ink nunca lo reemplaza al crear uno nuevo)")
+)
 
 // ProjectInfo describes a folder of the repository on the start screen.
 type ProjectInfo struct {
@@ -284,6 +288,18 @@ func EscapeTeX(s string) string {
 		`\`, `\textbackslash{}`, "{", `\{`, "}", `\}`, "$", `\$`, "&", `\&`,
 		"#", `\#`, "%", `\%`, "_", `\_`, "~", `\textasciitilde{}`, "^", `\textasciicircum{}`,
 	).Replace(s)
+}
+
+// CreateEmptyFile creates an empty file (and its folders). It fails with
+// ErrFileExists instead of replacing an existing file.
+func CreateEmptyFile(path string) error {
+	if err := writeNew(path, ""); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("%w: %s", ErrFileExists, filepath.Base(path))
+		}
+		return err
+	}
+	return nil
 }
 
 // writeNew creates path (and its folders) only if it does not exist.
