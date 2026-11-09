@@ -62,8 +62,12 @@ Those files win over this skill if they disagree.
 
 ## Gotchas
 
-- **Hangs and loops.** Always use `context.WithTimeout` (60 s today: `compileTimeout`) and set
-  `cmd.WaitDelay` so orphaned children (xelatex, biber) cannot keep the pipes open forever.
+- **Hangs and loops.** Always use `context.WithTimeout` (60 s today: `compileTimeout`; 10 min for
+  manual `ci` builds) and set `cmd.WaitDelay` so orphaned children cannot keep the pipes open forever.
+- **Kill the whole tree.** Call `system.KillTreeOnCancel(cmd)` on every cancellable TeX process:
+  latexmk spawns xelatex/biber, and killing only latexmk leaves them writing the `.aux` the next
+  run reads (process group + `kill(-pid)` on macOS/Linux, `taskkill /T` on Windows). The Scheduler
+  cancels young automatic runs, so this is not optional.
 - **PATH prepend.** latexmk finds xelatex/biber by name: prepend `filepath.Dir(latexmkPath)` to the
   `PATH` in `cmd.Env`. Go uses the last value of a duplicated key, so appending `PATH=` works.
 - **Serialise runs.** Two latexmk runs in the same directory corrupt `.aux`/`.fdb_latexmk` files.

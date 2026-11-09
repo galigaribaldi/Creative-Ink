@@ -21,13 +21,17 @@ Those files win over anything in this skill if they disagree.
 - Current layout (`frontend/src/`), already migrated to the target layout below:
   - `App.svelte`: CSS Grid shell `[ActionBar | Sidebar | Workspace]`, `HealthPanel` modal, Cmd/Ctrl+B.
   - `components/ActionBar.svelte`, `Sidebar.svelte` (always mounted, `inert` when closed), `Workspace.svelte`.
-  - `components/Editor.svelte`: CodeMirror 6 + autosave debounce. Reacts to `workspace.currentFilePath`
-    (saves the old file, then `setState` with the new one) and registers its commands in `lib/actions.js`.
-  - `components/FileTreeItem.svelte`: recursive explorer node (only `.tex` are openable).
-  - `components/Preview.svelte`: PDF.js on `<canvas>`, driven by `pdfTimestamp`; keeps `currentPageNumber`.
+  - `components/Editor.svelte`: CodeMirror 6 + autosave debounce, one instance per pane (`pane="primary"`
+    reacts to `workspace.currentFilePath`, `pane="secondary"` to `workspace.secondaryFilePath` in the
+    split editor). Saves the old file, then `setState` with the new one, and registers its commands
+    in `lib/actions.js`. Only schedules automatic compiles when `config.autoCompile` is on.
+  - `components/FileTreeItem.svelte`: recursive explorer node (text files are openable: `.tex`, `.bib`…;
+    only `.tex` can be the main file).
+  - `components/Preview.svelte`: PDF.js on `<canvas>`, driven by `pdfVersion`; keeps `currentPageNumber`.
+    Pages are painted in PDF.js' renderer worker (`lib/pdf.js`), never set `disableWorkerRendering`.
   - `components/CompileLog.svelte`, `components/HealthPanel.svelte`.
   - State modules: `lib/ui.svelte.js` (visual state), `lib/workspace.svelte.js` (mirror of Go:
-    folder, active file, main file, tree; `compileTarget()` = main file or active file, the key for
+    folder, active file, main file, tree; `compileTarget()` = main file or the last `.tex` of the main pane, the key for
     the Preview and the filter for `compile:*` events), `lib/compilation.svelte.js` (`compile:*` events, filtered by `file`),
     `lib/actions.js` (global actions: open folder/file, save, save as, compile).
   - `lib/pdf.js`: PDF.js worker and document lifecycle (`loadPdf`, `releasePdf`).
@@ -114,6 +118,10 @@ replace testing in the real app.
   `<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->`.
 - **Accessibility.** Icon-only buttons need `aria-label` and `title`. Modals need `role="dialog"`,
   `aria-modal` and closing with Escape. Global shortcuts live in `App.svelte` (`<svelte:window onkeydown>`):
-  Mod-s save + compile, Mod-Shift-s save as, Mod-o open folder, Mod-b sidebar. Do not rebind them in CodeMirror's keymap.
+  Mod-n new file, Mod-Shift-n quick document, Mod-s save + compile, Mod-Shift-s save as, Mod-o open folder,
+  Mod-b sidebar, Mod-j terminal, Mod-\ split editor. They all go through `runCommand()` in `lib/actions.js`,
+  which the native macOS menu (`menu:command`) also uses. Do not rebind them in CodeMirror's keymap.
+  Open files with `openFile()` (never assign `workspace.currentFilePath` elsewhere): it keeps a file
+  out of both panes at once.
 - **Project rules.** You cannot run `npm install`, `npm run`, `wails dev` or `wails build`.
   If a component needs a new dependency, stop and give the user the exact command.
