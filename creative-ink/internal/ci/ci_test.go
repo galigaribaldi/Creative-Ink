@@ -2,6 +2,7 @@ package ci
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"creative-ink/internal/compiler"
+	"creative-ink/internal/config"
 )
 
 // recorder captures the passes a command would run, without TeX.
@@ -18,20 +20,45 @@ type recorder struct {
 	workdir  string
 	started  int
 	finished int
+	out      compiler.BuildOutput
+}
+
+// fakeConfig is the config service over in-memory layers.
+type fakeConfig struct{ layers config.Layers }
+
+func (f *fakeConfig) List() []config.Entry { return f.layers.All() }
+
+func (f *fakeConfig) Set(key, value string, scope config.Scope) (config.Entry, error) {
+	k, raw, err := config.Prepare(key, value, scope)
+	if err != nil {
+		return config.Entry{}, err
+	}
+	layer := &f.layers.User
+	if scope == config.ScopeProject {
+		layer = &f.layers.Project
+	}
+	if *layer == nil {
+		*layer = map[string]json.RawMessage{}
+	}
+	if raw == nil {
+		delete(*layer, k.ID)
+	} else {
+		(*layer)[k.ID] = raw
+	}
+	return f.layers.Resolve(k), nil
 }
 
 func newEnv(t *testing.T, r *recorder) (Env, string) {
 	t.Helper()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "tesis.tex")
-	auto := true
 	return Env{
-		Target:         target,
-		AutoCompile:    func() (bool, error) { return auto, nil },
-		SetAutoCompile: func(on bool) error { auto = on; return nil },
-		BuildStarted:   func() { r.started++ },
-		BuildFinished:  func(time.Duration, error, string) { r.finished++ },
-		runPasses: func(ctx context.Context, workdir string, passes []compiler.Pass, after func() string) (string, error) {
+		Target:        target,
+		Config:        &fakeConfig{},
+		BuildStarted:  func() { r.started++ },
+		BuildFinished: func(time.Duration, error, string) { r.finished++ },
+		runPasses: func(ctx context.Context, workdir string, passes []compiler.Pass, after func() string, out compiler.BuildOutput) (string, error) {
+			r.out = out
 			r.passes, r.workdir = passes, workdir
 			return "ok\n" + after(), nil
 		},
@@ -136,14 +163,48 @@ func TestCompileSoloRejectsTeXInjection(t *testing.T) {
 func TestConfigAutocompile(t *testing.T) {
 	r := &recorder{}
 	env, _ := newEnv(t, r)
-	if out, err := Run(context.Background(), "ci config autocompile off", env); err != nil || !strings.Contains(out, "off") {
-		t.Fatalf("off: %q, %v", out, err)
+	if out, _ := Run(context.Background(), "ci config autocompile", env); !strings.Contains(out, "off") || !strings.Contains(out, "por defecto") {
+		t.Fatalf("default must be off: %q", out)
 	}
-	if out, _ := Run(context.Background(), "ci config autocompile", env); !strings.Contains(out, "off") {
-		t.Fatalf("show: %q", out)
+	if out, err := Run(context.Background(), "ci config autocompile on", env); err != nil || !strings.Contains(out, "usuario") {
+		t.Fatalf("on: %q, %v", out, err)
 	}
-	if _, err := Run(context.Background(), "ci config autocompile maybe", env); !errors.Is(err, ErrUsage) {
-		t.Fatalf("bad value: err = %v", err)
+	if out, _ := Run(context.Background(), "ci config get compile.auto", env); !strings.Contains(out, "= on") {
+		t.Fatalf("get: %q", out)
+	}
+	// The project layer wins over the user's, and the terminal says so.
+	if _, err := Run(context.Background(), "ci config set compile.auto off --project", env); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := Run(context.Background(), "ci config autocompile on", env); !strings.Contains(out, "⚠") {
+		t.Fatalf("a user value hidden by the project must warn: %q", out)
+	}
+	if out, _ := Run(context.Background(), "ci config unset compile.auto --project", env); !strings.Contains(out, "ahora on") {
+		t.Fatalf("unset: %q", out)
+	}
+	if out, _ := Run(context.Background(), "ci config", env); !strings.Contains(out, "compile.auto") {
+		t.Fatalf("list: %q", out)
+	}
+	for _, bad := range []string{"ci config autocompile maybe", "ci config set nada on", "ci config set compile.auto"} {
+		if _, err := Run(context.Background(), bad, env); !errors.Is(err, ErrUsage) {
+			t.Errorf("%s: err = %v", bad, err)
+		}
+	}
+}
+
+func TestCompileStreamsWithExpectedPages(t *testing.T) {
+	r := &recorder{}
+	env, dir := newEnv(t, r)
+	if err := os.WriteFile(filepath.Join(dir, "tesis.log"), []byte("Output written on tesis.pdf (212 pages, 1 bytes).\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var log strings.Builder
+	env.Output = compiler.BuildOutput{Log: &log}
+	if _, err := Run(context.Background(), "ci compile completo", env); err != nil {
+		t.Fatal(err)
+	}
+	if r.out.Log != &log || r.out.ExpectedPages != 212 {
+		t.Fatalf("output = %+v, want the App's writer and 212 pages from tesis.log", r.out)
 	}
 }
 

@@ -37,6 +37,17 @@ const (
 	// EventWorkspaceChanged carries a WorkspaceChangedEvent: files or folders
 	// were created, removed or renamed outside the app.
 	EventWorkspaceChanged = "workspace:changed"
+	// EventConfigChanged carries a ConfigChangedEvent (config service).
+	EventConfigChanged = "config:changed"
+	// EventProjectHealth carries a core.ProjectHealth: the large-project
+	// detector's result for the open folder (it only informs).
+	EventProjectHealth = "project:health"
+	// EventTerminalStarted carries a TerminalStartedEvent: a terminal run
+	// began and its full output is being spooled (ReadTerminalOutput).
+	EventTerminalStarted = "terminal:started"
+	// EventTerminalProgress carries a TerminalProgressEvent while a
+	// `ci compile`/`ci clean` build runs (throttled, ~4 per second).
+	EventTerminalProgress = "terminal:progress"
 )
 
 // shutdownTimeout bounds how long closing the app waits for latexmk to die.
@@ -121,6 +132,16 @@ type App struct {
 	// termMu guards termCancel: at most one terminal command runs at a time.
 	termMu     sync.Mutex
 	termCancel context.CancelFunc
+	// spool keeps the full output of terminal runs on disk (nil = none,
+	// e.g. in tests or if the temp dir failed).
+	spool *core.OutputSpool
+
+	// Large-project detector: one analysis at a time, debounced
+	// (healthDelay) after opening a folder, external changes and saves.
+	healthMu    sync.Mutex
+	healthTimer *time.Timer
+	health      core.ProjectHealth
+	healthDelay time.Duration
 
 	// watchFolder starts a filesystem watcher (nil in tests = no watching).
 	watchFolder func(root string, onChange func()) (io.Closer, error)
@@ -159,8 +180,9 @@ type WorkspaceState struct {
 	// MainFilePath is the project's root document ("" if none). When set it
 	// is what gets compiled and previewed, whatever file is being edited.
 	MainFilePath string `json:"mainFilePath"`
-	// AutoCompile is the saved `ci config autocompile` setting (default on).
-	// Pending: the UI does not honour it yet (see docs/MAP.md §4.3.6).
+	// AutoCompile is the effective compile.auto (config service: default
+	// off < user < project). The UI only schedules automatic compilations
+	// when it is on, and Go rejects automatic requests when it is off.
 	AutoCompile bool          `json:"autoCompile"`
 	Tree        core.FileNode `json:"tree"`
 	Truncated   bool          `json:"truncated"` // the tree hit its size limits
@@ -204,6 +226,21 @@ type TerminalResult struct {
 	TimedOut   bool   `json:"timedOut"`
 	Canceled   bool   `json:"canceled"`
 	DurationMs int64  `json:"durationMs"`
+	// RunID identifies the full output on disk (ReadTerminalOutput); 0 if
+	// it was not spooled.
+	RunID int `json:"runId"`
+}
+
+// TerminalStartedEvent is the payload of EventTerminalStarted.
+type TerminalStartedEvent struct {
+	RunID   int    `json:"runId"`
+	Command string `json:"command"`
+}
+
+// TerminalProgressEvent is the payload of EventTerminalProgress.
+type TerminalProgressEvent struct {
+	RunID int `json:"runId"`
+	compiler.BuildProgress
 }
 
 // errTerminalBusy rejects a second command while one is running.
@@ -253,6 +290,9 @@ type CompileFinishedEvent struct {
 	// unchanged PDF (latexmk: "All targets up-to-date") keeps the same
 	// PDFVersion and PDFModTime, so the UI does not reload the canvas.
 	PDFModTime int64 `json:"pdfModTime"`
+	// Cached: nothing was compiled; this is the PDF already on disk, shown
+	// when a project opens with compile.auto off.
+	Cached bool `json:"cached"`
 }
 
 // NewApp creates the App facade. No folder is open until startup prepares
@@ -278,6 +318,11 @@ func NewApp() *App {
 	} else {
 		log.Printf("[preview] sin instantáneas, se servirá el PDF en vivo: %v", err)
 	}
+	if spool, err := core.NewOutputSpool(); err == nil {
+		a.spool = spool
+	} else {
+		log.Printf("[terminal] la salida completa no se guardará: %v", err)
+	}
 	return a
 }
 
@@ -294,6 +339,7 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 		repoOptions:  system.DetectRepositoryOptions,
 		closeTimeout: closeFlushTimeout,
 		confirmQuit:  func(string) bool { return true },
+		healthDelay:  healthCheckDelay,
 	}
 	if folder != "" {
 		a.mainFile = loadMainFile(folder)
@@ -315,7 +361,9 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 			},
 			OnFinished: func(r compiler.Result) {
 				event := CompileFinishedEvent{Result: r, File: a.compilingDoc}
-				if r.Success {
+				// Canceled: a newer request made it obsolete and the next run
+				// starts at once; nothing to publish.
+				if r.Success && !r.Canceled {
 					// Under the compile lock: neither the next latexmk nor a
 					// `ci compile` can be rewriting the PDF during the copy.
 					compiler.WithCompileLock(func() {
@@ -344,9 +392,13 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(_ context.Context) {
 	a.CancelTerminalCommand()
 	a.stopWatching()
+	a.stopHealthChecks()
 	a.compiles.Close(shutdownTimeout)
 	if a.previews != nil {
 		_ = a.previews.Close()
+	}
+	if a.spool != nil {
+		_ = a.spool.Close()
 	}
 }
 
@@ -729,7 +781,7 @@ func (a *App) isOpenableProject(dir string) bool {
 func (a *App) openProjectFolder(dir, doc string) (WorkspaceState, error) {
 	a.setWorkspace(dir, doc)
 	if doc != "" {
-		a.compiles.Request()
+		a.compileOnOpen()
 	}
 	return a.workspaceState()
 }
@@ -764,7 +816,7 @@ func (a *App) OpenFile(path string) (OpenedFile, error) {
 	}
 	a.setWorkspace(folder, clean)
 	if a.compileTarget() != "" {
-		a.compiles.Request()
+		a.compileOnOpen()
 	}
 	return OpenedFile{Path: clean, Content: content}, nil
 }
@@ -859,6 +911,7 @@ func (a *App) SaveContent(path string, content string) (SaveResult, error) {
 	if err := a.files.SaveDocument(content, clean); err != nil {
 		return SaveResult{}, err
 	}
+	a.scheduleHealthCheck() // debounced: a file may have grown past a limit
 	return SaveResult{Saved: true}, nil
 }
 
@@ -895,7 +948,7 @@ func (a *App) SaveAsDialog(content string) (WorkspaceState, error) {
 	}
 	a.setWorkspace(folder, target)
 	if a.compileTarget() != "" {
-		a.compiles.Request()
+		a.compileOnOpen()
 	}
 	return a.workspaceState()
 }
@@ -942,7 +995,7 @@ func (a *App) SetMainFile(path string) (WorkspaceState, error) {
 	}
 	a.mu.Unlock()
 
-	a.compiles.Request()
+	a.compileOnOpen()
 	return a.workspaceState()
 }
 
@@ -1001,16 +1054,27 @@ func (a *App) RunTerminalCommand(command string) (TerminalResult, error) {
 	}()
 
 	start := time.Now()
+	// The full output goes to disk while it runs (the UI reads it on demand
+	// with ReadTerminalOutput); only a capped summary returns here.
+	runID, spoolWriter := a.startSpool(command)
+	var tee io.Writer
+	if spoolWriter != nil {
+		tee = spoolWriter
+		defer spoolWriter.Close()
+	}
 	// Hybrid terminal: `ci …` is handled natively in Go, never by a shell.
 	if internal {
-		return a.runInternalCommand(ctx, command, folder, start), nil
+		result := a.runInternalCommand(ctx, command, folder, start, runID, tee)
+		result.RunID = runID
+		return result, nil
 	}
-	output, err := core.ExecuteCommandContext(ctx, command, folder, []string{"PATH=" + system.ToolPATH()})
+	output, err := core.ExecuteCommandStream(ctx, command, folder, []string{"PATH=" + system.ToolPATH()}, tee)
 	result := TerminalResult{
 		Command:    command,
 		Folder:     folder,
 		Output:     output,
 		DurationMs: time.Since(start).Milliseconds(),
+		RunID:      runID,
 	}
 
 	var exitErr *exec.ExitError
@@ -1031,9 +1095,9 @@ func (a *App) RunTerminalCommand(command string) (TerminalResult, error) {
 
 // runInternalCommand runs a reserved `ci` command (see internal/ci). A
 // failure is a normal terminal result: exit code 1 and the reason appended.
-func (a *App) runInternalCommand(ctx context.Context, command, folder string, start time.Time) TerminalResult {
-	output, err := ci.Run(ctx, command, a.ciEnv())
-	result := TerminalResult{Command: command, Folder: folder, Output: output}
+func (a *App) runInternalCommand(ctx context.Context, command, folder string, start time.Time, runID int, output io.Writer) TerminalResult {
+	text, err := ci.Run(ctx, command, a.ciEnv(runID, output))
+	result := TerminalResult{Command: command, Folder: folder, Output: text}
 	switch {
 	case err == nil:
 	case ctx.Err() != nil:
@@ -1051,12 +1115,17 @@ func (a *App) runInternalCommand(ctx context.Context, command, folder string, st
 
 // ciEnv gives the `ci` handler the compile target, the settings and hooks
 // that keep the preview in sync with manual builds.
-func (a *App) ciEnv() ci.Env {
+func (a *App) ciEnv(runID int, output io.Writer) ci.Env {
 	target := a.compileTarget()
 	return ci.Env{
-		Target:         target,
-		AutoCompile:    func() (bool, error) { return a.autoCompileEnabled(), nil },
-		SetAutoCompile: a.setAutoCompile,
+		Target: target,
+		Config: ciConfig{a},
+		Output: compiler.BuildOutput{
+			Log: output,
+			Progress: func(p compiler.BuildProgress) {
+				a.emit(EventTerminalProgress, TerminalProgressEvent{RunID: runID, BuildProgress: p})
+			},
+		},
 		BuildStarted: func() {
 			a.emit(EventCompileStarted, CompileStartedEvent{File: target})
 		},
@@ -1077,23 +1146,30 @@ func (a *App) ciEnv() ci.Env {
 	}
 }
 
-func (a *App) autoCompileEnabled() bool {
-	if a.settingsPath == "" {
-		return true
+// startSpool opens the on-disk output of a terminal run and tells the UI
+// its id (EventTerminalStarted). Without a spool it returns 0, nil.
+func (a *App) startSpool(command string) (int, *core.SpoolWriter) {
+	if a.spool == nil {
+		return 0, nil
 	}
-	s, err := core.ReadSettings(a.settingsPath)
+	id, w, err := a.spool.Start()
 	if err != nil {
-		return true
+		log.Printf("[terminal] sin salida completa para %q: %v", command, err)
+		return 0, nil
 	}
-	return s.AutoCompileEnabled()
+	a.emit(EventTerminalStarted, TerminalStartedEvent{RunID: id, Command: command})
+	return id, w
 }
 
-func (a *App) setAutoCompile(on bool) error {
-	if a.settingsPath == "" {
-		return errors.New("no se puede guardar la configuración en este sistema")
+// ReadTerminalOutput returns up to 64 KB of a run's full output from offset
+// (cut at a UTF-8 boundary). The UI calls it only when the user opens
+// "Salida completa", every 500 ms while the run is going, so nothing is
+// pushed through the bridge unless someone is looking.
+func (a *App) ReadTerminalOutput(runID int, offset int64) (core.OutputChunk, error) {
+	if a.spool == nil {
+		return core.OutputChunk{}, core.ErrUnknownRun
 	}
-	_, err := core.UpdateSettings(a.settingsPath, func(s *core.Settings) { s.AutoCompile = &on })
-	return err
+	return a.spool.Read(runID, offset, core.MaxOutputChunk)
 }
 
 // CancelTerminalCommand stops the running terminal command, if any.
@@ -1151,11 +1227,23 @@ func (a *App) SyncTexBackward(page int, x float64, y float64) (SyncTexBackwardRe
 	return SyncTexBackwardResult{Found: true, File: clean, Line: src.Line}, nil
 }
 
-// RequestCompile queues a background compilation of the active document as
-// it is on disk, without saving. It returns at once and reports false only
-// while the app is shutting down.
-func (a *App) RequestCompile() bool {
-	return a.compiles.Request()
+// RequestCompile queues a background compilation of the compile target as
+// it is on disk, without saving. trigger is "auto" (the editor's idle
+// timer: rejected while compile.auto is off, and cancellable by a newer
+// request) or "manual" (⌘S, the Compilar button: always queued, never
+// cancelled). It returns at once and reports whether it was queued (false
+// also while the app is shutting down or for an unknown trigger).
+func (a *App) RequestCompile(trigger string) bool {
+	switch trigger {
+	case compileTriggerManual:
+		return a.compiles.Request(compiler.TriggerManual)
+	case compileTriggerAuto:
+		if !a.autoCompileEnabled() {
+			return false // second lock: a stale UI or a plugin cannot bypass it
+		}
+		return a.compiles.Request(compiler.TriggerAuto)
+	}
+	return false
 }
 
 // ── Safe close ─────────────────────────────────────────────────────────────
@@ -1260,6 +1348,9 @@ func (a *App) setWorkspace(folder, docPath string) {
 	if changed {
 		a.restartWatcher()
 		a.rememberRecent(folder)
+		if folder != "" {
+			a.scheduleHealthCheck()
+		}
 	}
 }
 
@@ -1327,6 +1418,7 @@ func (a *App) onFolderChanged(folder string) {
 	a.watchMu.Unlock()
 	if !unchanged {
 		a.emit(EventWorkspaceChanged, WorkspaceChangedEvent{Folder: folder})
+		a.scheduleHealthCheck()
 	}
 }
 

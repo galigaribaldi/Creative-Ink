@@ -59,7 +59,7 @@ func TestSchedulerRequestReturnsImmediately(t *testing.T) {
 	defer s.Close(time.Second)
 
 	start := time.Now()
-	if !s.Request() {
+	if !s.Request(TriggerManual) {
 		t.Fatal("Request on an open scheduler must be accepted")
 	}
 	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
@@ -92,12 +92,12 @@ func TestSchedulerCoalescesBurstsAndNeverOverlaps(t *testing.T) {
 	}, rec.hooks())
 	defer s.Close(time.Second)
 
-	s.Request()
+	s.Request(TriggerManual)
 	<-firstStarted
 	// Three quick saves while compiling → a single follow-up run.
-	s.Request()
-	s.Request()
-	s.Request()
+	s.Request(TriggerManual)
+	s.Request(TriggerManual)
+	s.Request(TriggerManual)
 	close(release)
 
 	rec.waitFinished(t)
@@ -131,7 +131,7 @@ func TestSchedulerReportsFailures(t *testing.T) {
 	}, rec.hooks())
 	defer s.Close(time.Second)
 
-	s.Request()
+	s.Request(TriggerManual)
 	res := rec.waitFinished(t)
 	if res.Success {
 		t.Fatal("a failed compilation must report Success=false")
@@ -152,12 +152,12 @@ func TestSchedulerRecoversFromPanic(t *testing.T) {
 	}, rec.hooks())
 	defer s.Close(time.Second)
 
-	s.Request()
+	s.Request(TriggerManual)
 	if res := rec.waitFinished(t); res.Success {
 		t.Fatalf("a panic must be reported as a failure, got %+v", res)
 	}
 	// The scheduler must still work after the panic.
-	s.Request()
+	s.Request(TriggerManual)
 	if res := rec.waitFinished(t); !res.Success {
 		t.Fatalf("scheduler unusable after panic: %+v", res)
 	}
@@ -174,7 +174,7 @@ func TestSchedulerCloseCancelsAndRejects(t *testing.T) {
 		return "", ctx.Err()
 	}, rec.hooks())
 
-	s.Request()
+	s.Request(TriggerManual)
 	<-started
 	s.Close(time.Second)
 
@@ -183,7 +183,7 @@ func TestSchedulerCloseCancelsAndRejects(t *testing.T) {
 	default:
 		t.Fatal("Close must cancel the running compilation before returning")
 	}
-	if s.Request() {
+	if s.Request(TriggerManual) {
 		t.Fatal("Request after Close must be rejected")
 	}
 	select {
@@ -191,4 +191,89 @@ func TestSchedulerCloseCancelsAndRejects(t *testing.T) {
 		t.Fatalf("no compile:finished must be emitted after Close, got %+v", res)
 	case <-time.After(50 * time.Millisecond):
 	}
+}
+
+// blockingCompile blocks every run until ctx is cancelled or release is
+// closed, and reports which runs saw their context cancelled.
+func blockingCompile(release <-chan struct{}, started chan<- int, canceled *atomic.Int32) CompileFunc {
+	var n atomic.Int32
+	return func(ctx context.Context) (string, error) {
+		started <- int(n.Add(1))
+		select {
+		case <-ctx.Done():
+			canceled.Add(1)
+			return "", ctx.Err()
+		case <-release:
+			return "ok", nil
+		}
+	}
+}
+
+func TestSchedulerCancelsAnObsoleteAutoRun(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan int, 8)
+	var canceled atomic.Int32
+	rec := newRecorder()
+	s := NewScheduler(blockingCompile(release, started, &canceled), rec.hooks())
+	defer s.Close(time.Second)
+
+	s.Request(TriggerAuto)
+	<-started
+	s.Request(TriggerAuto) // young auto run: cancelled, the follow-up starts
+	if res := rec.waitFinished(t); !res.Canceled || res.Success {
+		t.Fatalf("first run = %+v, want Canceled", res)
+	}
+	<-started
+	// The follow-up of a cancelled run is protected: never twice in a row.
+	s.Request(TriggerAuto)
+	time.Sleep(50 * time.Millisecond)
+	if canceled.Load() != 1 {
+		t.Fatalf("canceled = %d, want 1", canceled.Load())
+	}
+	close(release)
+	if res := rec.waitFinished(t); !res.Success {
+		t.Fatalf("protected run = %+v", res)
+	}
+	if res := rec.waitFinished(t); !res.Success { // the coalesced request
+		t.Fatalf("follow-up = %+v", res)
+	}
+}
+
+func TestSchedulerNeverCancelsManualOrOldRuns(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan int, 8)
+	var canceled atomic.Int32
+	rec := newRecorder()
+	s := NewScheduler(blockingCompile(release, started, &canceled), rec.hooks())
+	defer s.Close(time.Second)
+
+	s.Request(TriggerManual)
+	<-started
+	s.Request(TriggerAuto)
+	time.Sleep(50 * time.Millisecond)
+	if canceled.Load() != 0 {
+		t.Fatal("a manual run (⌘S) must never be cancelled")
+	}
+	close(release)
+	rec.waitFinished(t)
+	rec.waitFinished(t)
+
+	// An auto run older than half the last duration is left to finish.
+	release2 := make(chan struct{})
+	s2 := NewScheduler(blockingCompile(release2, started, &canceled), rec.hooks())
+	defer s2.Close(time.Second)
+	s2.mu.Lock()
+	s2.lastDuration = 20 * time.Millisecond
+	s2.mu.Unlock()
+	s2.Request(TriggerAuto)
+	<-started
+	time.Sleep(30 * time.Millisecond) // > lastDuration / 2
+	s2.Request(TriggerAuto)
+	time.Sleep(30 * time.Millisecond)
+	if canceled.Load() != 0 {
+		t.Fatal("an auto run past its cancel window must finish")
+	}
+	close(release2)
+	rec.waitFinished(t)
+	rec.waitFinished(t)
 }

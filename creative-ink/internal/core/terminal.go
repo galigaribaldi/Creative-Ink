@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -54,6 +55,13 @@ func ExecuteCommand(cmdString string, workdir string) (string, error) {
 // ExecuteCommandContext is ExecuteCommand with cancellation (the UI's stop
 // button, app shutdown) and extra environment variables (e.g. PATH).
 func ExecuteCommandContext(parent context.Context, cmdString, workdir string, extraEnv []string) (string, error) {
+	return ExecuteCommandStream(parent, cmdString, workdir, extraEnv, nil)
+}
+
+// ExecuteCommandStream is ExecuteCommandContext that also copies the whole
+// output, as it is produced, to tee (the terminal spool; nil = none). The
+// returned string is still capped at 256 KB; tee is not.
+func ExecuteCommandStream(parent context.Context, cmdString, workdir string, extraEnv []string, tee io.Writer) (string, error) {
 	if strings.TrimSpace(cmdString) == "" {
 		return "", ErrEmptyCommand
 	}
@@ -73,8 +81,12 @@ func ExecuteCommandContext(parent context.Context, cmdString, workdir string, ex
 	cmd.Env = append(append(os.Environ(), nonInteractiveEnv...), extraEnv...)
 	cmd.Stdin = nil // reads get EOF at once: interactive prompts fail fast
 	out := &cappedBuffer{limit: maxTerminalOutput}
-	cmd.Stdout = out // same writer: os/exec serialises the writes
-	cmd.Stderr = out
+	var w io.Writer = out
+	if tee != nil {
+		w = io.MultiWriter(out, tee)
+	}
+	cmd.Stdout = w // same writer: os/exec serialises the writes
+	cmd.Stderr = w
 	cmd.WaitDelay = 2 * time.Second // do not wait forever for orphaned pipes
 
 	runErr := cmd.Run()

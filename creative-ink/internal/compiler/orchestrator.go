@@ -71,8 +71,11 @@ func CompileLaTeXContext(parent context.Context, workdir string, filename string
 	// lacks /Library/TeX/texbin on PATH, so prepend the dir where latexmk lives.
 	cmd.Env = append(os.Environ(),
 		"PATH="+filepath.Dir(latexmk)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	// Kill-and-wait bound: orphaned children (xelatex, biber) must not keep
-	// the pipes open after latexmk is killed.
+	// Cancelling (the Scheduler's bounded cancellation, app shutdown) or the
+	// timeout kills latexmk AND its xelatex/biber children: a surviving
+	// xelatex would keep writing the .aux that the next run reads.
+	system.KillTreeOnCancel(cmd)
+	// Kill-and-wait bound for the pipes.
 	cmd.WaitDelay = 2 * time.Second
 
 	// Stdout and Stderr share one buffer to keep their original interleaving.

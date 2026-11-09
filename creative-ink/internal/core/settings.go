@@ -19,10 +19,13 @@ type Settings struct {
 	Version         int    `json:"version"`
 	RepositoryScope string `json:"repositoryScope"` // system.ScopeUser | system.ScopeShared
 	RepositoryPath  string `json:"repositoryPath"`  // absolute
-	// AutoCompile turns the editor's automatic compilation on or off
-	// (`ci config autocompile on|off`). A pointer so that a missing field,
-	// e.g. in an older settings.json, means "on" instead of "off".
+	// AutoCompile is the legacy (Section 17) form of the user's
+	// compile.auto. It is only read, for migration: the config service
+	// writes Config and clears this field.
 	AutoCompile *bool `json:"autoCompile,omitempty"`
+	// Config is the user layer of the configuration service
+	// (internal/config): raw JSON values by key id ("compile.auto": false).
+	Config map[string]json.RawMessage `json:"config,omitempty"`
 	// RecentFolders are the last opened project folders, newest first.
 	RecentFolders []string `json:"recentFolders,omitempty"`
 }
@@ -41,9 +44,36 @@ func (s *Settings) AddRecentFolder(folder string) {
 	s.RecentFolders = recent
 }
 
-// AutoCompileEnabled is AutoCompile with its default (on).
-func (s Settings) AutoCompileEnabled() bool {
-	return s.AutoCompile == nil || *s.AutoCompile
+// legacyAutoCompileKey is the config id that AutoCompile maps to.
+const legacyAutoCompileKey = "compile.auto"
+
+// UserConfig is the user configuration layer, with the legacy autoCompile
+// field folded in when Config does not set compile.auto itself.
+func (s Settings) UserConfig() map[string]json.RawMessage {
+	layer := make(map[string]json.RawMessage, len(s.Config)+1)
+	for k, v := range s.Config {
+		layer[k] = v
+	}
+	if _, ok := layer[legacyAutoCompileKey]; !ok && s.AutoCompile != nil {
+		layer[legacyAutoCompileKey], _ = json.Marshal(*s.AutoCompile)
+	}
+	return layer
+}
+
+// SetUserConfig writes (raw != nil) or removes (raw == nil) a key of the
+// user layer. Touching compile.auto drops the legacy field for good.
+func (s *Settings) SetUserConfig(key string, raw json.RawMessage) {
+	if key == legacyAutoCompileKey {
+		s.AutoCompile = nil
+	}
+	if raw == nil {
+		delete(s.Config, key)
+		return
+	}
+	if s.Config == nil {
+		s.Config = map[string]json.RawMessage{}
+	}
+	s.Config[key] = raw
 }
 
 // SettingsPath returns <user config dir>/creative-ink/settings.json.

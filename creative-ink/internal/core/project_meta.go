@@ -22,6 +22,9 @@ type ProjectMeta struct {
 	// to the folder with forward slashes ("tesis.tex", "src/main.tex"), so
 	// the project can be moved or shared across machines and OSes.
 	MainFile string `json:"mainFile,omitempty"`
+	// Config is the project layer of the configuration service
+	// (internal/config): raw JSON values by key id. It overrides the user's.
+	Config map[string]json.RawMessage `json:"config,omitempty"`
 }
 
 // LoadProjectMeta reads folder/.creative-ink-meta. A missing file is not an

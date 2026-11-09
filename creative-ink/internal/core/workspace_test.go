@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -173,24 +174,33 @@ func TestUpdateSettingsKeepsOtherFields(t *testing.T) {
 	if err := SaveSettings(path, Settings{RepositoryScope: "user", RepositoryPath: "/r"}); err != nil {
 		t.Fatal(err)
 	}
-	if (Settings{}).AutoCompileEnabled() != true {
-		t.Fatal("a missing autoCompile must mean on")
-	}
-
-	off := false
-	if _, err := UpdateSettings(path, func(s *Settings) { s.AutoCompile = &off }); err != nil {
+	if _, err := UpdateSettings(path, func(s *Settings) { s.SetUserConfig("compile.auto", json.RawMessage("true")) }); err != nil {
 		t.Fatal(err)
 	}
 	got, ok, err := LoadSettings(path)
-	if err != nil || !ok || got.RepositoryPath != "/r" || got.AutoCompileEnabled() {
+	if err != nil || !ok || got.RepositoryPath != "/r" || string(got.UserConfig()["compile.auto"]) != "true" {
 		t.Fatalf("settings = %+v, ok=%v, err=%v", got, ok, err)
 	}
 
 	// Works before the first-run setup too (no file yet).
 	fresh := filepath.Join(t.TempDir(), "settings.json")
-	on := true
-	if s, err := UpdateSettings(fresh, func(s *Settings) { s.AutoCompile = &on }); err != nil || !s.AutoCompileEnabled() {
+	if s, err := UpdateSettings(fresh, func(s *Settings) { s.SetUserConfig("compile.auto", json.RawMessage("false")) }); err != nil || string(s.Config["compile.auto"]) != "false" {
 		t.Fatalf("fresh = %+v, %v", s, err)
+	}
+}
+
+func TestLegacyAutoCompileIsMigrated(t *testing.T) {
+	on := true
+	s := Settings{AutoCompile: &on}
+	if string(s.UserConfig()["compile.auto"]) != "true" {
+		t.Fatalf("legacy autoCompile must be read as compile.auto: %+v", s.UserConfig())
+	}
+	if _, ok := (Settings{}).UserConfig()["compile.auto"]; ok {
+		t.Fatal("no legacy value: the key must stay unset (the default applies)")
+	}
+	s.SetUserConfig("compile.auto", nil) // unset: back to the default, legacy gone
+	if s.AutoCompile != nil || len(s.UserConfig()) != 0 {
+		t.Fatalf("after unset = %+v", s)
 	}
 }
 
