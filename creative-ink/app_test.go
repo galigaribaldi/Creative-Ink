@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/wailsapp/wails/v2/pkg/menu"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +13,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/wailsapp/wails/v2/pkg/menu"
 
 	"creative-ink/internal/config"
 	"creative-ink/internal/core"
@@ -1243,4 +1247,128 @@ func TestProjectHealthWarnsWithoutChangingAnything(t *testing.T) {
 	}
 	a.checkProjectHealth() // same result: no new event
 	expectNoEvent(t, events)
+}
+
+// ── Archetype tests (testify) ──────────────────────────────────────────────
+
+// TestCompileTargetResolution: what is compiled and previewed. Without
+// .creative-ink-meta it is the active document; with a meta pointing to
+// main.tex, main.tex wins even while a chapter is being edited.
+func TestCompileTargetResolution(t *testing.T) {
+	newProject := func(t *testing.T, withMeta bool) (folder, mainTex, chapter string) {
+		t.Helper()
+		folder = t.TempDir()
+		mainTex = filepath.Join(folder, "main.tex")
+		chapter = filepath.Join(folder, "capitulos", "cap1.tex")
+		require.NoError(t, os.MkdirAll(filepath.Dir(chapter), 0o755))
+		require.NoError(t, os.WriteFile(mainTex, []byte("\\input{capitulos/cap1}"), 0o644))
+		require.NoError(t, os.WriteFile(chapter, []byte("capítulo"), 0o644))
+		if withMeta {
+			require.NoError(t, os.WriteFile(filepath.Join(folder, core.MetaFileName), []byte(`{"version":1,"mainFile":"main.tex"}`), 0o644))
+		}
+		return folder, mainTex, chapter
+	}
+	open := func(t *testing.T, folder, doc string) *App {
+		a := newApp(folder, doc, okCompile)
+		t.Cleanup(func() { a.compiles.Close(time.Second) })
+		return a
+	}
+
+	t.Run("without meta: the active document", func(t *testing.T) {
+		folder, _, chapter := newProject(t, false)
+		a := open(t, folder, chapter)
+		assert.Equal(t, chapter, a.compileTarget())
+		assert.Equal(t, filepath.Join(folder, "capitulos", "cap1.pdf"), a.pdfPath())
+	})
+
+	t.Run("with meta: main.tex even while editing a chapter", func(t *testing.T) {
+		folder, mainTex, chapter := newProject(t, true)
+		a := open(t, folder, chapter)
+		_, active := a.workspace()
+		assert.Equal(t, chapter, active, "the chapter stays the active document")
+		assert.Equal(t, mainTex, a.compileTarget())
+		assert.Equal(t, filepath.Join(folder, "main.pdf"), a.pdfPath())
+	})
+
+	t.Run("meta pointing to a missing file falls back to the active document", func(t *testing.T) {
+		folder, mainTex, chapter := newProject(t, true)
+		require.NoError(t, os.Remove(mainTex))
+		a := open(t, folder, chapter)
+		assert.Equal(t, chapter, a.compileTarget())
+	})
+
+	t.Run("a .bib keeps the last .tex as target", func(t *testing.T) {
+		folder, _, chapter := newProject(t, false)
+		bib := filepath.Join(folder, "referencias.bib")
+		require.NoError(t, os.WriteFile(bib, []byte("@misc{a}"), 0o644))
+		a := open(t, folder, chapter)
+		a.setWorkspace(folder, bib)
+		assert.Equal(t, chapter, a.compileTarget())
+	})
+}
+
+// TestRapidAutoRequestsCancelTheObsoleteRun: three automatic requests in
+// well under 500 ms. The run in progress is cancelled (its context is done),
+// the others coalesce, and only the last run finishes — with the newest
+// content on disk and the right `file` in compile:started/finished.
+func TestRapidAutoRequestsCancelTheObsoleteRun(t *testing.T) {
+	firstStarted := make(chan struct{})
+	firstDying := make(chan struct{}) // latexmk takes a moment to die
+	var runs atomic.Int32
+	var firstCanceled atomic.Bool
+	compile := func(ctx context.Context, workdir, filename string) (string, error) {
+		data, err := os.ReadFile(filepath.Join(workdir, filename)) // what latexmk would read
+		if err != nil {
+			return "", err
+		}
+		if runs.Add(1) == 1 {
+			close(firstStarted)
+			<-ctx.Done()
+			firstCanceled.Store(true)
+			<-firstDying
+			return "", fmt.Errorf("compilación cancelada: %w", ctx.Err())
+		}
+		return string(data), nil
+	}
+	a, events := newTestApp(t, compile)
+	_, doc := a.workspace()
+	save := func(v string) { require.NoError(t, os.WriteFile(doc, []byte(v), 0o644)) }
+
+	start := time.Now()
+	save("v1")
+	require.True(t, a.RequestCompile("auto"))
+	<-firstStarted
+	save("v2")
+	require.True(t, a.RequestCompile("auto")) // cancels run 1 (young, automatic)
+	save("v3")
+	require.True(t, a.RequestCompile("auto")) // coalesces into the follow-up
+	assert.Less(t, time.Since(start), 500*time.Millisecond)
+	close(firstDying)
+
+	ev := nextEvent(t, events)
+	require.Equal(t, EventCompileStarted, ev.name)
+	assert.Equal(t, doc, ev.data[0].(CompileStartedEvent).File)
+
+	ev = nextEvent(t, events)
+	require.Equal(t, EventCompileFinished, ev.name)
+	canceled := ev.data[0].(CompileFinishedEvent)
+	assert.True(t, canceled.Canceled, "the obsolete run must be reported as cancelled")
+	assert.False(t, canceled.Success)
+	assert.Zero(t, canceled.PDFVersion, "a cancelled run publishes no PDF")
+	assert.True(t, firstCanceled.Load(), "its context must be cancelled (latexmk killed)")
+
+	ev = nextEvent(t, events)
+	require.Equal(t, EventCompileStarted, ev.name)
+	assert.Equal(t, doc, ev.data[0].(CompileStartedEvent).File)
+
+	ev = nextEvent(t, events)
+	require.Equal(t, EventCompileFinished, ev.name)
+	last := ev.data[0].(CompileFinishedEvent)
+	assert.True(t, last.Success)
+	assert.False(t, last.Canceled)
+	assert.Equal(t, doc, last.File)
+	assert.Equal(t, "v3", last.Logs, "the last run must compile the newest content")
+
+	expectNoEvent(t, events) // 3 requests → 2 runs: no third compilation
+	assert.EqualValues(t, 2, runs.Load())
 }

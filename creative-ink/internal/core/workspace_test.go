@@ -7,8 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mkfiles creates files (and their parent dirs) under root.
@@ -229,4 +233,117 @@ func TestIsEditableFile(t *testing.T) {
 			t.Errorf("IsEditableFile(%q) = %v, want %v", name, got, want)
 		}
 	}
+}
+
+// ── Archetype tests (testify) ──────────────────────────────────────────────
+
+// TestResolveInFolderContract documents the bridge contract: the UI sends
+// ABSOLUTE paths and Go only accepts those inside the open folder. A
+// relative path such as "capitulos/intro.tex" is valid once joined to the
+// root; sent bare, it is rejected (the bridge never guesses a base dir).
+func TestResolveInFolderContract(t *testing.T) {
+	root := t.TempDir()
+	mkfiles(t, root, "capitulos/intro.tex", "main.tex")
+
+	t.Run("relative paths inside the root resolve", func(t *testing.T) {
+		for _, rel := range []string{"capitulos/intro.tex", "main.tex", "capitulos/../main.tex", "capitulos/nuevo.tex"} {
+			got, err := ResolveInFolder(root, filepath.Join(root, filepath.FromSlash(rel)))
+			require.NoError(t, err, rel)
+			assert.Equal(t, filepath.Join(root, filepath.FromSlash(rel)), got, rel)
+		}
+	})
+
+	t.Run("a bare relative path is rejected", func(t *testing.T) {
+		_, err := ResolveInFolder(root, "capitulos/intro.tex")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "absoluta")
+	})
+
+	t.Run("path traversal is rejected", func(t *testing.T) {
+		// Escapes into folders that exist: ErrOutsideFolder.
+		outside := []string{
+			filepath.Join(root, "capitulos", "..", "..", "fuera.tex"),
+			filepath.Join(t.TempDir(), "otro-temp.tex"), // another temp dir
+		}
+		if runtime.GOOS != "windows" {
+			outside = append(outside, "/etc/passwd")
+		}
+		for _, p := range outside {
+			_, err := ResolveInFolder(root, p)
+			assert.ErrorIs(t, err, ErrOutsideFolder, p)
+		}
+		// Escapes into folders that do not exist (<tmp>/../../etc does not):
+		// rejected too, by the symlink resolution, before any comparison.
+		for _, p := range []string{
+			filepath.Join(root, "..", "..", "etc", "passwd"),
+			"../../etc/passwd", // relative and escaping
+		} {
+			_, err := ResolveInFolder(root, p)
+			assert.Error(t, err, p)
+		}
+	})
+
+	t.Run("a symlink cannot escape the root", func(t *testing.T) {
+		outside := t.TempDir()
+		mkfiles(t, outside, "secreto.tex")
+		link := filepath.Join(root, "atajo.tex")
+		if err := os.Symlink(filepath.Join(outside, "secreto.tex"), link); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		_, err := ResolveInFolder(root, link)
+		assert.ErrorIs(t, err, ErrOutsideFolder)
+	})
+
+	t.Run("no folder open", func(t *testing.T) {
+		_, err := ResolveInFolder("", filepath.Join(root, "main.tex"))
+		assert.ErrorIs(t, err, ErrNoFolder)
+	})
+}
+
+// TestScanTreeHidesControlEntriesAndBuildsHierarchy: a project with .tex,
+// .png, the editor's hidden control data and build artifacts.
+func TestScanTreeHidesControlEntriesAndBuildsHierarchy(t *testing.T) {
+	root := t.TempDir()
+	mkfiles(t, root,
+		"main.tex", "main.aux", "main.synctex.gz",
+		"capitulos/cap1.tex", "capitulos/cap2.tex",
+		"figuras/diagrama.png",
+		".creative-ink-meta",              // project meta (hidden file)
+		".creative-ink/config.json",       // editor data (hidden folder)
+		".creative-ink/plugins/x/main.go", // nested inside the hidden folder
+		".git/HEAD", "capitulos/.borrador.tex",
+	)
+
+	tree, truncated, err := ScanTree(root)
+	require.NoError(t, err)
+	assert.False(t, truncated)
+	assert.True(t, tree.IsDir)
+	assert.Equal(t, root, tree.Path)
+
+	// Exact hierarchy: folders first, then files; nothing hidden or built.
+	assert.Equal(t, []string{"capitulos", "figuras", "main.tex"}, names(tree.Children))
+	byName := map[string]FileNode{}
+	for _, n := range tree.Children {
+		byName[n.Name] = n
+	}
+	require.Contains(t, byName, "capitulos")
+	assert.True(t, byName["capitulos"].IsDir)
+	assert.Equal(t, []string{"cap1.tex", "cap2.tex"}, names(byName["capitulos"].Children))
+	assert.Equal(t, filepath.Join(root, "capitulos", "cap1.tex"), byName["capitulos"].Children[0].Path)
+	require.Len(t, byName["figuras"].Children, 1)
+	png := byName["figuras"].Children[0]
+	assert.Equal(t, "diagrama.png", png.Name)
+	assert.False(t, png.Editable, "images are listed but cannot be edited")
+	assert.True(t, byName["main.tex"].Editable)
+
+	// No hidden entry anywhere in the tree, at any depth.
+	var walk func(FileNode)
+	walk = func(n FileNode) {
+		for _, c := range n.Children {
+			assert.False(t, strings.HasPrefix(c.Name, "."), "hidden entry listed: %s", c.Path)
+			assert.NotContains(t, c.Path, string(filepath.Separator)+".creative-ink")
+			walk(c)
+		}
+	}
+	walk(tree)
 }
