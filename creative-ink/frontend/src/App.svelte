@@ -14,6 +14,8 @@
     runCommand
   } from './lib/actions.js'
   import { listenCompileEvents, resetCompilation } from './lib/compilation.svelte.js'
+  import { listenConfigEvents } from './lib/config.svelte.js'
+  import { listenTerminalEvents } from './lib/terminal.svelte.js'
   import { ui } from './lib/ui.svelte.js'
   import { compileTarget, workspace } from './lib/workspace.svelte.js'
 
@@ -29,6 +31,10 @@
   onDestroy(listenAppEvents())
   // Native menu clicks (macOS): same commands as the shortcuts below.
   onDestroy(listenMenuEvents())
+  // `ci config …` in the terminal updates the UI at once (config:changed).
+  onDestroy(listenConfigEvents(() => workspace.currentFolderPath))
+  // Terminal runs: id of the spooled output and build progress.
+  onDestroy(listenTerminalEvents())
   void initWorkspace()
 
   // A different compile target (another file, or the main file changed): the

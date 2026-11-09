@@ -7,8 +7,10 @@
 
 /**
  * @typedef {{ name: string, path: string, isDir: boolean, editable: boolean, children?: FileNode[] }} FileNode
- * @typedef {{ needsSetup: boolean, needsStart: boolean, repositoryPath: string, canceled: boolean, folderPath: string, filePath: string, texFilePath: string, mainFilePath: string, tree: FileNode, truncated: boolean }} WorkspaceState
+ * @typedef {{ needsSetup: boolean, needsStart: boolean, repositoryPath: string, canceled: boolean, folderPath: string, filePath: string, texFilePath: string, mainFilePath: string, autoCompile: boolean, tree: FileNode, truncated: boolean }} WorkspaceState
+ * @typedef {{ kind: 'files' | 'size' | 'images', message: string }} ProjectWarning
  */
+import { config } from './config.svelte.js'
 
 export const workspace = $state({
   /** Absolute path of the open folder ("" before the first load). */
@@ -41,7 +43,13 @@ export const workspace = $state({
   /** Absolute path of My-Creative-Ink-Repository (the launcher). */
   repositoryPath: '',
   /** Last workspace error (dialogs, scan), shown in the explorer. */
-  error: ''
+  error: '',
+  /**
+   * Large-project detector (Go: project:health). Only informative: the
+   * editor shows a warning with a tooltip and changes nothing else.
+   * @type {ProjectWarning[]}
+   */
+  healthWarnings: []
 })
 
 /** Applies a WorkspaceState returned by Go. */
@@ -51,6 +59,9 @@ export function applyWorkspace(/** @type {WorkspaceState} */ state) {
   if (state.folderPath !== workspace.currentFolderPath || state.filePath === workspace.secondaryFilePath) {
     workspace.secondaryFilePath = ''
   }
+  // Another project: its own analysis arrives later (project:health).
+  if (state.folderPath !== workspace.currentFolderPath) workspace.healthWarnings = []
+  config.autoCompile = state.autoCompile
   workspace.needsSetup = state.needsSetup
   workspace.needsStart = state.needsStart
   workspace.repositoryPath = state.repositoryPath
