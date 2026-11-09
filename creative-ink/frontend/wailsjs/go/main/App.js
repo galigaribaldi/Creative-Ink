@@ -18,6 +18,14 @@ export function CreateQuickDocument() {
   return window['go']['main']['App']['CreateQuickDocument']();
 }
 
+export function GetConfig() {
+  return window['go']['main']['App']['GetConfig']();
+}
+
+export function GetProjectHealth() {
+  return window['go']['main']['App']['GetProjectHealth']();
+}
+
 export function GetRepositoryOptions() {
   return window['go']['main']['App']['GetRepositoryOptions']();
 }
@@ -28,6 +36,14 @@ export function GetStartScreen() {
 
 export function GetWorkspace() {
   return window['go']['main']['App']['GetWorkspace']();
+}
+
+export function LoadFile(arg1) {
+  return window['go']['main']['App']['LoadFile'](arg1);
+}
+
+export function NewFileDialog() {
+  return window['go']['main']['App']['NewFileDialog']();
 }
 
 export function OpenFile(arg1) {
@@ -42,12 +58,16 @@ export function OpenProject(arg1) {
   return window['go']['main']['App']['OpenProject'](arg1);
 }
 
+export function ReadTerminalOutput(arg1, arg2) {
+  return window['go']['main']['App']['ReadTerminalOutput'](arg1, arg2);
+}
+
 export function RefreshWorkspace() {
   return window['go']['main']['App']['RefreshWorkspace']();
 }
 
-export function RequestCompile() {
-  return window['go']['main']['App']['RequestCompile']();
+export function RequestCompile(arg1) {
+  return window['go']['main']['App']['RequestCompile'](arg1);
 }
 
 export function RevealQuickDocuments() {
@@ -64,6 +84,10 @@ export function SaveAsDialog(arg1) {
 
 export function SaveContent(arg1, arg2) {
   return window['go']['main']['App']['SaveContent'](arg1, arg2);
+}
+
+export function SetConfig(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetConfig'](arg1, arg2, arg3);
 }
 
 export function SetMainFile(arg1) {
