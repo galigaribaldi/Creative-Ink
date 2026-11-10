@@ -13,6 +13,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 └── creative-ink/                 ← app Wails (generada por `wails init`)
     ├── main.go                   ← arranque de Wails: ventana, assets, Bind(&App{})
     ├── app.go                    ← struct App: ÚNICA fachada IPC expuesta al frontend
+    ├── window_theme.go           ← color nativo de la ventana = --surface-base del tema del sistema (sin destello al arrancar)
     ├── menu.go                   ← menú nativo (solo macOS): Archivo, Edición (portapapeles), Buscar, Ver, Ventana → evento menu:command
     ├── config_app.go             ← GetConfig/SetConfig, cerrojo de compile.auto, vista previa del PDF existente (sin compilar)
     ├── health_app.go             ← detector de proyecto grande: análisis con debounce → evento project:health (solo avisa)
@@ -44,6 +45,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     │   └── system/               ← entorno: health check de LaTeX y detección/instalación de motores
     │       ├── health.go         ← HealthStatus: herramientas de LaTeX, hardware y repositorio
     │       ├── platform.go       ← RepositoryOptions por SO, parser de XDG user-dirs; RepositoryName = My-Creative-Ink-Repository
+    │       ├── appearance_<os>.go ← SystemPrefersDark: apariencia del sistema al arrancar (defaults, registro, gsettings)
     │       ├── proctree_{unix,windows}.go ← KillTreeOnCancel: cancelar mata el árbol entero (latexmk → xelatex/biber)
     │       ├── reveal.go         ← RevealInFileManager (open / xdg-open / explorer, sin shell)
     │       └── documents_<os>.go ← Documentos reales: darwin, linux (XDG), windows (Known Folders), other
@@ -58,7 +60,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   │   ├── Sidebar.svelte     ← explorador: cajón de 240 px (siempre montado, `inert` si está cerrado)
         │   │   ├── FileTreeItem.svelte ← nodo recursivo del árbol; solo los `.tex` se pueden abrir
         │   │   ├── Workspace.svelte   ← Editor | Preview (+ CompileLog bajo el editor); solo layout
-        │   │   ├── Editor.svelte      ← CodeMirror 6 (one-dark, stex) + autoguardado con debounce
+        │   │   ├── Editor.svelte      ← CodeMirror 6 (tema de tokens, stex) + autoguardado con debounce
         │   │   ├── BottomPanel.svelte ← panel inferior con pestañas "Errores LaTeX" | "Terminal" (siempre montado)
         │   │   ├── CompileLog.svelte  ← contenido de la pestaña de errores de LaTeX
         │   │   ├── TerminalPanel.svelte ← terminal integrada: historial, entrada, ↑/↓, Ctrl+C
@@ -75,6 +77,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   │   ├── languages.js          ← resaltado por tipo de archivo (stex, BibTeX propio, lua, python, shell, yaml)
         │   │   ├── terminal.svelte.js    ← entradas y historial de la terminal (sobreviven al cambio de pestaña)
         │   │   ├── synctex.svelte.js     ← SyncTeX: highlight (Editor → PDF) y reveal (PDF → Editor)
+        │   │   ├── theme.svelte.js       ← tema claro/oscuro: preferencia system|light|dark en localStorage → <html data-theme>
+        │   │   ├── editor-theme.js       ← tema de CodeMirror hecho solo con tokens (EditorView.theme + HighlightStyle)
         │   │   └── pdf.js        ← configuración de PDF.js (worker local) y loadPdf(url)
         │   └── style.css         ← estilos globales mínimos
         └── wailsjs/              ← GENERADO por Wails: no editar a mano
@@ -192,7 +196,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 - **Errores:** cada medición es independiente. Si una falla, su campo queda en 0 y se agrega un mensaje en `warnings`; el binding nunca rechaza la promesa por una lectura de hardware.
 
 ## 4.2 Editor y autoguardado (Módulos 2 y 4)
-- **CodeMirror 6** con un setup mínimo hecho a mano (sin `basicSetup`): números de línea, historial, `defaultKeymap`, `indentWithTab`, `bracketMatching`, resaltado según el archivo (`lib/languages.js`) y tema `one-dark`.
+- **CodeMirror 6** con un setup mínimo hecho a mano (sin `basicSetup`): números de línea, historial, `defaultKeymap`, `indentWithTab`, `bracketMatching`, resaltado según el archivo (`lib/languages.js`) y el tema de tokens de `lib/editor-theme.js` (claro y oscuro con las mismas variables CSS; ver la skill `ui-svelte-architect`, A2–A3).
 - **Archivos de texto (Sección 19):** se abren y editan `.tex`, `.bib`, `.sty`, `.cls`, `.bst`, `.txt`, `.md`, `.csv`, `.json`, `.yaml`, `.lua`, `.py`, `.sh`, `Makefile`… (`core.IsEditableFile`); el resto sale atenuado en el explorador. Los auxiliares (`.aux`, `.log`…) siguen ocultos. Go rechaza archivos de más de 8 MB, binarios o **no UTF-8** (un `.bib` antiguo en Latin-1 se corrompería al autoguardar: hay que convertirlo antes). Resaltado: `stex` para la familia TeX, un modo **BibTeX** propio, y `lua`/`python`/`shell`/`yaml` de `legacy-modes`; el resto, texto plano.
   - **Objetivo de compilación:** el archivo principal (★) o, si no hay, el **último `.tex`** abierto en el panel principal (`App.texDoc` / `WorkspaceState.texFilePath`). Abrir `referencias.bib` no cambia la vista previa, y guardarlo recompila el documento. Un `.bib` nunca es principal ni usa SyncTeX.
 - **Comandos de edición (todos de CodeMirror, `@codemirror/search` + `@codemirror/commands`):** deshacer/rehacer (⌘Z, ⇧⌘Z), **buscar y reemplazar** (⌘F; panel arriba, en español), siguiente/anterior (⌘G, ⇧⌘G), **ir a la línea** (⌥⌘G), siguiente coincidencia (⌘D), resaltar las demás apariciones de la selección, **varios cursores** (⌥-clic) y selección en columna (⇧⌥-arrastrar), comentar/descomentar con `%` (⌘/), mover y copiar líneas (⌥↑/↓, ⇧⌥↑/↓), borrar línea (⇧⌘K), sangrar (⌘] / ⌘[ y Tab). ⌘-clic sigue siendo SyncTeX en los `.tex`. En Linux y Windows, ⌘ = Ctrl y ⌥ = Alt.

@@ -327,34 +327,35 @@
     justify-content: space-between;
     gap: 1rem;
     padding: 0.25rem 0.75rem;
-    border-bottom: 1px solid #333;
-    background: #1b1d23;
-    font-size: 0.75rem;
-    color: #9d9d9d;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-base);
+    font-size: var(--text-sm);
+    color: var(--text-muted);
   }
 
   .pdf-name {
-    color: #bdbdbd;
+    color: var(--text-secondary);
   }
 
   .pages {
-    color: #6b6b6b;
+    color: var(--text-muted);
   }
 
+  /* Quiet success, visible problems (A1). */
   .state-success {
-    color: #4ade80;
+    color: var(--text-muted);
   }
 
   .state-compiling {
-    color: #fbbf24;
+    color: var(--text-secondary);
   }
 
   .state-error {
-    color: #f87171;
+    color: var(--danger);
   }
 
   .state-cached {
-    color: #9d9d9d;
+    color: var(--text-muted);
     cursor: help;
   }
 
@@ -367,13 +368,16 @@
     align-items: center;
     /* Keep in sync with VIEWER_PADDING_PX. */
     padding: 16px;
-    background: #2a2a2a;
+    background: var(--surface-editor);
   }
 
+  /* The sheet: soft page shadow and the medium radius (A3). */
   .page {
     position: relative;
     flex-shrink: 0;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-page);
+    overflow: hidden;
   }
 
   .page.hidden {
@@ -382,15 +386,17 @@
 
   canvas {
     display: block;
-    background: #fff;
+    background: var(--paper);
     cursor: text;
   }
 
+  /* SyncTeX highlight (A2, accent rule 3): accent border, soft accent fill,
+     fade-out. 1.8 s is the time to find the box, not an interaction. */
   .sync-highlight {
     position: absolute;
-    border-radius: 2px;
-    background: rgba(251, 191, 36, 0.3);
-    outline: 2px solid rgba(251, 191, 36, 0.9);
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    outline: 2px solid var(--accent);
     pointer-events: none;
     animation: sync-fade 1.8s ease-out forwards;
   }
@@ -414,7 +420,7 @@
   .sync-notice {
     margin-left: auto;
     margin-right: 0.75rem;
-    color: #fbbf24;
+    color: var(--text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -424,15 +430,16 @@
     margin: auto 0;
     padding: 1rem;
     text-align: center;
-    color: #6b6b6b;
+    font-size: var(--text-md);
+    color: var(--text-muted);
   }
 
   .render-error {
     margin: 0;
     padding: 0.35rem 0.75rem;
-    border-top: 1px solid #5c4a1f;
-    background: #1f1a10;
-    font-size: 0.75rem;
-    color: #fbbf24;
+    border-top: 1px solid var(--border);
+    background: var(--surface-base);
+    font-size: var(--text-sm);
+    color: var(--warning);
   }
 </style>
