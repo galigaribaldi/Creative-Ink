@@ -73,7 +73,7 @@ func (a *App) buildMenu(goos string) *menu.Menu {
 	})
 	a.addSubmenu(root, "Ver", []menuEntry{
 		{"toggle-sidebar", "Explorador", cmd("b")},
-		{"toggle-terminal", "Terminal", cmd("j")},
+		{"toggle-terminal", "Terminal CI", cmd("j")},
 		{"split-editor", "Dividir el editor", cmd("\\")},
 	})
 	root.Append(menu.WindowMenu())

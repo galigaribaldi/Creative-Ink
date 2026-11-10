@@ -99,10 +99,12 @@
 </script>
 
 <div class="terminal">
-  <div class="output" bind:this={output} role="log" aria-live="polite" aria-label="Salida de la terminal">
+  <div class="output" bind:this={output} role="log" aria-live="polite" aria-label="Salida de la terminal CI">
     {#if terminal.entries.length === 0}
       <p class="hint">
-        Ejecuta comandos en <strong>{folderName}</strong> (p. ej. <code>git status</code>,
+        <span class="ci-prompt">CI ❯</span> Terminal de Creative-ink en <strong>{folderName}</strong>.
+        <code>ci help</code> lista los comandos de LaTeX (compilar, limpiar, configuración, confianza);
+        cualquier otra línea va a la shell del sistema (p. ej. <code>git status</code>,
         <code>tlmgr info siunitx</code>). Sin TTY: los comandos interactivos (sudo, editores) no
         funcionan. Límite de 30 s · <code>clear</code> limpia · ↑/↓ historial.
       </p>
@@ -110,7 +112,8 @@
     {#each terminal.entries as entry (entry.id)}
       {@const info = entry.status === 'running' ? null : summary(entry)}
       <div class="entry">
-        <div class="command"><span class="prompt">$</span> {entry.command}</div>
+        <!-- The same prompt as the input: every run is easy to spot. -->
+        <div class="command"><span class="ci-prompt" aria-hidden="true">CI ❯</span> {entry.command}</div>
         {#if entry.output}<pre>{entry.output}</pre>{/if}
         {#if entry.status === 'running' && entry.progress && !entry.progress.done}
           {@const p = progressInfo(entry.progress)}
@@ -143,14 +146,17 @@
   </div>
 
   <div class="input-row">
-    <span class="prompt" title={workspace.currentFolderPath}>{folderName} $</span>
+    <span class="cwd" title={workspace.currentFolderPath}>{folderName}</span>
+    <span class="ci-prompt" aria-hidden="true">CI ❯</span>
     <input
       bind:this={input}
       bind:value
       {onkeydown}
       disabled={!workspace.currentFolderPath}
-      placeholder={terminal.running ? 'Ejecutando… (Ctrl+C para cancelar)' : 'Escribe un comando y pulsa Enter'}
-      aria-label="Comando de terminal"
+      placeholder={terminal.running
+        ? 'Ejecutando… (Ctrl+C para cancelar)'
+        : "Escribe 'ci help' para comandos de LaTeX, o usa la shell del sistema..."}
+      aria-label="Comando de la terminal CI"
       autocomplete="off"
       autocapitalize="off"
       spellcheck="false"
@@ -200,9 +206,25 @@
     color: var(--text-primary);
   }
 
-  /* Neutral prompt: the accent is reserved (A2). */
-  .prompt {
-    color: var(--text-muted);
+  /* The Terminal CI's own prompt (A2, accent rule 4): sets it apart from
+     the system terminal and marks where every run starts in the history. */
+  .ci-prompt {
+    flex-shrink: 0;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  /* The folder it runs in: present but quiet, before the prompt. */
+  .cwd {
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
   }
 
   pre {
@@ -307,13 +329,6 @@
     border-top: 1px solid var(--border);
   }
 
-  .input-row .prompt {
-    flex-shrink: 0;
-    max-width: 40%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
 
   input {
     flex: 1;

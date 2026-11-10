@@ -8,7 +8,7 @@
 
   const TABS = [
     { id: 'problems', label: 'Errores LaTeX' },
-    { id: 'terminal', label: 'Terminal' }
+    { id: 'terminal', label: 'Terminal CI' }
   ]
 
   let failed = $derived(compilation.status === 'error' && compilation.logs !== '')

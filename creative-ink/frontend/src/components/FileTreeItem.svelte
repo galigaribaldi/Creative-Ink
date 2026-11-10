@@ -1,6 +1,6 @@
 <script>
   import FileTreeItem from './FileTreeItem.svelte'
-  import { openFile, setMainFile } from '../lib/actions.js'
+  import { FILE_DRAG_TYPE, openFile, setMainFile } from '../lib/actions.js'
   import { setDirExpanded, ui } from '../lib/ui.svelte.js'
   import { isTeXPath, workspace } from '../lib/workspace.svelte.js'
 
@@ -24,6 +24,18 @@
     else if (node.editable) openFile(node.path)
   }
 
+  // Editable files can be dragged onto the editor area: they open in the
+  // second pane (Workspace.svelte, actions.js openInSecondaryPane).
+  let draggable = $derived(!node.isDir && node.editable)
+
+  /** @param {DragEvent} event */
+  function ondragstart(event) {
+    if (!draggable || !event.dataTransfer) return
+    event.dataTransfer.setData(FILE_DRAG_TYPE, node.path)
+    event.dataTransfer.setData('text/plain', node.path)
+    event.dataTransfer.effectAllowed = 'copy'
+  }
+
   function toggleMain() {
     void setMainFile(isMain ? '' : node.path)
   }
@@ -41,6 +53,8 @@
     <button
       class="entry"
       {onclick}
+      draggable={draggable ? 'true' : undefined}
+      {ondragstart}
       title={disabled ? `${node.name} (no es un archivo de texto: no se puede editar)` : node.path}
       tabindex={disabled ? -1 : 0}
     >
@@ -132,6 +146,10 @@
   .row:hover:not(.disabled) .entry,
   .row.active .entry {
     color: var(--text-primary);
+  }
+
+  .entry[draggable='true'] {
+    -webkit-user-drag: element;
   }
 
   .row.disabled .entry {
