@@ -1,6 +1,6 @@
 <script>
   import { onMount, tick, untrack } from 'svelte'
-  import { compilation } from '../lib/compilation.svelte.js'
+  import { compilation, showDocumentPreview } from '../lib/compilation.svelte.js'
   import { config } from '../lib/config.svelte.js'
   import { loadPdf, releasePdf } from '../lib/pdf.js'
   import { sync, syncBackward } from '../lib/synctex.svelte.js'
@@ -21,9 +21,12 @@
    */
   let { compileState, pdfVersion, documentKey } = $props()
 
-  // Which PDF is shown (the main file's when the project has one).
+  // Which PDF is shown (the main file's when the project has one, or a
+  // foreign one such as the `ci guide` guide).
   let pdfName = $derived(
-    (documentKey.split(/[\\/]/).pop() ?? '').replace(/\.tex$/i, '.pdf')
+    compilation.foreign
+      ? compilation.foreign.title
+      : (documentKey.split(/[\\/]/).pop() ?? '').replace(/\.tex$/i, '.pdf')
   )
 
   const LABELS = {
@@ -245,7 +248,7 @@
   // PDF points with the scale the page was drawn at.
   /** @param {MouseEvent} event */
   function ondblclick(event) {
-    if (!hasPage || !rendered.pageNumber) return
+    if (!hasPage || !rendered.pageNumber || compilation.foreign) return // SyncTeX only maps the document
     const rect = canvas.getBoundingClientRect()
     const x = (event.clientX - rect.left) / rendered.cssScale
     const y = (event.clientY - rect.top) / rendered.cssScale
@@ -282,7 +285,10 @@
 <div class="preview">
   <header class="bar">
     <span class="title">
-      Vista previa{#if pdfName}<span class="pdf-name" title={documentKey}> · {pdfName}</span>{/if}
+      Vista previa{#if pdfName}<span class="pdf-name" title={compilation.foreign?.file ?? documentKey}> · {pdfName}</span>{/if}
+      {#if compilation.foreign}
+        <button class="back" onclick={showDocumentPreview} title="Volver al PDF del documento">Volver al documento</button>
+      {/if}
     </span>
     {#if pageCount}
       <!-- Chevron paths in the Lucide style (ISC licence, lucide.dev). -->
@@ -386,6 +392,30 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .back {
+    margin-left: 0.5rem;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-secondary);
+    font: inherit;
+    text-decoration: underline transparent;
+    text-underline-offset: 2px;
+    cursor: pointer;
+    transition: color var(--transition), text-decoration-color var(--transition);
+  }
+
+  .back:hover {
+    color: var(--text-primary);
+    text-decoration-color: currentColor;
+  }
+
+  .back:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   .pager {

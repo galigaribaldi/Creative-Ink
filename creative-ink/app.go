@@ -210,6 +210,9 @@ type StartScreen struct {
 	Recent      []string `json:"recent"`
 	PluginsPath string   `json:"pluginsPath"`
 	Warnings    []string `json:"warnings"`
+	// Templates for "Nuevo proyecto" (CreateProjectFromTemplate), from
+	// <repo>/.creative-ink/templates and <UserConfigDir>/creative-ink/templates.
+	Templates []core.TemplateInfo `json:"templates"`
 }
 
 // OpenedFile is a document loaded into the editor.
@@ -397,6 +400,7 @@ func (a *App) startup(ctx context.Context) {
 		// Not fatal: GetWorkspace retries and reports the error to the UI.
 		log.Printf("[workspace] no se pudo preparar el repositorio central: %v", err)
 	}
+	a.ensureUserTemplatesDir()
 }
 
 // shutdown is called by Wails when the app is closing: stop latexmk so it
@@ -694,6 +698,7 @@ func (a *App) GetStartScreen() (StartScreen, error) {
 		Recent:          []string{},
 		PluginsPath:     a.pluginsDir(),
 		Warnings:        []string{},
+		Templates:       core.ListTemplates(a.templateSources()...),
 	}
 	if a.settingsPath != "" {
 		if s, err := core.ReadSettings(a.settingsPath); err == nil {
@@ -1138,6 +1143,8 @@ func (a *App) ciEnv(runID int, output io.Writer) ci.Env {
 		Config:        ciConfig{a},
 		Trust:         ciTrust{a},
 		LatexmkRCArgs: rcArgs,
+		GuideDir:      a.guideDir(),
+		ShowGuide:     a.showGuide,
 		Output: compiler.BuildOutput{
 			Log: output,
 			Progress: func(p compiler.BuildProgress) {

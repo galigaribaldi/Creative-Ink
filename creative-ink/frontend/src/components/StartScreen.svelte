@@ -10,6 +10,8 @@
   let error = $state('')
   let busy = $state(false)
   let projectName = $state('')
+  // '' = the built-in template; otherwise the path of a listed one.
+  let template = $state('')
   /** @type {HTMLInputElement | undefined} */
   let nameInput = $state()
 
@@ -45,7 +47,7 @@
 
   function onsubmit(event) {
     event.preventDefault()
-    if (projectName.trim()) void run(() => createProject(projectName))
+    if (projectName.trim()) void run(() => createProject(projectName, template))
   }
 
   async function reveal() {
@@ -105,6 +107,17 @@
             disabled={busy}
           />
           <span class="hint">Los espacios se convierten en «-» y se quitan los acentos del nombre de la carpeta.</span>
+          {#if screen?.templates?.length}
+            <label class="template">
+              <span class="hint">Plantilla</span>
+              <select bind:value={template} disabled={busy}>
+                <option value="">Básica (incorporada)</option>
+                {#each screen.templates as t (t.path)}
+                  <option value={t.path}>{t.name} · {t.source === 'repository' ? 'repositorio' : 'tuya'}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
           <button type="submit" class="primary" disabled={busy || !projectName.trim()}>Crear proyecto</button>
         </form>
 
@@ -297,6 +310,30 @@
     font: inherit;
     font-size: var(--text-md);
     transition: border-color var(--transition);
+  }
+
+  .template {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  select {
+    flex: 1;
+    min-width: 0;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-editor);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-sm);
+    transition: border-color var(--transition);
+  }
+
+  select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   input::placeholder {

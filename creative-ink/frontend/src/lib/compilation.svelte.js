@@ -7,6 +7,7 @@ import { compileTarget } from './workspace.svelte.js'
 // Event names emitted by Go (app.go: EventCompileStarted / EventCompileFinished).
 export const COMPILE_STARTED = 'compile:started'
 export const COMPILE_FINISHED = 'compile:finished'
+export const PREVIEW_SHOW = 'preview:show' // a PDF that is not the compile target (ci guide)
 
 /** @typedef {'idle' | 'compiling' | 'success' | 'error'} CompileStatus */
 
@@ -39,7 +40,13 @@ export const compilation = $state({
   autoCompilePaused: false,
   // The PDF shown was not compiled now: it is the one already on disk
   // (project opened with compile.auto off).
-  cached: false
+  cached: false,
+  /**
+   * A PDF shown instead of the document (e.g. the `ci guide` guide) until
+   * the next compilation; null otherwise. `back` restores the document.
+   * @type {{ title: string, file: string, back: { pdfVersion: number, pdfModTime: number } } | null}
+   */
+  foreign: null
 })
 
 /**
@@ -86,13 +93,34 @@ export function listenCompileEvents() {
           compilation.pdfVersion = result.pdfVersion
           compilation.pdfModTime = result.pdfModTime
         }
+        // The document is back in the preview (a guide shown meanwhile ends).
+        if (result.pdfVersion) compilation.foreign = null
       } else {
         // pdfVersion is left untouched, so the canvas keeps the last valid PDF.
         compilation.status = 'error'
       }
+    }),
+    /** @param {{ file: string, title: string, pdfVersion: number, pdfModTime: number }} event */
+    EventsOn(PREVIEW_SHOW, (event) => {
+      if (!event.pdfVersion) return
+      // Remember the document's PDF to come back to it.
+      const back = compilation.foreign?.back ?? { pdfVersion: compilation.pdfVersion, pdfModTime: compilation.pdfModTime }
+      compilation.foreign = { title: event.title, file: event.file, back }
+      compilation.pdfVersion = event.pdfVersion
+      compilation.pdfModTime = event.pdfModTime
     })
   ]
   return () => offs.forEach((off) => off())
+}
+
+/** Leaves a foreign PDF (the guide) and shows the document's again. */
+export function showDocumentPreview() {
+  const back = compilation.foreign?.back
+  compilation.foreign = null
+  if (back) {
+    compilation.pdfVersion = back.pdfVersion
+    compilation.pdfModTime = back.pdfModTime
+  }
 }
 
 /** Clears the state shown for the previous document (on file switch). */
@@ -106,4 +134,5 @@ export function resetCompilation() {
   compilation.autoCompileDelayMs = BASE_COMPILE_DELAY_MS
   compilation.autoCompilePaused = false
   compilation.cached = false
+  compilation.foreign = null
 }

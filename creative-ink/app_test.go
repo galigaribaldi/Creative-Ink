@@ -1502,3 +1502,60 @@ func TestProjectWithoutRCIsTrusted(t *testing.T) {
 	assert.Equal(t, core.TrustTrusted, st.TrustStatus)
 	assert.Empty(t, st.TrustFiles)
 }
+
+// ── ci registry, guide and project templates (§4.6, step 4) ──────────────
+
+func TestListTerminalCommandsComesFromTheRegistry(t *testing.T) {
+	a, _ := newTestApp(t, okCompile)
+	completions := map[string]bool{}
+	for _, c := range a.ListTerminalCommands() {
+		for _, sc := range c.Subcommands {
+			completions[sc.Completion] = true
+		}
+	}
+	for _, want := range []string{"compile completo", "clean all", "trust status", "guide", "compile solo "} {
+		assert.True(t, completions[want], want)
+	}
+}
+
+func TestGuideIsShownInThePreview(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	assert.Equal(t, filepath.Join(filepath.Dir(a.settingsPath), "guide"), a.ciEnv(0, nil).GuideDir)
+
+	pdf := filepath.Join(t.TempDir(), "ci-guia.pdf")
+	require.NoError(t, os.WriteFile(pdf, []byte("%PDF guía"), 0o644))
+	require.NoError(t, a.showGuide(pdf))
+	ev := nextEvent(t, events)
+	require.Equal(t, EventPreviewShow, ev.name)
+	show := ev.data[0].(PreviewShowEvent)
+	assert.Equal(t, pdf, show.File)
+	assert.NotZero(t, show.PDFVersion)
+
+	assert.Error(t, a.showGuide(filepath.Join(t.TempDir(), "no-existe.pdf")))
+}
+
+func TestCreateProjectFromTemplate(t *testing.T) {
+	a, root := newRepoApp(t)
+	tpl := filepath.Join(filepath.Dir(a.settingsPath), "templates", "Tesis-UNAM")
+	require.NoError(t, os.MkdirAll(tpl, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tpl, "main.tex"), []byte(`\title{{{TITULO}}}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tpl, ".latexmkrc"), []byte(`$pdf_mode = 5;`), 0o644))
+
+	screen, err := a.GetStartScreen()
+	require.NoError(t, err)
+	require.Len(t, screen.Templates, 1)
+	assert.Equal(t, core.TemplateSourceUser, screen.Templates[0].Source)
+
+	st, err := a.CreateProjectFromTemplate("Mi Tesis", screen.Templates[0].Path)
+	require.NoError(t, err)
+	project := filepath.Join(root, "Mi-Tesis")
+	assert.Equal(t, project, st.FolderPath)
+	assert.Equal(t, filepath.Join(project, "main.tex"), st.MainFilePath)
+	assert.Equal(t, core.TrustTrusted, st.TrustStatus, "the user's own template is trusted (decision 7)")
+	data, _ := os.ReadFile(filepath.Join(project, "main.tex"))
+	assert.Equal(t, `\title{Mi Tesis}`, string(data))
+
+	// Only listed templates: never an arbitrary folder.
+	_, err = a.CreateProjectFromTemplate("Otro", t.TempDir())
+	assert.ErrorIs(t, err, core.ErrUnknownTemplate)
+}
