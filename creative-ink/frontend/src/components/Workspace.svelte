@@ -1,7 +1,7 @@
 <script>
   import { FILE_DRAG_TYPE, openInSecondaryPane } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
-  import { ui } from '../lib/ui.svelte.js'
+  import { setSplitRatio, ui } from '../lib/ui.svelte.js'
   import { compileTarget } from '../lib/workspace.svelte.js'
   import BottomPanel from './BottomPanel.svelte'
   import Editor from './Editor.svelte'
@@ -56,6 +56,44 @@
     openInSecondaryPane(path)
   }
 
+  // ── Resizable split: the divider between the two editor panes ───────────
+  /** @type {HTMLDivElement} */
+  let editorsEl
+  let resizing = $state(false)
+  const KEY_STEP = 0.05
+
+  // Two panes with the dragged proportion and a 4px divider between them.
+  let columns = $derived(
+    ui.splitEditor ? `minmax(0, ${ui.splitRatio}fr) 4px minmax(0, ${1 - ui.splitRatio}fr)` : 'minmax(0, 1fr)'
+  )
+
+  /** @param {MouseEvent} event */
+  function onDividerMouseDown(event) {
+    if (event.button !== 0) return
+    event.preventDefault() // no text selection while dragging
+    const rect = editorsEl.getBoundingClientRect()
+    resizing = true
+    /** @param {MouseEvent} e */
+    const onmousemove = (e) => setSplitRatio((e.clientX - rect.left) / rect.width)
+    const onmouseup = () => {
+      resizing = false
+      window.removeEventListener('mousemove', onmousemove)
+      window.removeEventListener('mouseup', onmouseup)
+      setSplitRatio(ui.splitRatio, true) // remember it across sessions
+    }
+    window.addEventListener('mousemove', onmousemove)
+    window.addEventListener('mouseup', onmouseup)
+  }
+
+  /** Keyboard: ←/→ move the divider, Home centres it. @param {KeyboardEvent} event */
+  function onDividerKeyDown(event) {
+    const delta = { ArrowLeft: -KEY_STEP, ArrowRight: KEY_STEP }[event.key]
+    if (delta) setSplitRatio(ui.splitRatio + delta, true)
+    else if (event.key === 'Home') setSplitRatio(0.5, true)
+    else return
+    event.preventDefault()
+  }
+
   // A drag cancelled outside (Esc, dropped elsewhere) must clear the hint.
   function ondragend() {
     dragDepth = 0
@@ -69,13 +107,16 @@
      inside {#if}, so CodeMirror and the PDF.js canvas keep their state across
      UI changes. The second pane (split editor, ⌘\) is mounted only while
      split: closing it saves its edits first (actions.js toggleSplitEditor). -->
-<div class="workspace" class:split={ui.splitEditor}>
+<div class="workspace" class:split={ui.splitEditor} class:resizing>
   <section class="pane editor-pane" aria-label="Editor">
     <!-- Untrusted .latexmkrc: compiling with -norc; offers to trust it. -->
     <TrustBanner />
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="editors"
+      bind:this={editorsEl}
+      style:grid-template-columns={columns}
+      style:--hint-left={ui.splitEditor ? `calc(${ui.splitRatio * 100}% + 6px)` : '50%'}
       {ondragentercapture}
       {ondragovercapture}
       {ondragleavecapture}
@@ -85,6 +126,22 @@
         <Editor pane="primary" />
       </div>
       {#if ui.splitEditor}
+        <!-- A focusable separator is an ARIA widget: it takes the keyboard. -->
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+        <div
+          class="divider"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Ancho de los editores"
+          aria-valuemin="20"
+          aria-valuemax="80"
+          aria-valuenow={Math.round(ui.splitRatio * 100)}
+          tabindex="0"
+          title="Arrastra para cambiar el ancho · doble clic para centrar"
+          onmousedown={onDividerMouseDown}
+          onkeydown={onDividerKeyDown}
+          ondblclick={() => setSplitRatio(0.5, true)}
+        ></div>
         <div class="editor-host secondary" aria-label="Segundo editor">
           <Editor pane="secondary" />
         </div>
@@ -135,9 +192,7 @@
     position: relative;
     flex: 1;
     min-height: 0;
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(0, 1fr);
+    display: grid; /* columns come from splitRatio (inline style) */
   }
 
   .editor-host {
@@ -145,13 +200,47 @@
     min-height: 0;
   }
 
-  .editor-host.secondary {
-    border-left: 1px solid var(--border);
+  /* 4px hit area with a 1px hairline in the middle; it lights up on hover,
+     while dragging and on keyboard focus. */
+  .divider {
+    position: relative;
+    cursor: col-resize;
+    background: transparent;
+    transition: background-color var(--transition);
+  }
+
+  .divider::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 50%;
+    width: 1px;
+    background: var(--border);
+  }
+
+  .divider:hover,
+  .resizing .divider {
+    background: var(--surface-hover);
+  }
+
+  .divider:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+
+  /* While dragging: the cursor stays col-resize everywhere and CodeMirror
+     does not start selecting text under the pointer. */
+  .resizing {
+    cursor: col-resize;
+    user-select: none;
+  }
+
+  .resizing .editor-host {
+    pointer-events: none;
   }
 
   .drop-hint {
     position: absolute;
-    inset: 8px 8px 8px 50%;
+    inset: 8px 8px 8px var(--hint-left);
     display: grid;
     place-items: center;
     border: 1px dashed var(--border-strong);

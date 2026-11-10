@@ -9,6 +9,51 @@ import { EventsOn } from '../../wailsjs/runtime/runtime.js'
 const MAX_ENTRIES = 200 // older entries are dropped from the view
 const MAX_HISTORY = 100
 
+/**
+ * The two contexts of the bottom panel. 'ci' (Terminal CI): the user types
+ * a `ci` command without its prefix and the UI adds it ("compile completo"
+ * → "ci compile completo"). 'shell': the line goes to the system shell as
+ * typed. Go runs one command at a time across both.
+ * @typedef {'ci' | 'shell'} TerminalContext
+ */
+
+/**
+ * Suggestions of the Terminal CI (Tab completes the first match). They
+ * mirror the `ci` commands of internal/ci; a registry binding will replace
+ * this list (docs/MAP.md §4.6, step 4).
+ */
+export const CI_COMMANDS = [
+  'help',
+  'compile rapido',
+  'compile borrador',
+  'compile completo',
+  'compile solo ',
+  'clean tikz',
+  'clean all',
+  'config',
+  'config list',
+  'config autocompile on',
+  'config autocompile off',
+  'config autocompile on --project',
+  'config get ',
+  'config set ',
+  'config unset ',
+  'trust status',
+  'trust add',
+  'trust remove'
+]
+
+/**
+ * What the Terminal CI sends for a typed line: the `ci` prefix is added,
+ * and kept only once if the user typed it anyway.
+ * @param {string} typed trimmed
+ * @returns {{ command: string, display: string }}
+ */
+export function toCiCommand(typed) {
+  const rest = typed.replace(/^ci(?:\s+|$)/, '')
+  return { command: rest ? `ci ${rest}` : 'ci', display: rest || 'help' }
+}
+
 // Events emitted by Go (app.go).
 export const TERMINAL_STARTED = 'terminal:started' // { runId, command }: output spooled to disk
 export const TERMINAL_PROGRESS = 'terminal:progress' // { runId, pass, passes, tool, page, pages, elapsedMs, done, failed }
@@ -22,7 +67,9 @@ const FULL_POLL_MS = 500
 /**
  * @typedef {{
  *   id: number,
+ *   context: TerminalContext,
  *   command: string,
+ *   display: string,
  *   output: string,
  *   status: 'running' | 'done' | 'error',
  *   exitCode: number | null,
@@ -40,37 +87,47 @@ const FULL_POLL_MS = 500
 export const terminal = $state({
   /** @type {TerminalEntry[]} */
   entries: [],
-  running: false
+  running: false,
+  /** Context of the running command ('' when idle): its tab shows a dot. @type {'' | TerminalContext} */
+  runningContext: ''
 })
 
 let nextId = 1
-/** @type {string[]} newest last (not reactive: only read on ↑/↓) */
-const history = []
+/** One history per context, newest last (not reactive: only read on ↑/↓). */
+/** @type {Record<TerminalContext, string[]>} */
+const histories = { ci: [], shell: [] }
 
-/** Commands typed so far, oldest first, without consecutive duplicates. */
-export function commandHistory() {
-  return history.slice()
+/** Lines typed so far in a context, oldest first, without consecutive duplicates. */
+export function commandHistory(/** @type {TerminalContext} */ context) {
+  return histories[context].slice()
 }
 
 /**
- * Runs a command typed by the user. `clear`/`cls` only clears the view.
+ * Runs a line typed by the user in a context. `clear`/`cls` only clears
+ * that context's view.
  * @param {string} input
+ * @param {TerminalContext} context
  */
-export async function runCommand(input) {
-  const command = input.trim()
-  if (!command || terminal.running) return
-  if (history.at(-1) !== command) {
-    history.push(command)
+export async function runCommand(input, context) {
+  const typed = input.trim()
+  if (!typed || terminal.running) return
+  const history = histories[context]
+  if (history.at(-1) !== typed) {
+    history.push(typed)
     if (history.length > MAX_HISTORY) history.shift()
   }
-  if (command === 'clear' || command === 'cls') {
-    terminal.entries = []
+  if (typed === 'clear' || typed === 'cls') {
+    terminal.entries = terminal.entries.filter((e) => e.context !== context)
     return
   }
+  // SECURITY: still only what the user typed; the CI context just adds `ci`.
+  const { command, display } = context === 'ci' ? toCiCommand(typed) : { command: typed, display: typed }
 
   terminal.entries.push({
     id: nextId++,
+    context,
     command,
+    display,
     output: '',
     status: 'running',
     exitCode: null,
@@ -86,6 +143,7 @@ export async function runCommand(input) {
   const entry = terminal.entries[terminal.entries.length - 1]
 
   terminal.running = true
+  terminal.runningContext = context
   try {
     const result = await RunTerminalCommand(command)
     entry.output = result.output
@@ -101,6 +159,7 @@ export async function runCommand(input) {
     entry.status = 'error'
   } finally {
     terminal.running = false
+    terminal.runningContext = ''
   }
 }
 

@@ -8,7 +8,8 @@
 
   const TABS = [
     { id: 'problems', label: 'Errores LaTeX' },
-    { id: 'terminal', label: 'Terminal CI' }
+    { id: 'terminal', label: 'Terminal CI', context: 'ci' },
+    { id: 'shell', label: 'Shell', context: 'shell' }
   ]
 
   let failed = $derived(compilation.status === 'error' && compilation.logs !== '')
@@ -29,7 +30,7 @@
     })
   })
 
-  /** @param {'problems' | 'terminal'} tab */
+  /** @param {import('../lib/ui.svelte.js').BottomTab} tab */
   function select(tab) {
     ui.bottomTab = tab
     ui.bottomAutoOpened = false
@@ -51,7 +52,7 @@
       >
         {tab.label}
         {#if tab.id === 'problems' && failed}<span class="dot dot-error" aria-label="hay errores"></span>{/if}
-        {#if tab.id === 'terminal' && terminal.running}<span class="dot dot-busy" aria-label="ejecutando"></span>{/if}
+        {#if tab.context && terminal.runningContext === tab.context}<span class="dot dot-busy" aria-label="ejecutando"></span>{/if}
       </button>
     {/each}
     <button class="close" onclick={closeBottomPanel} aria-label="Cerrar panel" title="Cerrar panel">✕</button>
@@ -60,8 +61,13 @@
   <div id="tabpanel-problems" role="tabpanel" aria-labelledby="tab-problems" class="content" hidden={ui.bottomTab !== 'problems'}>
     <CompileLog logs={compilation.logs} {failed} />
   </div>
+  <!-- Two separate contexts (own prompt, history and runs): Terminal CI
+       adds the `ci` prefix itself; Shell sends the line as typed. -->
   <div id="tabpanel-terminal" role="tabpanel" aria-labelledby="tab-terminal" class="content" hidden={ui.bottomTab !== 'terminal'}>
-    <TerminalPanel active={ui.bottomPanelOpen && ui.bottomTab === 'terminal'} />
+    <TerminalPanel context="ci" active={ui.bottomPanelOpen && ui.bottomTab === 'terminal'} />
+  </div>
+  <div id="tabpanel-shell" role="tabpanel" aria-labelledby="tab-shell" class="content" hidden={ui.bottomTab !== 'shell'}>
+    <TerminalPanel context="shell" active={ui.bottomPanelOpen && ui.bottomTab === 'shell'} />
   </div>
 </section>
 

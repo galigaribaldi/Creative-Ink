@@ -102,5 +102,5 @@ Pruebas de rendimiento con la tesis (unas 200 páginas, imágenes pesadas, TikZ,
 - **Configuración:** capa del repositorio (`.creative-ink/config.json`) y claves nuevas: motor seleccionable (`pdflatex`/`xelatex`/`lualatex`, requisito del MVP), límite de tiempo configurable (hoy 60 s fijos), modo borrador para las compilaciones automáticas.
 - **Decisión abierta:** ofrecer o no `--shell-escape` (externalización de TikZ).
 - **Escalabilidad (§4.5):** prioridad baja para latexmk (`nice`), valores por defecto según el hardware, progreso de latexmk en la compilación automática.
-- **UI:** divisor arrastrable y recordar la división del editor; cambiar el repositorio desde la UI (hoy hay que borrar `settings.json`); navegación por páginas en la vista previa.
+- **UI:** cambiar el repositorio desde la UI (hoy hay que borrar `settings.json`); un selector de tema claro/oscuro; sugerencias de la Terminal CI desde Go (hoy, `CI_COMMANDS` en el frontend).
 - **Windows:** Job Objects para que la shell de la terminal mate a todos los nietos (latexmk y `ci` ya usan `taskkill /T`); compilar en Linux con `-tags webkit2_41` para tener rangos HTTP.
