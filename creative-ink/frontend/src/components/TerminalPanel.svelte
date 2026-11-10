@@ -1,10 +1,15 @@
 <script>
-  import { tick } from 'svelte'
-  import { cancelCommand, commandHistory, runCommand, terminal, toggleFullOutput } from '../lib/terminal.svelte.js'
+  import { tick, untrack } from 'svelte'
+  import { CI_COMMANDS, cancelCommand, commandHistory, runCommand, terminal, toggleFullOutput } from '../lib/terminal.svelte.js'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
-  /** @type {{ active: boolean }} */
-  let { active } = $props()
+  /**
+   * context 'ci' (Terminal CI: the `ci` prefix is implied) or 'shell' (the
+   * system shell, as typed). One instance per bottom-panel tab.
+   * @type {{ active: boolean, context: import('../lib/terminal.svelte.js').TerminalContext }}
+   */
+  let { active, context } = $props()
+  const isCI = untrack(() => context) === 'ci' // a panel never changes context
 
   /** @type {HTMLInputElement} */
   let input
@@ -16,6 +21,30 @@
   let draft = ''
 
   let folderName = $derived(baseName(workspace.currentFolderPath) || 'sin carpeta')
+  // Only this context's runs; the history is kept apart too.
+  let entries = $derived(terminal.entries.filter((e) => e.context === context))
+  // `ci` works without a project (help, config); the shell needs a folder.
+  let disabled = $derived(!isCI && !workspace.currentFolderPath)
+  let busyElsewhere = $derived(terminal.running && terminal.runningContext !== context)
+
+  // Terminal CI: the first known command that extends what is typed, shown
+  // in grey after the cursor. Tab (or → at the end) accepts it.
+  let suggestion = $derived.by(() => {
+    if (!isCI || !value || value !== value.trimStart()) return ''
+    const typed = value.toLowerCase()
+    const match = CI_COMMANDS.find((c) => c.startsWith(typed) && c.length > typed.length)
+    return match ? match.slice(value.length) : ''
+  })
+
+  let placeholder = $derived(
+    terminal.running
+      ? busyElsewhere
+        ? `Hay un comando en ${terminal.runningContext === 'ci' ? 'la Terminal CI' : 'la Shell'}: espera o detenlo`
+        : 'Ejecutando… (Ctrl+C para cancelar)'
+      : isCI
+        ? "Escribe 'help' o un comando de LaTeX sin 'ci': compile completo, clean all, trust status… (Tab completa)"
+        : 'Comando de la shell del sistema, en la carpeta del proyecto…'
+  )
 
   // Focus the input whenever the tab is shown.
   $effect(() => {
@@ -24,12 +53,12 @@
 
   // Keep the newest output in view.
   $effect(() => {
-    const last = terminal.entries.at(-1)
+    const last = entries.at(-1)
     void last?.output
     void last?.status
     void last?.progress
     void last?.full.text
-    void terminal.entries.length
+    void entries.length
     tick().then(() => {
       if (output) output.scrollTop = output.scrollHeight
     })
@@ -42,7 +71,13 @@
       const command = value
       value = ''
       historyIndex = -1
-      void runCommand(command)
+      void runCommand(command, context)
+    } else if (
+      suggestion &&
+      (event.key === 'Tab' || (event.key === 'ArrowRight' && input.selectionStart === value.length))
+    ) {
+      event.preventDefault() // only when there is something to complete
+      value += suggestion
     } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       event.preventDefault()
       browseHistory(event.key === 'ArrowUp' ? -1 : 1)
@@ -54,7 +89,7 @@
 
   /** @param {-1 | 1} step */
   function browseHistory(step) {
-    const history = commandHistory()
+    const history = commandHistory(context)
     if (!history.length) return
     if (historyIndex === -1) {
       if (step === 1) return
@@ -99,21 +134,42 @@
 </script>
 
 <div class="terminal">
-  <div class="output" bind:this={output} role="log" aria-live="polite" aria-label="Salida de la terminal CI">
-    {#if terminal.entries.length === 0}
-      <p class="hint">
-        <span class="ci-prompt">CI ❯</span> Terminal de Creative-ink en <strong>{folderName}</strong>.
-        <code>ci help</code> lista los comandos de LaTeX (compilar, limpiar, configuración, confianza);
-        cualquier otra línea va a la shell del sistema (p. ej. <code>git status</code>,
-        <code>tlmgr info siunitx</code>). Sin TTY: los comandos interactivos (sudo, editores) no
-        funcionan. Límite de 30 s · <code>clear</code> limpia · ↑/↓ historial.
-      </p>
+  <div
+    class="output"
+    bind:this={output}
+    role="log"
+    aria-live="polite"
+    aria-label={isCI ? 'Salida de la Terminal CI' : 'Salida de la shell del sistema'}
+  >
+    {#if entries.length === 0}
+      {#if isCI}
+        <p class="hint">
+          <span class="ci-prompt">CI ❯</span> Comandos de LaTeX de Creative-ink, <strong>sin escribir
+          <code>ci</code></strong>: <code>compile completo</code>, <code>clean all</code>,
+          <code>trust status</code>… <code>help</code> los lista. Tab completa · ↑/↓ historial ·
+          <code>clear</code> limpia.
+        </p>
+      {:else}
+        <p class="hint">
+          <span class="shell-prompt">$</span> Shell del sistema en <strong>{folderName}</strong>: la línea se
+          ejecuta tal cual (p. ej. <code>git status</code>, <code>tlmgr info siunitx</code>). Sin TTY: los
+          comandos interactivos (sudo, editores) no funcionan. Límite de 30 s · <code>clear</code> limpia ·
+          ↑/↓ historial.
+        </p>
+      {/if}
     {/if}
-    {#each terminal.entries as entry (entry.id)}
+    {#each entries as entry (entry.id)}
       {@const info = entry.status === 'running' ? null : summary(entry)}
       <div class="entry">
         <!-- The same prompt as the input: every run is easy to spot. -->
-        <div class="command"><span class="ci-prompt" aria-hidden="true">CI ❯</span> {entry.command}</div>
+        <div class="command">
+          {#if isCI}
+            <span class="ci-prompt" aria-hidden="true">CI ❯</span>
+          {:else}
+            <span class="shell-prompt" aria-hidden="true">$</span>
+          {/if}
+          {entry.display}
+        </div>
         {#if entry.output}<pre>{entry.output}</pre>{/if}
         {#if entry.status === 'running' && entry.progress && !entry.progress.done}
           {@const p = progressInfo(entry.progress)}
@@ -147,21 +203,29 @@
 
   <div class="input-row">
     <span class="cwd" title={workspace.currentFolderPath}>{folderName}</span>
-    <span class="ci-prompt" aria-hidden="true">CI ❯</span>
-    <input
-      bind:this={input}
-      bind:value
-      {onkeydown}
-      disabled={!workspace.currentFolderPath}
-      placeholder={terminal.running
-        ? 'Ejecutando… (Ctrl+C para cancelar)'
-        : "Escribe 'ci help' para comandos de LaTeX, o usa la shell del sistema..."}
-      aria-label="Comando de la terminal CI"
-      autocomplete="off"
-      autocapitalize="off"
-      spellcheck="false"
-    />
-    {#if terminal.running}
+    {#if isCI}
+      <span class="ci-prompt" aria-hidden="true">CI ❯</span>
+    {:else}
+      <span class="shell-prompt" aria-hidden="true">$</span>
+    {/if}
+    <div class="field">
+      <!-- Ghost completion: the typed text (invisible) + the rest, in grey. -->
+      {#if suggestion}
+        <span class="ghost" aria-hidden="true"><span class="typed">{value}</span>{suggestion}</span>
+      {/if}
+      <input
+        bind:this={input}
+        bind:value
+        {onkeydown}
+        {disabled}
+        {placeholder}
+        aria-label={isCI ? 'Comando de la Terminal CI (sin ci)' : 'Comando de la shell del sistema'}
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+      />
+    </div>
+    {#if terminal.running && !busyElsewhere}
       <button class="stop" onclick={cancelCommand} title="Cancelar (Ctrl+C)">Detener</button>
     {/if}
   </div>
@@ -214,6 +278,36 @@
     font-family: var(--font-mono);
     font-weight: 600;
     white-space: nowrap;
+  }
+
+  /* The system shell keeps the traditional, neutral prompt. */
+  .shell-prompt {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+
+  .field {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+  }
+
+  /* Drawn exactly under the input's text (same font and padding). */
+  .ghost {
+    position: absolute;
+    inset: 0;
+    padding: 0.2rem 0;
+    overflow: hidden;
+    white-space: pre;
+    color: var(--text-disabled);
+    font: inherit;
+    pointer-events: none;
+  }
+
+  .ghost .typed {
+    color: transparent;
   }
 
   /* The folder it runs in: present but quiet, before the prompt. */
@@ -331,6 +425,7 @@
 
 
   input {
+    position: relative;
     flex: 1;
     min-width: 0;
     padding: 0.2rem 0;

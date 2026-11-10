@@ -219,6 +219,28 @@
     highlightEl?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }
 
+  // ── Page navigation (header controls) ──────────────────────────────────
+  let canGoBack = $derived(hasPage && currentPageNumber > 1)
+  let canGoForward = $derived(hasPage && currentPageNumber < pageCount)
+
+  /**
+   * Shows page n (clamped). While a reload is in flight, it only moves
+   * currentPageNumber: the reload then draws that page itself.
+   * @param {number} n 1-based
+   */
+  async function goToPage(n) {
+    if (!pdfDoc) return
+    const page = clampPage(n, pdfDoc.numPages)
+    if (page === currentPageNumber && rendered.pageNumber === page) return
+    currentPageNumber = page
+    if (loading) return
+    try {
+      if (await renderPage(pdfDoc, page)) viewer.scrollTop = 0
+    } catch (err) {
+      renderError = err?.message ?? String(err)
+    }
+  }
+
   // Backward search (PDF → Editor): double-click converts the CSS position to
   // PDF points with the scale the page was drawn at.
   /** @param {MouseEvent} event */
@@ -259,10 +281,31 @@
 
 <div class="preview">
   <header class="bar">
-    <span>
+    <span class="title">
       Vista previa{#if pdfName}<span class="pdf-name" title={documentKey}> · {pdfName}</span>{/if}
-      {#if pageCount}<span class="pages">· página {currentPageNumber} de {pageCount}</span>{/if}
     </span>
+    {#if pageCount}
+      <!-- Chevron paths in the Lucide style (ISC licence, lucide.dev). -->
+      <nav class="pager" aria-label="Páginas del PDF">
+        <button
+          onclick={() => goToPage(currentPageNumber - 1)}
+          disabled={!canGoBack}
+          aria-label="Página anterior"
+          title="Página anterior"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+        </button>
+        <span class="pages" aria-live="polite">Página {currentPageNumber} de {pageCount}</span>
+        <button
+          onclick={() => goToPage(currentPageNumber + 1)}
+          disabled={!canGoForward}
+          aria-label="Página siguiente"
+          title="Página siguiente"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+        </button>
+      </nav>
+    {/if}
     {#if sync.notice}<span class="sync-notice" role="status">{sync.notice}</span>{/if}
     {#if compileState === 'success' && compilation.cached}
       <span class="state-cached" title={compilation.logs}>Último PDF guardado · sin compilar</span>
@@ -324,6 +367,7 @@
 
   .bar {
     display: flex;
+    align-items: center;
     justify-content: space-between;
     gap: 1rem;
     padding: 0.25rem 0.75rem;
@@ -337,8 +381,69 @@
     color: var(--text-secondary);
   }
 
+  .title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pager {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.15rem;
+  }
+
+  /* Fixed width: changing pages never shifts the bar (A1). */
   .pages {
-    color: var(--text-muted);
+    min-width: 7.5rem;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+  }
+
+  .pager button {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
+  }
+
+  .pager button:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+  }
+
+  .pager button:active:not(:disabled) {
+    background: var(--surface-active);
+  }
+
+  .pager button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .pager button:disabled {
+    color: var(--text-disabled);
+    cursor: default;
+  }
+
+  .pager svg {
+    width: var(--icon-size);
+    height: var(--icon-size);
+    fill: none;
+    stroke: currentColor;
+    stroke-width: var(--icon-stroke);
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   /* Quiet success, visible problems (A1). */
