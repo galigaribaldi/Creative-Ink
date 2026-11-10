@@ -58,3 +58,7 @@ export function SyncTexBackward(arg1:number,arg2:number,arg3:number):Promise<mai
 export function SyncTexForward(arg1:number,arg2:string):Promise<main.SyncTexForwardResult>;
 
 export function SystemHealthCheck():Promise<system.HealthStatus>;
+
+export function TrustProject():Promise<main.WorkspaceState>;
+
+export function UntrustProject():Promise<main.WorkspaceState>;

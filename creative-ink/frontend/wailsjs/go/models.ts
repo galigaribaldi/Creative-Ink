@@ -345,6 +345,8 @@ export namespace main {
 	    autoCompile: boolean;
 	    tree: core.FileNode;
 	    truncated: boolean;
+	    trustStatus: string;
+	    trustFiles: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceState(source);
@@ -363,6 +365,8 @@ export namespace main {
 	        this.autoCompile = source["autoCompile"];
 	        this.tree = this.convertValues(source["tree"], core.FileNode);
 	        this.truncated = source["truncated"];
+	        this.trustStatus = source["trustStatus"];
+	        this.trustFiles = source["trustFiles"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

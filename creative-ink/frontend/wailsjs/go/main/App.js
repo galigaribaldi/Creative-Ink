@@ -109,3 +109,11 @@ export function SyncTexForward(arg1, arg2) {
 export function SystemHealthCheck() {
   return window['go']['main']['App']['SystemHealthCheck']();
 }
+
+export function TrustProject() {
+  return window['go']['main']['App']['TrustProject']();
+}
+
+export function UntrustProject() {
+  return window['go']['main']['App']['UntrustProject']();
+}
