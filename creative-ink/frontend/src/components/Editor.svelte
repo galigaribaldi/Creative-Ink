@@ -24,11 +24,11 @@
     selectNextOccurrence,
     gotoLine
   } from '@codemirror/search'
-  import { oneDark } from '@codemirror/theme-one-dark'
   import { LoadFile, OpenFile, RequestCompile, SaveContent } from '../../wailsjs/go/main/App.js'
   import { registerEditor } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
   import { config } from '../lib/config.svelte.js'
+  import { editorTheme } from '../lib/editor-theme.js'
   import { languageFor } from '../lib/languages.js'
   import { sync, syncForward } from '../lib/synctex.svelte.js'
   import { ui } from '../lib/ui.svelte.js'
@@ -291,11 +291,9 @@
           ...searchKeymap,
           indentWithTab
         ]),
-        oneDark,
-        EditorView.theme({
-          '&': { height: '100%', fontSize: '14px' },
-          '.cm-scroller': { fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace' }
-        }),
+        // Tokens only (lib/editor-theme.js): follows the light/dark theme
+        // through CSS variables, without reconfiguring the view.
+        editorTheme,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) scheduleSave()
         })
@@ -468,9 +466,11 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    background: var(--surface-editor);
   }
 
-  /* Split editor: a thin accent marks the pane the explorer opens files in. */
+  /* Split editor: a thin accent marks the pane the explorer opens files in
+     (A2, accent rule 2: the focused pane). */
   .editor.focused {
     box-shadow: inset 0 2px 0 var(--accent);
   }
@@ -489,23 +489,26 @@
     margin: 0;
     padding: 2rem;
     text-align: center;
-    color: #6b6b6b;
+    font-size: var(--text-md);
+    color: var(--text-muted);
     pointer-events: none;
   }
 
   .empty code {
-    color: #9d9d9d;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
   }
 
+  /* Chrome: quiet, and stable while typing (A1: items keep their slot). */
   .statusbar {
     display: flex;
     justify-content: space-between;
     gap: 1rem;
     padding: 0.25rem 0.75rem;
-    border-top: 1px solid #333;
-    background: #1b1d23;
-    font-size: 0.75rem;
-    color: #9d9d9d;
+    border-top: 1px solid var(--border);
+    background: var(--surface-base);
+    font-size: var(--text-sm);
+    color: var(--text-muted);
   }
 
   .paused {
@@ -514,13 +517,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #fbbf24;
-    opacity: 0.85;
+    color: var(--warning);
   }
 
   .health {
     flex-shrink: 0;
-    color: #fbbf24;
+    color: var(--warning);
     cursor: help;
   }
 
@@ -530,7 +532,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #6b6b6b;
+    color: var(--text-muted);
     cursor: help;
   }
 
@@ -538,20 +540,26 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    color: var(--text-secondary);
   }
 
+  .status {
+    flex-shrink: 0;
+  }
+
+  /* Quiet success, visible problems (A1). */
   .status-saved {
-    color: #4ade80;
+    color: var(--text-muted);
   }
 
   .status-dirty,
   .status-saving,
   .status-loading {
-    color: #fbbf24;
+    color: var(--text-secondary);
   }
 
   .status-error,
   .status-loadError {
-    color: #f87171;
+    color: var(--danger);
   }
 </style>

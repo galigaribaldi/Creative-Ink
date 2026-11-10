@@ -73,6 +73,8 @@ Inspired by **Typora** and **Obsidian**.
 
   --icon-size: 18px;
   --icon-stroke: 1.5;
+
+  --paper: #ffffff;     /* the PDF sheet: the document, white in both themes (B6) */
 }
 
 /* Dark theme */
@@ -276,29 +278,26 @@ Not allowed:
 8. The editor canvas did not lose space or contrast.
 9. Keyboard: focus ring visible, Esc closes, icon buttons have `aria-label` + `title`.
 
-## A6. Current state of the code (visual debt, as of 2026-11-08)
+## A6. Current state of the code (updated 2026-11-08)
 
-The app predates this design bible. **Do not restyle everything in one go**, and only change the app when the
-user asks for UI work. When a task touches a component, migrate *that* component to the tokens in the same change.
-- `style.css` only defines `--bg #1e1e1e`, `--fg #d4d4d4` and `--accent #3b82f6` (blue), with `color-scheme: dark`.
-  The full token set of A2, `lib/theme.svelte.js` and the light theme do not exist yet.
-- The components hard-code more than 150 colour values: `#fbbf24`, `#9d9d9d`, `#6b6b6b`, `#f87171`, `#4ade80`, `#3c3c3c`, `#252526`…
-- CodeMirror uses `@codemirror/theme-one-dark`, which is dark-only.
-- The SyncTeX highlight is amber (it should be the accent). Successes are green (they should be neutral). Some
-  links use the accent (they should be `--text-secondary`).
-- Transitions: 100 ms (tree chevron), 120 ms (drawer), 200 ms (terminal bar), and none on most hovers.
-- `Preview.svelte` uses a heavy page shadow (`0 2px 12px rgb(0 0 0 / 0.5)`). It should be `--shadow-page`.
-- `main.go` sets the Wails window `BackgroundColour` to a fixed dark grey (30, 30, 30), so the light theme
-  would flash dark at startup. Fixing that is a Go change (`go-wails-ipc-bridge`): match the background to the
-  theme, or use `options.Mac.Appearance`/WebView transparency.
+The migration to this design system is **done** (branch `DEV-feat-UI-Diseno`, steps 1 to 5):
+- `style.css` holds the full A2 token set (plus `--paper`), the legacy aliases and `prefers-reduced-motion`.
+  `lib/theme.svelte.js` resolves `system | light | dark` and is applied in `main.js` before `mount()`.
+- Every component (shell, tree, bottom panel, terminal, editor, preview and dialogs) uses tokens only: no
+  hex or rgb values remain outside `style.css`.
+- CodeMirror uses `lib/editor-theme.js` (`EditorView.theme` + `HighlightStyle` on `--syntax-*`), built only
+  from CSS variables, so a theme switch repaints it without reconfiguring.
+- SyncTeX uses the accent; successes are neutral; links are `--text-secondary`; the preview sheet uses
+  `--shadow-page` and `--paper`.
+- Startup flash: `main.go` paints the native window with the `--surface-base` of the OS appearance
+  (`window_theme.go` + `system.SystemPrefersDark`; a test keeps it in sync with `style.css`). On macOS it also
+  sets `DefaultAppearance` and a transparent WebView, and on Windows `Theme: SystemDefault`. One known limit:
+  if the user forces the opposite theme in the app, the system colour can still show for one frame.
 
-Suggested migration order when the user asks for it:
-1. tokens + `lib/theme.svelte.js` + legacy aliases;
-2. shell (ActionBar, Sidebar, status bars);
-3. CodeMirror theme;
-4. Preview (sheet, SyncTeX highlight);
-5. dialogs (StartScreen, RepositorySetup, HealthPanel);
-6. terminal and bottom panel.
+Still open (only on request):
+- a theme selector in the UI (`setThemePreference` already exists);
+- removing the unused `@codemirror/theme-one-dark` dependency (the user runs `npm uninstall` in `frontend/`);
+- checking the light theme in the real app on all three systems.
 
 ---
 

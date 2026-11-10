@@ -111,7 +111,7 @@
         <div class="choice">
           <span class="title">Documento rápido</span>
           <span class="detail">Un solo archivo en <code>tmp-Workspaces/unnamed-tmpN</code> con compilación ligera. Para notas y documentos cortos.</span>
-          <button class="primary" onclick={() => run(createQuickDocument)} disabled={busy}>Crear documento rápido</button>
+          <button class="secondary" onclick={() => run(createQuickDocument)} disabled={busy}>Crear documento rápido</button>
         </div>
       </div>
 
@@ -181,7 +181,7 @@
     display: grid;
     place-items: center;
     padding: 1rem;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--scrim);
   }
 
   .panel {
@@ -192,9 +192,12 @@
     flex-direction: column;
     gap: 1rem;
     padding: 1.5rem 1.75rem;
-    border: 1px solid #3c3c3c;
-    border-radius: 8px;
-    background: #1e1e1e;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-overlay);
+    font-size: var(--text-md);
+    color: var(--text-primary);
   }
 
   header {
@@ -206,33 +209,40 @@
 
   h1 {
     margin: 0;
-    font-size: 1.2rem;
-    font-weight: 500;
+    font-size: var(--text-lg);
+    font-weight: 600;
   }
 
   .repo {
     margin: 0.25rem 0 0;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 0.7rem;
-    color: #6b6b6b;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
     overflow-wrap: anywhere;
   }
 
   .close {
     padding: 0.2rem 0.5rem;
     border: 0;
+    border-radius: var(--radius-sm);
     background: transparent;
-    color: #8a8a8a;
+    color: var(--text-secondary);
     font: inherit;
     cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
+  }
+
+  .close:hover {
+    color: var(--text-primary);
+    background: var(--surface-hover);
   }
 
   .warning,
   .stale p {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: var(--text-md);
     line-height: 1.45;
-    color: #fbbf24;
+    color: var(--warning);
   }
 
   .stale {
@@ -241,9 +251,9 @@
     justify-content: space-between;
     gap: 1rem;
     padding: 0.6rem 0.8rem;
-    border: 1px solid #5c4a1f;
-    border-radius: 6px;
-    background: #1f1a10;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-base);
   }
 
   .choices {
@@ -258,54 +268,95 @@
     gap: 0.45rem;
     margin: 0;
     padding: 1rem;
-    border: 1px solid #3c3c3c;
-    border-radius: 6px;
-    background: #252526;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-base);
   }
 
   .title {
-    font-weight: 600;
+    font-weight: 500;
   }
 
   .detail,
   .hint {
-    font-size: 0.75rem;
+    font-size: var(--text-sm);
     line-height: 1.4;
-    color: #9d9d9d;
+    color: var(--text-secondary);
   }
 
   .hint {
-    color: #6b6b6b;
+    color: var(--text-muted);
   }
 
   input {
     padding: 0.4rem 0.5rem;
-    border: 1px solid #3c3c3c;
-    border-radius: 4px;
-    background: #1b1b1b;
-    color: #e5e5e5;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-editor);
+    color: var(--text-primary);
     font: inherit;
-    font-size: 0.85rem;
+    font-size: var(--text-md);
+    transition: border-color var(--transition);
   }
 
+  input::placeholder {
+    color: var(--text-disabled);
+  }
+
+  /* The focus ring is the only accent on inputs (A2 exception). */
   input:focus {
     outline: none;
-    border-color: var(--accent);
   }
 
+  input:focus-visible,
+  .primary:focus-visible,
+  .secondary:focus-visible,
+  .close:focus-visible,
+  .link:focus-visible,
+  li button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /* The one primary action (A2, accent rule 1). */
   .primary {
     margin-top: auto;
     padding: 0.45rem 0.75rem;
     border: 0;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-contrast);
     font: inherit;
-    font-size: 0.85rem;
+    font-size: var(--text-md);
+    font-weight: 500;
     cursor: pointer;
+    transition: background-color var(--transition), opacity var(--transition);
   }
 
-  .primary:disabled {
+  .primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+
+  /* Secondary actions: neutral, outlined. */
+  .secondary {
+    margin-top: auto;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-md);
+    cursor: pointer;
+    transition: background-color var(--transition), opacity var(--transition);
+  }
+
+  .secondary:hover:not(:disabled) {
+    background: var(--surface-hover);
+  }
+
+  .primary:disabled,
+  .secondary:disabled {
     opacity: 0.5;
     cursor: default;
   }
@@ -318,11 +369,11 @@
 
   h2 {
     margin: 0 0 0.4rem;
-    font-size: 0.7rem;
-    font-weight: 600;
+    font-size: var(--text-xs);
+    font-weight: 500;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #9d9d9d;
+    color: var(--text-muted);
   }
 
   ul {
@@ -340,17 +391,19 @@
     gap: 0.75rem;
     padding: 0.3rem 0.5rem;
     border: 0;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background: transparent;
-    color: #cccccc;
+    color: var(--text-secondary);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--text-sm);
     text-align: left;
     cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
   }
 
   li button:hover:not(:disabled) {
-    background: #2a2d2e;
+    color: var(--text-primary);
+    background: var(--surface-hover);
   }
 
   .name {
@@ -361,13 +414,14 @@
 
   .when {
     flex-shrink: 0;
-    color: #6b6b6b;
-    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
   }
 
   code {
-    font-size: 0.7rem;
-    color: #bdbdbd;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
   }
 
   footer {
@@ -375,26 +429,36 @@
     justify-content: flex-end;
   }
 
+  /* Links are not accent-coloured (A2). */
   .link {
     flex-shrink: 0;
     padding: 0;
     border: 0;
+    border-radius: var(--radius-sm);
     background: none;
-    color: var(--accent);
+    color: var(--text-secondary);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--text-md);
+    text-decoration: underline transparent;
+    text-underline-offset: 2px;
     cursor: pointer;
+    transition: color var(--transition), text-decoration-color var(--transition);
+  }
+
+  .link:hover:not(:disabled) {
+    color: var(--text-primary);
+    text-decoration-color: currentColor;
   }
 
   .muted {
     margin: 0;
-    color: #6b6b6b;
+    color: var(--text-muted);
   }
 
   .error {
     margin: 0;
-    font-size: 0.8rem;
-    color: #f87171;
+    font-size: var(--text-md);
+    color: var(--danger);
   }
 
   @media (max-width: 620px) {

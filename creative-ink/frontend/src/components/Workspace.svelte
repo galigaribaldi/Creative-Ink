@@ -57,7 +57,7 @@
   .editor-pane {
     display: flex;
     flex-direction: column;
-    border-right: 1px solid #333;
+    border-right: 1px solid var(--border);
   }
 
   .editors {
@@ -74,6 +74,6 @@
   }
 
   .editor-host.secondary {
-    border-left: 1px solid #333;
+    border-left: 1px solid var(--border);
   }
 </style>

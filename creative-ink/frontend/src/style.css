@@ -25,6 +25,9 @@
   --icon-size: 18px;
   --icon-stroke: 1.5;
 
+  /* The PDF sheet is the document, not chrome: white in both themes (B6). */
+  --paper: #ffffff;
+
   /* Legacy aliases: keep the components not migrated yet working (A6).
      The --accent name is shared with the themes below. */
   --bg: var(--surface-base);

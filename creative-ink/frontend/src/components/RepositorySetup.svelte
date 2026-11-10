@@ -99,7 +99,7 @@
     display: grid;
     place-items: center;
     padding: 1rem;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--scrim);
   }
 
   .panel {
@@ -110,20 +110,23 @@
     flex-direction: column;
     gap: 1rem;
     padding: 1.75rem;
-    border: 1px solid #3c3c3c;
-    border-radius: 8px;
-    background: #1e1e1e;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-overlay);
+    font-size: var(--text-md);
+    color: var(--text-primary);
   }
 
   h1 {
     margin: 0;
-    font-size: 1.2rem;
-    font-weight: 500;
+    font-size: var(--text-lg);
+    font-weight: 600;
   }
 
   .lead {
     margin: 0;
-    color: #bdbdbd;
+    color: var(--text-secondary);
     line-height: 1.5;
   }
 
@@ -133,6 +136,7 @@
     gap: 0.75rem;
   }
 
+  /* Two equivalent choices: neutral cards, neither is "the" primary action. */
   .choice {
     display: flex;
     flex-direction: column;
@@ -140,20 +144,23 @@
     gap: 0.4rem;
     min-width: 0;
     padding: 1rem;
-    border: 1px solid #3c3c3c;
-    border-radius: 6px;
-    background: #252526;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-base);
     color: inherit;
     font: inherit;
     text-align: left;
     cursor: pointer;
+    transition: background-color var(--transition), border-color var(--transition), opacity var(--transition);
   }
 
   .choice:hover:not(:disabled) {
-    border-color: var(--accent);
+    border-color: var(--border-strong);
+    background: var(--surface-hover);
   }
 
-  .choice:focus-visible {
+  .choice:focus-visible,
+  .link:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
   }
@@ -164,26 +171,26 @@
   }
 
   .title {
-    font-weight: 600;
+    font-weight: 500;
   }
 
   .detail {
-    font-size: 0.8rem;
-    color: #9d9d9d;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
     line-height: 1.4;
   }
 
   .path {
     width: 100%;
     margin-top: 0.25rem;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 0.7rem;
-    color: #4ade80;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
     overflow-wrap: anywhere;
   }
 
   .path.unavailable {
-    color: #9d9d9d;
+    color: var(--text-muted);
     font-family: inherit;
   }
 
@@ -191,9 +198,9 @@
     list-style: none;
     margin: 0;
     padding: 0;
-    font-size: 0.8rem;
+    font-size: var(--text-sm);
     line-height: 1.4;
-    color: #fbbf24;
+    color: var(--warning);
   }
 
   footer {
@@ -205,25 +212,35 @@
 
   .muted {
     margin: 0;
-    font-size: 0.75rem;
-    color: #6b6b6b;
+    font-size: var(--text-xs);
+    color: var(--text-muted);
   }
 
+  /* Links are not accent-coloured (A2). */
   .link {
     flex-shrink: 0;
     padding: 0;
     border: 0;
+    border-radius: var(--radius-sm);
     background: none;
-    color: var(--accent);
+    color: var(--text-secondary);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--text-sm);
+    text-decoration: underline transparent;
+    text-underline-offset: 2px;
     cursor: pointer;
+    transition: color var(--transition), text-decoration-color var(--transition);
+  }
+
+  .link:hover:not(:disabled) {
+    color: var(--text-primary);
+    text-decoration-color: currentColor;
   }
 
   .error {
     margin: 0;
-    font-size: 0.8rem;
-    color: #f87171;
+    font-size: var(--text-sm);
+    color: var(--danger);
   }
 
   @media (max-width: 560px) {
