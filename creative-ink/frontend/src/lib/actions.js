@@ -225,6 +225,38 @@ function focusPane(/** @type {import('./ui.svelte.js').EditorPane} */ pane) {
   editors[pane]?.focus()
 }
 
+/** MIME type of a file dragged from the explorer (FileTreeItem → Workspace). */
+export const FILE_DRAG_TYPE = 'application/x-creative-ink-path'
+
+/**
+ * Drag & drop into the editor area: opens `path` in the SECOND pane
+ * (opening the split if needed), where the Editor reads it with LoadFile.
+ * Only editable files of the open folder's tree are accepted: a drop can
+ * carry any text. A file already shown in a pane is focused there instead
+ * (never the same file in both panes).
+ * @param {string} path absolute
+ * @returns {boolean} whether the drop was accepted
+ */
+export function openInSecondaryPane(path) {
+  if (!isEditableInTree(workspace.fileTree, path)) return false
+  if (path === workspace.currentFilePath) {
+    focusPane('primary')
+    return true
+  }
+  ui.splitEditor = true
+  ui.focusedPane = 'secondary'
+  if (path === workspace.secondaryFilePath) editors.secondary?.focus()
+  else workspace.secondaryFilePath = path
+  return true
+}
+
+/** @param {import('./workspace.svelte.js').FileNode | null} node @param {string} path */
+function isEditableInTree(node, path) {
+  if (!node) return false
+  if (!node.isDir) return node.editable && node.path === path
+  return (node.children ?? []).some((child) => isEditableInTree(child, path))
+}
+
 /**
  * ⌘\ / Ctrl+\: shows or hides the second editor pane. Opening it focuses
  * it, so the next file chosen in the explorer goes there. Closing it saves

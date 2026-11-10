@@ -171,7 +171,10 @@ The accent is a signal. When it appears everywhere, it stops meaning anything. A
    - the open file: `--accent-soft` background, `--text-primary` text, a 2px `--accent` inset mark on the left;
    - in the split editor, the focused pane, with the same thin mark.
 3. **The SyncTeX highlight:** a box in the PDF with an `--accent` border, an `--accent-soft` fill and a fade-out.
-4. **Exception, accessibility:** the keyboard focus ring (`:focus-visible { outline: 2px solid var(--accent);
+4. **The Terminal CI prompt** (`CI ❯`, decided on 2026-11-09): in the input row and before every command of the
+   history, so the integrated terminal reads as Creative-ink's own and each run is easy to spot. The folder
+   before it stays `--text-secondary`.
+5. **Exception, accessibility:** the keyboard focus ring (`:focus-visible { outline: 2px solid var(--accent);
    outline-offset: 1px }`). It only appears with the keyboard, never on mouse clicks.
 
 Not allowed:
