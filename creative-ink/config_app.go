@@ -108,7 +108,9 @@ func (a *App) autoCompileEnabled() bool {
 // changes). With compile.auto on it queues an automatic compilation; with
 // it off nothing is compiled and the PDF already on disk, if any, is shown.
 func (a *App) compileOnOpen() {
-	if a.autoCompileEnabled() {
+	// An untrusted .latexmkrc is never compiled on its own: the user decides
+	// first (banner or `ci trust`). Until then, the PDF on disk is shown.
+	if a.autoCompileEnabled() && a.trustInfo().Status != core.TrustUntrusted {
 		a.compiles.Request(compiler.TriggerAuto)
 		return
 	}

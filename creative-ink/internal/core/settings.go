@@ -28,6 +28,14 @@ type Settings struct {
 	Config map[string]json.RawMessage `json:"config,omitempty"`
 	// RecentFolders are the last opened project folders, newest first.
 	RecentFolders []string `json:"recentFolders,omitempty"`
+	// TrustedProjects are the folders whose latexmk rc files the user trusts
+	// (docs/MAP.md §4.6, step 3): real absolute path → SHA-256 of their
+	// .latexmkrc/latexmkrc. If the files change (e.g. after a git pull) the
+	// hash no longer matches and the folder is untrusted again.
+	TrustedProjects map[string]string `json:"trustedProjects,omitempty"`
+	// RestrictedProjects are folders the user explicitly refused to trust:
+	// they always compile with latexmk -norc and are not asked about again.
+	RestrictedProjects []string `json:"restrictedProjects,omitempty"`
 }
 
 // maxRecentFolders bounds Settings.RecentFolders.

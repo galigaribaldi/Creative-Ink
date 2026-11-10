@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,5 +175,24 @@ func TestCompileLaTeXIntegration(t *testing.T) {
 	}
 	if !strings.Contains(logs, "Undefined control sequence") {
 		t.Fatalf("logs must contain the TeX error, got:\n%s", logs)
+	}
+}
+
+func TestLatexmkArgsWithoutTheProjectRC(t *testing.T) {
+	defer func(f func() []string) { userLatexmkRCFiles = f }(userLatexmkRCFiles)
+	userLatexmkRCFiles = func() []string { return []string{"/home/u/.latexmkrc"} }
+
+	trusted := latexmkArgs("main.tex", CompileOptions{})
+	if strings.Contains(strings.Join(trusted, " "), "-norc") {
+		t.Fatalf("trusted = %q", trusted)
+	}
+	restricted := latexmkArgs("main.tex", CompileOptions{NoRC: true})
+	want := "-norc -r /home/u/.latexmkrc -xelatex -interaction=nonstopmode -halt-on-error -synctex=1 main.tex"
+	if got := strings.Join(restricted, " "); got != want {
+		t.Fatalf("restricted =\n %q\nwant\n %q", got, want)
+	}
+	ctx := WithCompileOptions(context.Background(), CompileOptions{NoRC: true})
+	if !CompileOptionsFrom(ctx).NoRC || CompileOptionsFrom(context.Background()).NoRC {
+		t.Fatal("options must travel in the context")
 	}
 }

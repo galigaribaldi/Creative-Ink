@@ -7,7 +7,8 @@
 
 /**
  * @typedef {{ name: string, path: string, isDir: boolean, editable: boolean, children?: FileNode[] }} FileNode
- * @typedef {{ needsSetup: boolean, needsStart: boolean, repositoryPath: string, canceled: boolean, folderPath: string, filePath: string, texFilePath: string, mainFilePath: string, autoCompile: boolean, tree: FileNode, truncated: boolean }} WorkspaceState
+ * @typedef {'' | 'trusted' | 'untrusted' | 'restricted'} TrustStatus
+ * @typedef {{ needsSetup: boolean, needsStart: boolean, repositoryPath: string, canceled: boolean, folderPath: string, filePath: string, texFilePath: string, mainFilePath: string, autoCompile: boolean, tree: FileNode, truncated: boolean, trustStatus: TrustStatus, trustFiles: string[] }} WorkspaceState
  * @typedef {{ kind: 'files' | 'size' | 'images', message: string }} ProjectWarning
  */
 import { config } from './config.svelte.js'
@@ -49,7 +50,15 @@ export const workspace = $state({
    * editor shows a warning with a tooltip and changes nothing else.
    * @type {ProjectWarning[]}
    */
-  healthWarnings: []
+  healthWarnings: [],
+  /**
+   * Trust of the folder latexmk runs in (Go decides; docs/MAP.md §4.6).
+   * 'untrusted': its .latexmkrc is ignored (latexmk -norc) and the UI asks.
+   * @type {TrustStatus}
+   */
+  trustStatus: '',
+  /** The rc files found there (".latexmkrc", "latexmkrc"). @type {string[]} */
+  trustFiles: []
 })
 
 /** Applies a WorkspaceState returned by Go. */
@@ -62,6 +71,7 @@ export function applyWorkspace(/** @type {WorkspaceState} */ state) {
   // Another project: its own analysis arrives later (project:health).
   if (state.folderPath !== workspace.currentFolderPath) workspace.healthWarnings = []
   config.autoCompile = state.autoCompile
+  applyTrust(state)
   workspace.needsSetup = state.needsSetup
   workspace.needsStart = state.needsStart
   workspace.repositoryPath = state.repositoryPath
@@ -85,6 +95,13 @@ export function applyTree(/** @type {WorkspaceState} */ state) {
   workspace.fileTree = state.tree
   workspace.truncated = state.truncated
   workspace.mainFilePath = state.mainFilePath
+  applyTrust(state)
+}
+
+/** Applies the trust part of a WorkspaceState or of a trust:changed event. */
+export function applyTrust(/** @type {{ trustStatus?: TrustStatus, trustFiles?: string[] }} */ state) {
+  workspace.trustStatus = state.trustStatus ?? ''
+  workspace.trustFiles = state.trustFiles ?? []
 }
 
 /**

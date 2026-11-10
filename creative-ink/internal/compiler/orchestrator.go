@@ -64,8 +64,7 @@ func CompileLaTeXContext(parent context.Context, workdir string, filename string
 	ctx, cancel := context.WithTimeout(parent, compileTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, latexmk,
-		"-xelatex", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", filename)
+	cmd := exec.CommandContext(ctx, latexmk, latexmkArgs(filename, CompileOptionsFrom(parent))...)
 	cmd.Dir = workdir
 	// latexmk invokes xelatex/biber by name. A GUI app launched from Finder
 	// lacks /Library/TeX/texbin on PATH, so prepend the dir where latexmk lives.
@@ -208,4 +207,72 @@ func trimBlankEdges(block []string) []string {
 		end--
 	}
 	return block[:end]
+}
+
+// ── Trust: running latexmk without the project's rc files ─────────────────
+
+// CompileOptions changes how latexmk runs for one compilation. It travels
+// in the context (WithCompileOptions), so the Scheduler and the
+// CompileFunc signatures stay the same.
+type CompileOptions struct {
+	// NoRC runs latexmk with -norc: the project's .latexmkrc/latexmkrc
+	// (Perl code) are not read, because the user does not trust them
+	// (docs/MAP.md §4.6, step 3). The user's own rc files are still read,
+	// explicitly with -r: they are theirs.
+	NoRC bool
+}
+
+type compileOptionsKey struct{}
+
+// WithCompileOptions attaches opts to ctx for CompileLaTeXContext.
+func WithCompileOptions(ctx context.Context, opts CompileOptions) context.Context {
+	return context.WithValue(ctx, compileOptionsKey{}, opts)
+}
+
+// CompileOptionsFrom returns the options attached to ctx (zero if none).
+func CompileOptionsFrom(ctx context.Context) CompileOptions {
+	opts, _ := ctx.Value(compileOptionsKey{}).(CompileOptions)
+	return opts
+}
+
+// latexmkArgs builds latexmk's command line for filename.
+func latexmkArgs(filename string, opts CompileOptions) []string {
+	args := LatexmkRCArgs(opts)
+	return append(args, "-xelatex", "-interaction=nonstopmode", "-halt-on-error", "-synctex=1", filename)
+}
+
+// LatexmkRCArgs are the rc-related latexmk arguments for opts: nothing, or
+// "-norc" (it must come first) plus "-r <file>" for each rc file of the
+// user. Also used by `ci clean all`, which runs latexmk -C.
+func LatexmkRCArgs(opts CompileOptions) []string {
+	if !opts.NoRC {
+		return nil
+	}
+	args := []string{"-norc"}
+	for _, rc := range userLatexmkRCFiles() {
+		args = append(args, "-r", rc)
+	}
+	return args
+}
+
+// userLatexmkRCFiles are the user's own latexmk rc files that exist
+// (~/.latexmkrc and $XDG_CONFIG_HOME/latexmk/latexmkrc), in latexmk's order.
+// System-wide rc files are not re-added: -norc skips them too.
+var userLatexmkRCFiles = func() []string {
+	var candidates []string
+	if config := os.Getenv("XDG_CONFIG_HOME"); config != "" && filepath.IsAbs(config) {
+		candidates = append(candidates, filepath.Join(config, "latexmk", "latexmkrc"))
+	} else if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".config", "latexmk", "latexmkrc"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".latexmkrc"))
+	}
+	var files []string
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && info.Mode().IsRegular() {
+			files = append(files, c)
+		}
+	}
+	return files
 }

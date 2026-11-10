@@ -51,6 +51,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 - **Svelte 5:** no llames `state` (ni `props`, `derived`, `effect`) a una prop o variable si usas la runa correspondiente: `$state` se interpretaría como un *store*.
 - **pdfjs-dist 6.5, renderer worker:** se pinta en un Web Worker propio (`GlobalWorkerOptions.rendererSrc`), uno por documento, que termina `loadingTask.destroy()`. No vuelvas a poner `disableWorkerRendering: true`: el pintado volvería al hilo de CodeMirror.
 - **Compilación automática apagada por defecto** (`compile.auto`, `internal/config`). Lee y escribe la configuración solo a través del servicio (`GetConfig`/`SetConfig`, `ci config`), nunca de `settings.json` o `.creative-ink-meta` a mano. Las peticiones del temporizador van con `RequestCompile('auto')`; las del usuario, con `'manual'`.
+- **Confianza en el `.latexmkrc` (Sección 21):** nunca lances latexmk sin pasar por la confianza. El Scheduler y `ci` ya lo hacen: `compileOptionsFor(dir)` pone `-norc` con `compiler.WithCompileOptions`. Una carpeta `untrusted` jamás se compila automáticamente. Las decisiones solo cambian con `TrustProject`/`UntrustProject` o `ci trust`.
 - **Procesos externos que se puedan cancelar** (latexmk, herramientas de `ci`): usa `system.KillTreeOnCancel(cmd)`; si no, cancelar deja huérfanos a xelatex/biber.
 - **pdfjs-dist 6:** `PDFDocumentProxy.destroy()` **no existe**. Se libera con `doc.loadingTask.destroy()` (vía `releasePdf()` en `src/lib/pdf.js`). Usa siempre el `PDFWorker` compartido: sin él, cada documento crea un Web Worker nuevo.
 - **fsnotify en macOS (kqueue):** abre un descriptor por carpeta **y por archivo** vigilado, y no es recursivo. Respeta `maxWatchedDirs` y los filtros de `isIgnoredEntry`; nunca vigiles carpetas de build ni `node_modules`.
@@ -96,7 +97,6 @@ Pruebas de rendimiento con la tesis (unas 200 páginas, imágenes pesadas, TikZ,
 - [ ] Ajustar con esos datos los umbrales del detector (`core/project_health.go`) y de la cancelación (`compiler/scheduler.go`)
 
 ### Pendientes (siguientes secciones; no empezar sin confirmación)
-- **§4.6 paso 3 — Confianza:** `ci trust`, modo restringido `latexmk -norc` para carpetas ajenas con `.latexmkrc` y hash del archivo.
 - **§4.6 paso 4 — Registro de comandos `ci`** y guía autogenerada y compilada en `.creative-ink/guide/` (`ci guide`); autocompletado de `ci` en el panel.
 - **§4.6 paso 5 — Host de plugins** (JSON-RPC por stdio; el modelo de plugins sigue sin decidir).
 - **Configuración:** capa del repositorio (`.creative-ink/config.json`) y claves nuevas: motor seleccionable (`pdflatex`/`xelatex`/`lualatex`, requisito del MVP), límite de tiempo configurable (hoy 60 s fijos), modo borrador para las compilaciones automáticas.

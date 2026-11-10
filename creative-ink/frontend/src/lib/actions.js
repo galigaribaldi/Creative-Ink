@@ -15,17 +15,20 @@ import {
   RequestCompile,
   SaveAsDialog,
   SetMainFile,
-  SetupRepository
+  SetupRepository,
+  TrustProject,
+  UntrustProject
 } from '../../wailsjs/go/main/App.js'
 import { EventsOn } from '../../wailsjs/runtime/runtime.js'
 import { toggleBottomTab, toggleSidebar, ui } from './ui.svelte.js'
-import { applyTree, applyWorkspace, compileTarget, workspace } from './workspace.svelte.js'
+import { applyTree, applyTrust, applyWorkspace, compileTarget, workspace } from './workspace.svelte.js'
 
 // Events emitted by Go (app.go, menu.go).
 export const WORKSPACE_CHANGED = 'workspace:changed' // files changed outside the app
 export const APP_BEFORE_CLOSE = 'app:before-close' // the window is closing
 export const MENU_COMMAND = 'menu:command' // a native menu item was clicked (macOS)
 export const PROJECT_HEALTH = 'project:health' // large-project detector (informative)
+export const TRUST_CHANGED = 'trust:changed' // trust of the project's .latexmkrc changed
 
 /**
  * @typedef {{
@@ -188,7 +191,16 @@ export function listenWorkspaceEvents() {
       if (event.folder === workspace.currentFolderPath) void refreshWorkspace()
     }),
     // The large-project warning only informs: it changes nothing else.
-    EventsOn(PROJECT_HEALTH, applyHealth)
+    EventsOn(PROJECT_HEALTH, applyHealth),
+    // `ci trust …` in the terminal, the banner, or a .latexmkrc that changed.
+    EventsOn(
+      TRUST_CHANGED,
+      (/** @type {{ project: string, status: import('./workspace.svelte.js').TrustStatus, rcFiles: string[] }} */ event) => {
+        if (event.project === workspace.currentFolderPath) {
+          applyTrust({ trustStatus: event.status, trustFiles: event.rcFiles })
+        }
+      }
+    )
   ]
   return () => offs.forEach((off) => off())
 }
@@ -360,4 +372,30 @@ export function runCommand(id) {
  */
 export function listenMenuEvents() {
   return EventsOn(MENU_COMMAND, (/** @type {{ id: string }} */ event) => runCommand(event.id))
+}
+
+/**
+ * Trust banner: trust the folder's .latexmkrc as it is now (Go saves its
+ * hash) and recompile with it. Returns an error message or ''.
+ */
+export async function trustProject() {
+  try {
+    applyTree(await TrustProject())
+    return ''
+  } catch (err) {
+    return String(err)
+  }
+}
+
+/**
+ * Trust banner: keep the folder restricted (latexmk -norc) and stop asking.
+ * Returns an error message or ''.
+ */
+export async function untrustProject() {
+  try {
+    applyTree(await UntrustProject())
+    return ''
+  } catch (err) {
+    return String(err)
+  }
 }

