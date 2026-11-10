@@ -10,8 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"creative-ink/internal/compiler"
 	"creative-ink/internal/config"
+	"creative-ink/internal/core"
 )
 
 // recorder captures the passes a command would run, without TeX.
@@ -21,6 +25,19 @@ type recorder struct {
 	started  int
 	finished int
 	out      compiler.BuildOutput
+}
+
+// fakeTrust records trust calls.
+type fakeTrust struct{ info core.TrustInfo }
+
+func (f *fakeTrust) Status() (core.TrustInfo, error) { return f.info, nil }
+func (f *fakeTrust) Trust() (core.TrustInfo, error) {
+	f.info.Status, f.info.TrustedHash = core.TrustTrusted, f.info.CurrentHash
+	return f.info, nil
+}
+func (f *fakeTrust) Untrust() (core.TrustInfo, error) {
+	f.info.Status, f.info.TrustedHash = core.TrustRestricted, ""
+	return f.info, nil
 }
 
 // fakeConfig is the config service over in-memory layers.
@@ -266,4 +283,49 @@ func TestHelpAndErrors(t *testing.T) {
 	if _, err := Run(context.Background(), "ci compile rapido", env); err == nil {
 		t.Error("without a document compile must fail")
 	}
+}
+
+func TestTrustCommands(t *testing.T) {
+	r := &recorder{}
+	env, _ := newEnv(t, r)
+	trust := &fakeTrust{info: core.TrustInfo{
+		Folder: "/p", Status: core.TrustUntrusted, RCFiles: []string{".latexmkrc"}, CurrentHash: "abc",
+	}}
+	env.Trust = trust
+
+	out, err := Run(context.Background(), "ci trust status", env)
+	require.NoError(t, err)
+	assert.Contains(t, out, "sin confianza")
+	assert.Contains(t, out, "Hash actual:   abc")
+	assert.Contains(t, out, "Hash confiado: (ninguno)")
+
+	out, err = Run(context.Background(), "ci trust add", env)
+	require.NoError(t, err)
+	assert.Contains(t, out, "✓ Confías")
+	assert.Contains(t, out, "Hash confiado: abc")
+
+	trust.info.CurrentHash = "def" // the file changed after trusting it
+	trust.info.Status = core.TrustUntrusted
+	out, _ = Run(context.Background(), "ci trust", env)
+	assert.Contains(t, out, "≠ actual")
+
+	out, err = Run(context.Background(), "ci trust remove", env)
+	require.NoError(t, err)
+	assert.Contains(t, out, "restringida")
+
+	_, err = Run(context.Background(), "ci trust otra", env)
+	assert.ErrorIs(t, err, ErrUsage)
+	env.Trust = nil
+	_, err = Run(context.Background(), "ci trust", env)
+	assert.Error(t, err)
+}
+
+func TestCleanAllHonoursTheTrust(t *testing.T) {
+	r := &recorder{}
+	env, _ := newEnv(t, r)
+	env.LatexmkRCArgs = []string{"-norc"}
+	_, err := Run(context.Background(), "ci clean all", env)
+	require.NoError(t, err)
+	require.Len(t, r.passes, 1)
+	assert.Equal(t, []string{"-norc", "-C", "tesis.tex"}, r.passes[0].Args)
 }

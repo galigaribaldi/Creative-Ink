@@ -143,6 +143,10 @@ type App struct {
 	health      core.ProjectHealth
 	healthDelay time.Duration
 
+	// trustMu guards lastTrust: the trust last reported to the UI.
+	trustMu   sync.Mutex
+	lastTrust core.TrustInfo
+
 	// watchFolder starts a filesystem watcher (nil in tests = no watching).
 	watchFolder func(root string, onChange func()) (io.Closer, error)
 	// watchMu guards watcher and treeSig.
@@ -186,6 +190,11 @@ type WorkspaceState struct {
 	AutoCompile bool          `json:"autoCompile"`
 	Tree        core.FileNode `json:"tree"`
 	Truncated   bool          `json:"truncated"` // the tree hit its size limits
+	// TrustStatus is the trust of the folder latexmk runs in ("" without a
+	// project): "untrusted" means its .latexmkrc is ignored (-norc) and the
+	// UI offers to trust it. TrustFiles are the rc files found there.
+	TrustStatus core.TrustState `json:"trustStatus"`
+	TrustFiles  []string        `json:"trustFiles"`
 }
 
 // StartScreen is what the start screen shows when a session begins.
@@ -349,7 +358,10 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 			if a.compilingDoc == "" {
 				return "", errNoDocument
 			}
-			return compile(ctx, filepath.Dir(a.compilingDoc), filepath.Base(a.compilingDoc))
+			// Untrusted .latexmkrc (Perl code) → latexmk -norc (trust_app.go).
+			dir := filepath.Dir(a.compilingDoc)
+			ctx = compiler.WithCompileOptions(ctx, a.compileOptionsFor(dir))
+			return compile(ctx, dir, filepath.Base(a.compilingDoc))
 		},
 		compiler.Hooks{
 			OnStarted: func() {
@@ -1117,9 +1129,15 @@ func (a *App) runInternalCommand(ctx context.Context, command, folder string, st
 // that keep the preview in sync with manual builds.
 func (a *App) ciEnv(runID int, output io.Writer) ci.Env {
 	target := a.compileTarget()
+	var rcArgs []string
+	if target != "" {
+		rcArgs = compiler.LatexmkRCArgs(a.compileOptionsFor(filepath.Dir(target)))
+	}
 	return ci.Env{
-		Target: target,
-		Config: ciConfig{a},
+		Target:        target,
+		Config:        ciConfig{a},
+		Trust:         ciTrust{a},
+		LatexmkRCArgs: rcArgs,
 		Output: compiler.BuildOutput{
 			Log: output,
 			Progress: func(p compiler.BuildProgress) {
@@ -1240,6 +1258,9 @@ func (a *App) RequestCompile(trigger string) bool {
 	case compileTriggerAuto:
 		if !a.autoCompileEnabled() {
 			return false // second lock: a stale UI or a plugin cannot bypass it
+		}
+		if a.trustInfo().Status == core.TrustUntrusted {
+			return false // never compile on its own a folder whose .latexmkrc we doubt
 		}
 		return a.compiles.Request(compiler.TriggerAuto)
 	}
@@ -1473,6 +1494,7 @@ func (a *App) workspaceState() (WorkspaceState, error) {
 	if err != nil {
 		return WorkspaceState{}, err
 	}
+	trust := a.trustInfo()
 	return WorkspaceState{
 		FolderPath:     folder,
 		RepositoryPath: a.repository(),
@@ -1482,6 +1504,8 @@ func (a *App) workspaceState() (WorkspaceState, error) {
 		AutoCompile:    a.autoCompileEnabled(),
 		Tree:           tree,
 		Truncated:      truncated,
+		TrustStatus:    trust.Status,
+		TrustFiles:     trust.RCFiles,
 	}, nil
 }
 

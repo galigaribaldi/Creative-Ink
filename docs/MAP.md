@@ -15,6 +15,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     ├── app.go                    ← struct App: ÚNICA fachada IPC expuesta al frontend
     ├── window_theme.go           ← color nativo de la ventana = --surface-base del tema del sistema (sin destello al arrancar)
     ├── menu.go                   ← menú nativo (solo macOS): Archivo, Edición (portapapeles), Buscar, Ver, Ventana → evento menu:command
+    ├── trust_app.go              ← confianza en el .latexmkrc: TrustProject/UntrustProject, -norc, evento trust:changed
     ├── config_app.go             ← GetConfig/SetConfig, cerrojo de compile.auto, vista previa del PDF existente (sin compilar)
     ├── health_app.go             ← detector de proyecto grande: análisis con debounce → evento project:health (solo avisa)
     ├── preview.go                ← middleware del AssetServer: sirve el PDF en /__preview/document.pdf
@@ -36,6 +37,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     │   │   ├── settings.go       ← <UserConfigDir>/creative-ink/settings.json: repositorio, autoCompile y recientes (UpdateSettings no pisa otros campos)
     │   │   ├── repository.go     ← estructura del repositorio, Slugify, CreateProject, CreateQuickDoc, StaleQuickDocs
     │   │   ├── hide_{windows,other}.go ← ocultar .creative-ink en Windows (atributo hidden)
+    │   │   ├── trust.go          ← GetTrustStatus/TrustProject/UntrustProject: hash SHA-256 del .latexmkrc en settings.json
     │   │   ├── project_meta.go   ← <carpeta>/.creative-ink-meta: archivo principal del proyecto (ruta relativa)
     │   │   ├── watcher.go        ← FolderWatcher (fsnotify): cambios externos con debounce; TreeSignature
     │   │   ├── pdf_snapshots.go  ← PDFSnapshots: copias inmutables y versionadas del PDF para la vista previa
@@ -63,6 +65,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   │   ├── Editor.svelte      ← CodeMirror 6 (tema de tokens, stex) + autoguardado con debounce
         │   │   ├── BottomPanel.svelte ← panel inferior con pestañas "Errores LaTeX" | "Terminal" (siempre montado)
         │   │   ├── CompileLog.svelte  ← contenido de la pestaña de errores de LaTeX
+        │   │   ├── TrustBanner.svelte ← aviso "modo restringido" con un .latexmkrc sin confianza: Confiar y recompilar / Mantener restringido
         │   │   ├── TerminalPanel.svelte ← terminal integrada: historial, entrada, ↑/↓, Ctrl+C
         │   │   ├── HealthPanel.svelte ← modal "Estado del sistema" (incluye "Sistema y repositorio")
         │   │   ├── RepositorySetup.svelte ← primer arranque: "Solo para mí" / "Para todos los usuarios"
@@ -147,7 +150,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 | Tipo    | Nombre                | Dirección  | Firma / payload | Sección |
 |---------|-----------------------|------------|-----------------|---------|
 | Binding | `SystemHealthCheck`   | UI → Go    | `() → system.HealthStatus` = `{ hasXeLaTeX, hasLatexmk, hasBiber: boolean; totalRAMGB, freeDiskSpaceGB: number; cpuCores: number; hardwareTier: string; hardwareTierId: 'basic'\|'advanced'\|'unknown'; repository: system.RepositoryOptions; warnings: string[] }`. Incluye el SO y el repositorio (actual y rutas propuestas) | 2, 9 |
-| Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ needsSetup, needsStart, repositoryPath, canceled, folderPath, filePath, texFilePath, mainFilePath, autoCompile, tree: core.FileNode, truncated }`. `filePath` es el documento activo (cualquier archivo de texto); **`texFilePath`** es el último `.tex` activo: el objetivo de compilación si no hay archivo principal (Sección 19). **`needsStart: true`** con el repositorio listo y sin proyecto abierto: la UI muestra la pantalla de inicio. `autoCompile` es el ajuste de `ci config autocompile` (por defecto `true`). `mainFilePath` es el archivo principal del proyecto (`""` si no hay, o si se borró). Carpeta abierta, documento activo y árbol. **`needsSetup: true`** en el primer arranque, sin crear nada en disco. Desde la Sección 18 **no abre la raíz del repositorio**: sin proyecto, `needsStart: true` | 9, 18 |
+| Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ needsSetup, needsStart, repositoryPath, canceled, folderPath, filePath, texFilePath, mainFilePath, autoCompile, tree: core.FileNode, truncated, trustStatus, trustFiles }`. **`trustStatus`** (`''`\|`trusted`\|`untrusted`\|`restricted`) y **`trustFiles`** describen el `.latexmkrc` de la carpeta donde corre latexmk (Sección 21). `filePath` es el documento activo (cualquier archivo de texto); **`texFilePath`** es el último `.tex` activo: el objetivo de compilación si no hay archivo principal (Sección 19). **`needsStart: true`** con el repositorio listo y sin proyecto abierto: la UI muestra la pantalla de inicio. `autoCompile` es el ajuste de `ci config autocompile` (por defecto `true`). `mainFilePath` es el archivo principal del proyecto (`""` si no hay, o si se borró). Carpeta abierta, documento activo y árbol. **`needsSetup: true`** en el primer arranque, sin crear nada en disco. Desde la Sección 18 **no abre la raíz del repositorio**: sin proyecto, `needsStart: true` | 9, 18 |
 | Binding | `GetRepositoryOptions` | UI → Go   | `() → system.RepositoryOptions` = `{ os, osName, user, shared: RepositoryOption; warnings: string[]; currentScope, currentPath }`, con `RepositoryOption` = `{ scope, path, available, reason }`. Rutas propuestas para este SO | 9 |
 | Binding | `SetupRepository`     | UI → Go    | `(scope: 'user'\|'shared') → main.WorkspaceState`. Crea el repositorio y su estructura (`.creative-ink/`, `tmp-Workspaces/`) en la ruta que calcula Go y guarda la elección. Devuelve `needsStart` (no abre ninguna carpeta). Rechaza ámbitos desconocidos o no disponibles | 9 |
 | Binding | `GetStartScreen`      | UI → Go    | `() → main.StartScreen` = `{ repositoryPath, projects, quickDocs, staleQuickDocs: core.ProjectInfo[]; staleAfterHours; recent: string[]; pluginsPath; warnings }`, con `ProjectInfo` = `{ name, path, mainFile, modified }` | 18 |
@@ -163,7 +166,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 | Binding | `SaveContent`         | UI → Go    | `(path, content) → main.SaveResult` = `{ saved }`. Responde de inmediato y **no compila**: la UI pide `RequestCompile` tras 3 s sin escribir o con Cmd/Ctrl+S. `path` (absoluto, archivo de texto, dentro de la carpeta) viaja con cada guardado. Rechaza la promesa si la ruta no es válida o falla la escritura | 8, 12 |
 | Binding | `SaveAsDialog`        | UI → Go    | `(content) → main.WorkspaceState`. Diálogo nativo; si falta la extensión, usa la del documento activo. Solo archivos de texto (`core.ErrNotEditable`). Guarda el **panel principal**. Si el destino está fuera de la carpeta, su directorio pasa a ser la carpeta abierta. Lo hace documento activo y compila | 8 |
 | Binding | `SetMainFile`         | UI → Go    | `(path) → main.WorkspaceState`. `.tex` existente dentro de la carpeta, o `""` para quitarlo. Se guarda (ruta relativa) en `<carpeta>/.creative-ink-meta` y se recompila el nuevo objetivo | 10 |
-| Binding | `RequestCompile`      | UI → Go    | `(trigger: 'auto'\|'manual') → boolean`: encola una compilación del **objetivo** (principal o último `.tex`) sin guardar. **`'auto'`** = temporizador de inactividad del editor: **Go la rechaza si `compile.auto` está apagado** (segundo cerrojo) y el Scheduler la puede **cancelar** si llega otra más nueva (§4.3). **`'manual'`** = ⌘S y los botones Guardar y Compilar: siempre se encola y nunca se cancela. `false` si se rechazó, el trigger es desconocido o la app se está cerrando | 7, 12, 20 |
+| Binding | `RequestCompile`      | UI → Go    | `(trigger: 'auto'\|'manual') → boolean`: encola una compilación del **objetivo** (principal o último `.tex`) sin guardar. **`'auto'`** = temporizador de inactividad del editor: **Go la rechaza si `compile.auto` está apagado** (segundo cerrojo) **o si la carpeta tiene un `.latexmkrc` sin confianza** (Sección 21) y el Scheduler la puede **cancelar** si llega otra más nueva (§4.3). **`'manual'`** = ⌘S y los botones Guardar y Compilar: siempre se encola y nunca se cancela. `false` si se rechazó, el trigger es desconocido o la app se está cerrando | 7, 12, 20 |
 | Binding | `GetConfig`           | UI → Go    | `() → config.Entry[]` = `{ id, type, default, scopes, description, value, scope }[]`: valor efectivo de cada clave y la capa de la que sale (`default` < `user` < `project`) | 20 |
 | Binding | `SetConfig`           | UI → Go    | `(key, value, scope: 'user'\|'project'\|'') → config.Entry`. Valida clave (id o alias, p. ej. `autocompile`), ámbito y valor; `value: ""` quita el valor de esa capa. Guarda en `settings.json` (usuario) o en `.creative-ink-meta` (proyecto) y emite `config:changed`. Devuelve la entrada efectiva (puede venir de otra capa) | 20 |
 | Binding | `ReadTerminalOutput`  | UI → Go    | `(runId, offset) → core.OutputChunk` = `{ runId, data, offset, next, size, done, dropped }`. Hasta 64 KB de la **salida completa** de un comando (en disco), cortados en un límite UTF-8. La UI solo lo llama con "Salida completa" abierta (cada 500 ms mientras el comando sigue). Error si la ejecución ya rotó (se guardan 8) | 20 |
@@ -176,6 +179,9 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 | Evento  | `compile:started`     | Go → UI    | `main.CompileStartedEvent` = `{ file }`: el **objetivo de compilación** (principal o activo). La UI ignora los eventos de otro objetivo | 8, 10 |
 | Evento  | `compile:finished`    | Go → UI    | `main.CompileFinishedEvent` = `{ file, success, logs, durationMs, pdfVersion, pdfModTime, canceled, cached }`. **`canceled`**: una compilación automática obsoleta se canceló y la siguiente ya empezó (la UI sigue en "Compilando…"). **`cached`**: no se compiló nada; es el PDF que ya había en disco, publicado al abrir con `compile.auto` apagado (no cuenta para el disparador adaptativo). `pdfVersion` es la instantánea publicada (0 si falló la compilación o la copia); **si el PDF no cambió** (mismo `ModTime` y tamaño), Go **reutiliza la versión anterior** sin copiarla. `pdfModTime` es el `ModTime` del PDF en ms Unix. No se emite después del cierre | 8, 13, 14 |
 | Evento  | `app:before-close`    | Go → UI    | Sin payload. Lo emite `OnBeforeClose` en el primer intento de cerrar la ventana; la UI hace `waitIdle()` y responde con `ConfirmClose`. Go cierra igual a los 2 s si no hay respuesta | 12 |
+| Binding | `TrustProject`        | UI → Go    | `() → main.WorkspaceState`. Confía en el `.latexmkrc`/`latexmkrc` de la carpeta donde corre latexmk (la del objetivo de compilación): guarda su SHA-256 en `settings.json`, quita una restricción previa, emite `trust:changed` y **recompila** (manual) con su configuración. Lo usa el botón "Confiar y recompilar"; `ci trust add` hace lo mismo sin recompilar | 21 |
+| Binding | `UntrustProject`      | UI → Go    | `() → main.WorkspaceState`. Restringe la carpeta: se olvida el hash y se compila **siempre con `-norc`**, sin volver a preguntar (`restricted`). Emite `trust:changed`. Botón "Mantener restringido" y `ci trust remove` | 21 |
+| Evento  | `trust:changed`       | Go → UI    | `main.TrustChangedEvent` = `core.TrustInfo` (`{ folder, status: 'trusted'\|'untrusted'\|'restricted', rcFiles, currentHash, trustedHash }`) + `{ project }`. Al decidir (banner o `ci trust`) o cuando una compilación ve que el `.latexmkrc` cambió (p. ej. tras un `git pull`). La UI lo aplica si `project` es la carpeta abierta | 21 |
 | Evento  | `config:changed`      | Go → UI    | `main.ConfigChangedEvent` = `config.Entry` + `{ written, folder }`: una clave cambió (p. ej. `ci config autocompile on`). `value`/`scope` son los efectivos para `folder`; la UI los aplica si es la carpeta abierta | 20 |
 | Evento  | `project:health`      | Go → UI    | `core.ProjectHealth` (ver `GetProjectHealth`). Se recalcula con un debounce de 2 s al abrir una carpeta, tras cambios externos y tras guardar; solo se emite si cambió. **Solo avisa:** la UI muestra "⚠ Proyecto grande" con un tooltip y no cambia nada más | 20 |
 | Evento  | `terminal:started`    | Go → UI    | `main.TerminalStartedEvent` = `{ runId, command }`: empezó un comando y su salida completa se está guardando en disco | 20 |
@@ -215,7 +221,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
   - Un segundo clic en ✕ mientras se vuelca se ignora. `quit` y `confirmQuit` se inyectan para los tests.
 
 ## 4.3 Pipeline de compilación (Módulo 3)
-- `internal/compiler.CompileLaTeXContext(ctx, workdir, filename)` ejecuta `latexmk -xelatex -interaction=nonstopmode -halt-on-error -synctex=1 <filename>` (sin shell). `-synctex=1` (desde la Sección 16) escribe `<doc>.synctex.gz` para SyncTeX. `CompileLaTeX` es el mismo sin cancelación externa.
+- `internal/compiler.CompileLaTeXContext(ctx, workdir, filename)` ejecuta `latexmk -xelatex -interaction=nonstopmode -halt-on-error -synctex=1 <filename>` (sin shell). `-synctex=1` (desde la Sección 16) escribe `<doc>.synctex.gz` para SyncTeX. `CompileLaTeX` es el mismo sin cancelación externa. **Con un `.latexmkrc` sin confianza (Sección 21)** añade delante `-norc` y `-r <rc del usuario>` (`~/.latexmkrc`, `$XDG_CONFIG_HOME/latexmk/latexmkrc`): la opción llega en el `context` (`compiler.WithCompileOptions`), así que ni el Scheduler ni `CompileFunc` cambian de firma.
   - **Resolución de binarios:** `system.FindBinary` encuentra latexmk; su directorio se antepone al `PATH` del subproceso para que latexmk encuentre xelatex y biber aunque la app se abra desde el Finder.
   - **Seguridad:** el nombre de archivo no puede tener directorios ni empezar con `-`. Las ejecuciones van en serie (mutex) y tienen un límite de 60 s.
   - **Logs:** stdout y stderr van al mismo buffer. Si falla, los bloques `! ...` hasta `l.<n>` (más su línea de continuación) salen primero de `<doc>.log` y, si el `.log` no tiene errores, de stdout. Después va la cola de la salida (máximo 32 KB). Un bloque sin `l.<n>` se corta a las 6 líneas o en el siguiente `! `.
@@ -308,7 +314,7 @@ Los comandos se aplican al **archivo principal (★)** o, si no hay, al `.tex` a
 | `ci compile solo <capítulo>` | `make solo CAP=…` | Dos pasadas de `xelatex -jobname=<doc>_<carpeta> "\def\SoloCapitulo{<capítulo>}\input{<doc>}"` → `<doc>_<carpeta>.pdf` |
 | `ci compile completo` | `make pdf` | XeLaTeX → BibTeX → XeLaTeX → XeLaTeX (las XeLaTeX intermedias pueden fallar, como `\|\| true`) |
 | `ci clean tikz` | `make tikz-clean` | Borra `*.pdf`, `*.md5`, `*.log` y `*.dpth` de `Figures/TiKz_Libraries/externalized/` |
-| `ci clean all` | `make limpiar-todo` | `latexmk -C <doc>.tex` y los restos (`.brf`, `.run.xml`, `.idx`, `.ilg`, `.ind`, `.blg`, `.bbl`, `.xdv`). Borra también el PDF |
+| `ci clean all` | `make limpiar-todo` | `latexmk -C <doc>.tex` (con `-norc` si el `.latexmkrc` no es de confianza) y los restos (`.brf`, `.run.xml`, `.idx`, `.ilg`, `.ind`, `.blg`, `.bbl`, `.xdv`). Borra también el PDF |
 
 **Diferencias deliberadas con el Makefile:**
 - **`ci compile solo` usa `-jobname`.** El Makefile compila sobre `tesis.pdf` y luego lo renombra, así que **borra el PDF completo**. Con `-jobname`, el capítulo sale en un PDF aparte, con sus propios `.aux`, y el documento completo no se toca.
@@ -326,7 +332,15 @@ Los comandos se aplican al **archivo principal (★)** o, si no hay, al `.tex` a
 
 **Pendiente:** autocompletado de `ci` en el panel.
 
-**Seguridad (riesgo previo, no introducido por `ci`):** latexmk lee el **`.latexmkrc` del proyecto**, que es código Perl. Abrir una carpeta ajena con la compilación automática activa equivale a ejecutar ese código. No se desactiva (`-norc`) porque hay proyectos, como la tesis, que dependen de él. Opción futura: confirmar antes de compilar una carpeta nueva que tenga `.latexmkrc`.
+**Seguridad: confianza en el `.latexmkrc` (Sección 21, §4.6 paso 3).** latexmk lee el `.latexmkrc`/`latexmkrc` de la carpeta en la que corre, y ese archivo es **código Perl**. Una carpeta con uno que el usuario no ha aceptado (`untrusted`) se compila siempre con `latexmk -norc` (también `ci clean all`) y **nunca automáticamente**. La UI muestra un banner con "Confiar y recompilar" / "Mantener restringido".
+
+| Comando | Qué hace |
+|---------|----------|
+| `ci trust [status]` | Carpeta, estado (de confianza, sin confianza o restringida), archivos rc y el hash **actual** frente al **confiado** (avisa si el archivo cambió desde que confiaste) |
+| `ci trust add` | Confía en el contenido actual: guarda su SHA-256 y quita una restricción. Si el archivo cambia, vuelve a estar sin confianza |
+| `ci trust remove` | Restringe la carpeta: siempre `-norc` y sin volver a preguntar |
+
+`ci compile …` ejecuta xelatex y bibtex directamente, así que nunca lee el `.latexmkrc`.
 
 ## 4.6 Configuración, confianza y extensibilidad (diseño acordado el 2026-11-08)
 
@@ -342,7 +356,12 @@ Los comandos se aplican al **archivo principal (★)** o, si no hay, al `.tex` a
 ### Plan y estado
 - [x] **Paso 1 — Estructura (Sección 18):** `.creative-ink/`, `tmp-Workspaces/`, pantalla de inicio (Nuevo proyecto, Documento rápido, proyectos, recientes, Abrir carpeta), plantilla de proyecto, migración del nombre y aviso de documentos rápidos antiguos.
 - [x] **Paso 2 — Servicio de configuración por capas (Sección 20):** `internal/config` (claves tipadas) con capas por defecto < usuario (`settings.json`, `config`) < proyecto (`.creative-ink-meta`, `config`); `GetConfig`/`SetConfig`, `config:changed`, `ci config list|get|set|unset [--project]`. Primera clave: `compile.auto`, **apagada por defecto** y respetada por la UI (no programa el temporizador) y por Go (`RequestCompile('auto')` se rechaza). El `autoCompile` antiguo de `settings.json` se lee como valor del usuario y desaparece al escribir. *Pendiente:* la capa del repositorio (`.creative-ink/config.json`) y más claves (motor, límites de tiempo).
-- [ ] **Paso 3 — Confianza:** política elegida en la instalación, `ci trust status|add|remove`, modo restringido (`latexmk -norc`) para carpetas ajenas con `.latexmkrc`, hash del archivo.
+- [x] **Paso 3 — Confianza (Sección 21):**
+  - `core.GetTrustStatus`/`TrustProject`/`UntrustProject`, con `TrustedProjects` (ruta real → SHA-256 de los rc) y `RestrictedProjects` en `settings.json`;
+  - tres estados: `trusted` (sin rc, o el hash coincide), `untrusted` (rc nuevo o cambiado) y `restricted` (el usuario dijo que no);
+  - `latexmk -norc` mientras no sea `trusted`; `compile.auto` rechazado si `untrusted`;
+  - `ci trust status|add|remove`, banner en la UI y `WorkspaceState.trustStatus/trustFiles`.
+  - *Pendiente:* elegir la política en la instalación (hoy, por defecto, se pregunta por cada carpeta con rc), y que los proyectos creados por el editor nazcan confiados (hoy no traen `.latexmkrc`, así que ya lo son).
 - [ ] **Paso 4 — Registro de comandos `ci`** + guía autogenerada (`.creative-ink/guide/ci-guia.tex` → PDF) + `ci guide`. *La salida en disco y el progreso ya están hechos (Sección 20).*
 - [ ] **Paso 5 — Host de plugins** (JSON-RPC por stdio, manifiesto con contribuciones y capacidades).
 

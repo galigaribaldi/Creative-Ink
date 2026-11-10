@@ -5,6 +5,7 @@
   import BottomPanel from './BottomPanel.svelte'
   import Editor from './Editor.svelte'
   import Preview from './Preview.svelte'
+  import TrustBanner from './TrustBanner.svelte'
 </script>
 
 <!-- Layout only: the main Editor and the Preview are never re-keyed or put
@@ -13,6 +14,8 @@
      split: closing it saves its edits first (actions.js toggleSplitEditor). -->
 <div class="workspace" class:split={ui.splitEditor}>
   <section class="pane editor-pane" aria-label="Editor">
+    <!-- Untrusted .latexmkrc: compiling with -norc; offers to trust it. -->
+    <TrustBanner />
     <div class="editors">
       <div class="editor-host">
         <Editor pane="primary" />
