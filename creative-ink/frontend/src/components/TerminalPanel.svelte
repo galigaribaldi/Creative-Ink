@@ -1,5 +1,6 @@
 <script>
-  import { tick, untrack } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
+  import { ListTerminalCommands } from '../../wailsjs/go/main/App.js'
   import { CI_COMMANDS, cancelCommand, commandHistory, runCommand, terminal, toggleFullOutput } from '../lib/terminal.svelte.js'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
@@ -27,14 +28,84 @@
   let disabled = $derived(!isCI && !workspace.currentFolderPath)
   let busyElsewhere = $derived(terminal.running && terminal.runningContext !== context)
 
-  // Terminal CI: the first known command that extends what is typed, shown
-  // in grey after the cursor. Tab (or → at the end) accepts it.
-  let suggestion = $derived.by(() => {
-    if (!isCI || !value || value !== value.trimStart()) return ''
-    const typed = value.toLowerCase()
-    const match = CI_COMMANDS.find((c) => c.startsWith(typed) && c.length > typed.length)
-    return match ? match.slice(value.length) : ''
+  // ── Terminal CI completion, from Go's `ci` registry ─────────────────────
+  /** @typedef {{ completion: string, syntax: string, description: string }} Completion */
+  /** Until the registry arrives (or if the binding is missing): the local list. */
+  /** @type {Completion[]} */
+  let completions = $state(CI_COMMANDS.map((c) => ({ completion: c, syntax: c, description: '' })))
+
+  onMount(async () => {
+    if (!isCI) return
+    try {
+      const registry = await ListTerminalCommands()
+      const list = registry.flatMap((cmd) =>
+        (cmd.subcommands ?? []).map((sc) => ({ completion: sc.completion, syntax: sc.syntax, description: sc.description }))
+      )
+      if (list.length) completions = list
+    } catch {
+      // Older bindings: keep the local list.
+    }
   })
+
+  /** Completions that extend what is typed (case-insensitive), without duplicates. */
+  let matches = $derived.by(() => {
+    if (!isCI || !value || value !== value.trimStart()) return []
+    const typed = value.toLowerCase()
+    const seen = new Set()
+    return completions.filter((c) => {
+      const ok = c.completion.toLowerCase().startsWith(typed) && c.completion.length > typed.length && !seen.has(c.completion)
+      seen.add(c.completion)
+      return ok
+    })
+  })
+
+  // Grey text after the cursor, only when the match is unambiguous.
+  let suggestion = $derived(matches.length === 1 ? matches[0].completion.slice(value.length) : '')
+
+  // Several matches: a light menu above the input; Tab cycles through it.
+  /** @type {Completion[]} */
+  let menu = $state([])
+  let menuIndex = $state(-1)
+
+  function closeMenu() {
+    menu = []
+    menuIndex = -1
+  }
+
+  /** @param {string[]} words */
+  function commonPrefix(words) {
+    let prefix = words[0] ?? ''
+    for (const w of words) while (!w.startsWith(prefix)) prefix = prefix.slice(0, -1)
+    return prefix
+  }
+
+  /** Tab: complete one match, the common prefix of several, or cycle the menu. */
+  function complete() {
+    if (menu.length) {
+      menuIndex = (menuIndex + 1) % menu.length
+      value = menu[menuIndex].completion
+      return true
+    }
+    if (matches.length === 1) {
+      value = matches[0].completion
+      return true
+    }
+    if (matches.length > 1) {
+      const prefix = commonPrefix(matches.map((m) => m.completion))
+      if (prefix.length > value.length) value = prefix
+      menu = matches.slice(0, 8)
+      menuIndex = -1
+      return true
+    }
+    return false
+  }
+
+  /** @param {Completion} item */
+  function pick(item) {
+    value = item.completion
+    closeMenu()
+    input?.focus()
+  }
 
   let placeholder = $derived(
     terminal.running
@@ -71,13 +142,17 @@
       const command = value
       value = ''
       historyIndex = -1
+      closeMenu()
       void runCommand(command, context)
-    } else if (
-      suggestion &&
-      (event.key === 'Tab' || (event.key === 'ArrowRight' && input.selectionStart === value.length))
-    ) {
-      event.preventDefault() // only when there is something to complete
+    } else if (event.key === 'Tab' && !event.shiftKey && isCI) {
+      // Only taken when there is something to complete: otherwise Tab moves focus.
+      if (complete()) event.preventDefault()
+    } else if (event.key === 'ArrowRight' && suggestion && input.selectionStart === value.length) {
+      event.preventDefault()
       value += suggestion
+    } else if (event.key === 'Escape' && menu.length) {
+      event.preventDefault()
+      closeMenu()
     } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       event.preventDefault()
       browseHistory(event.key === 'ArrowUp' ? -1 : 1)
@@ -209,6 +284,18 @@
       <span class="shell-prompt" aria-hidden="true">$</span>
     {/if}
     <div class="field">
+      {#if menu.length}
+        <ul class="menu" role="listbox" aria-label="Comandos de la Terminal CI">
+          {#each menu as item, i (item.completion)}
+            <li role="option" aria-selected={i === menuIndex}>
+              <button class:current={i === menuIndex} onmousedown={(e) => e.preventDefault()} onclick={() => pick(item)}>
+                <span class="syntax">{item.syntax}</span>
+                {#if item.description}<span class="desc">{item.description}</span>{/if}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
       <!-- Ghost completion: the typed text (invisible) + the rest, in grey. -->
       {#if suggestion}
         <span class="ghost" aria-hidden="true"><span class="typed">{value}</span>{suggestion}</span>
@@ -217,6 +304,8 @@
         bind:this={input}
         bind:value
         {onkeydown}
+        oninput={closeMenu}
+        onblur={closeMenu}
         {disabled}
         {placeholder}
         aria-label={isCI ? 'Comando de la Terminal CI (sin ci)' : 'Comando de la shell del sistema'}
@@ -292,6 +381,54 @@
     flex: 1;
     min-width: 0;
     display: flex;
+  }
+
+  /* Completion menu: a light popover above the input (A3: raised surface,
+     overlay shadow, medium radius). */
+  .menu {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 4px);
+    z-index: 2;
+    min-width: 20rem;
+    max-width: 100%;
+    margin: 0;
+    padding: 0.25rem;
+    list-style: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-overlay);
+  }
+
+  .menu button {
+    width: 100%;
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.2rem 0.5rem;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--transition);
+  }
+
+  .menu button:hover,
+  .menu button.current {
+    background: var(--surface-hover);
+  }
+
+  .menu .desc {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
   }
 
   /* Drawn exactly under the input's text (same font and padding). */

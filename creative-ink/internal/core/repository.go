@@ -132,19 +132,8 @@ func Slugify(name string) string {
 // (main.tex, capitulos/, figuras/, referencias.bib) with main.tex set as the
 // main file. It never overwrites an existing folder.
 func CreateProject(root, name string) (dir, mainTex string, err error) {
-	slug := Slugify(name)
-	switch {
-	case slug == "":
-		return "", "", errors.New("el nombre del proyecto no tiene caracteres válidos")
-	case strings.EqualFold(slug, QuickDocsDirName) || strings.HasPrefix(slug, "."):
-		return "", "", fmt.Errorf("%q es un nombre reservado", slug)
-	}
-	dir = filepath.Join(root, slug)
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return "", "", fmt.Errorf("%w: %s", ErrProjectExists, slug)
-		}
-		return "", "", fmt.Errorf("create project %q: %w", dir, err)
+	if dir, err = newProjectDir(root, name); err != nil {
+		return "", "", err
 	}
 
 	title := strings.TrimSpace(name)
@@ -163,6 +152,26 @@ func CreateProject(root, name string) (dir, mainTex string, err error) {
 		return "", "", err
 	}
 	return dir, filepath.Join(dir, "main.tex"), nil
+}
+
+// newProjectDir validates a project name and creates its empty folder
+// <root>/<Slugify(name)>/. It never reuses an existing folder.
+func newProjectDir(root, name string) (string, error) {
+	slug := Slugify(name)
+	switch {
+	case slug == "":
+		return "", errors.New("el nombre del proyecto no tiene caracteres válidos")
+	case strings.EqualFold(slug, QuickDocsDirName) || strings.HasPrefix(slug, "."):
+		return "", fmt.Errorf("%q es un nombre reservado", slug)
+	}
+	dir := filepath.Join(root, slug)
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return "", fmt.Errorf("%w: %s", ErrProjectExists, slug)
+		}
+		return "", fmt.Errorf("create project %q: %w", dir, err)
+	}
+	return dir, nil
 }
 
 // ListProjects returns the project folders of the repository (every visible

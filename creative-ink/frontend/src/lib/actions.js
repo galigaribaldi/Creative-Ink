@@ -5,6 +5,7 @@
 import {
   ConfirmClose,
   CreateProject,
+  CreateProjectFromTemplate,
   CreateQuickDocument,
   GetProjectHealth,
   GetWorkspace,
@@ -145,8 +146,9 @@ async function switchProject(/** @type {() => Promise<import('./workspace.svelte
 }
 
 /** Creates <repo>/<name normalized with "-">/ from the template and opens it. */
-export function createProject(/** @type {string} */ name) {
-  return switchProject(() => CreateProject(name))
+export function createProject(/** @type {string} */ name, /** @type {string} */ template = '') {
+  // template: the path of a template listed by the start screen ('' = built-in).
+  return switchProject(() => (template ? CreateProjectFromTemplate(name, template) : CreateProject(name)))
 }
 
 /** Creates tmp-Workspaces/unnamed-tmp<N>/ and opens it. */

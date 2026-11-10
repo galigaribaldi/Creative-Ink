@@ -64,8 +64,15 @@ type Env struct {
 	// value discards them.
 	Output compiler.BuildOutput
 
+	// GuideDir is where `ci guide` writes and compiles the guide
+	// (<UserConfigDir>/creative-ink/guide; "" = unavailable).
+	GuideDir string
+	// ShowGuide asks the App to show the compiled guide in the preview.
+	ShowGuide func(pdf string) error
+
 	// Overridable in tests.
-	runPasses func(ctx context.Context, workdir string, passes []compiler.Pass, after func() string, out compiler.BuildOutput) (string, error)
+	runPasses    func(ctx context.Context, workdir string, passes []compiler.Pass, after func() string, out compiler.BuildOutput) (string, error)
+	compileGuide func(ctx context.Context, workdir, filename string) (string, error)
 }
 
 // TrustService is the trust of the compile target's folder.
@@ -89,31 +96,6 @@ type ConfigService interface {
 func IsCommand(line string) bool {
 	fields := strings.Fields(line)
 	return len(fields) > 0 && fields[0] == "ci"
-}
-
-// Run executes a `ci …` line and returns the text for the terminal. A
-// non-nil error means the command failed (the terminal shows it with exit
-// code 1); its output is still meaningful.
-func Run(ctx context.Context, line string, env Env) (string, error) {
-	if env.runPasses == nil {
-		env.runPasses = compiler.RunPasses
-	}
-
-	args := strings.Fields(line)[1:] // drop "ci"
-	if len(args) == 0 || args[0] == "help" || args[0] == "ayuda" {
-		return helpText, nil
-	}
-	switch args[0] {
-	case "config":
-		return runConfig(args[1:], env)
-	case "trust":
-		return runTrust(args[1:], env)
-	case "compile":
-		return runCompile(ctx, args[1:], env)
-	case "clean":
-		return runClean(ctx, args[1:], env)
-	}
-	return helpText, usage("subcomando desconocido %q", args[0])
 }
 
 // ── config ─────────────────────────────────────────────────────────────────
@@ -430,21 +412,3 @@ func target(env Env) (dir, stem string, err error) {
 func usage(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrUsage, fmt.Sprintf(format, a...))
 }
-
-const helpText = `Creative Ink — comandos internos (no usan la shell ni make):
-
-  ci config [list]                 Ver la configuración (valor y de dónde sale)
-  ci config autocompile [on|off]   Compilación automática (por defecto off) [--project]
-  ci config set|unset <clave> …    Cambiar o quitar un valor [--project]
-  ci trust [status|add|remove]     Confianza en el .latexmkrc de la carpeta (sin ella: latexmk -norc)
-  ci compile rapido                Una pasada de XeLaTeX
-  ci compile borrador              Sin imágenes (el preámbulo debe usar \borrador)
-  ci compile completo              XeLaTeX → BibTeX → XeLaTeX → XeLaTeX
-  ci compile solo <capítulo>       Un capítulo (\SoloCapitulo) → <doc>_<capítulo>.pdf
-  ci clean tikz                    Borra la caché de Figures/TiKz_Libraries/externalized
-  ci clean all                     latexmk -C y auxiliares restantes (incluye el PDF)
-
-Se aplican al archivo principal (★) o, si no hay, al .tex abierto.
-La salida completa de cada comando se guarda en disco: "Salida completa" la muestra.
-Cualquier otra línea se ejecuta en la shell del sistema.
-`

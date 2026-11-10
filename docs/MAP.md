@@ -15,6 +15,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     ├── app.go                    ← struct App: ÚNICA fachada IPC expuesta al frontend
     ├── window_theme.go           ← color nativo de la ventana = --surface-base del tema del sistema (sin destello al arrancar)
     ├── menu.go                   ← menú nativo (solo macOS): Archivo, Edición (portapapeles), Buscar, Ver, Ventana → evento menu:command
+    ├── registry_app.go           ← ListTerminalCommands, guía en la vista previa (preview:show), CreateProjectFromTemplate
     ├── trust_app.go              ← confianza en el .latexmkrc: TrustProject/UntrustProject, -norc, evento trust:changed
     ├── config_app.go             ← GetConfig/SetConfig, cerrojo de compile.auto, vista previa del PDF existente (sin compilar)
     ├── health_app.go             ← detector de proyecto grande: análisis con debounce → evento project:health (solo avisa)
@@ -23,6 +24,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     ├── go.mod
     ├── internal/                 ← lógica Go no importable desde fuera del módulo
     │   ├── ci/
+    │   │   ├── registry.go       ← registro de comandos (CommandDef): Run, ci help, Info() para el autocompletado, RequiresTrust
+    │   │   ├── guide.go          ← ci guide: guía .tex generada del registro y compilada → vista previa
     │   │   └── ci.go             ← comandos internos `ci` de la terminal híbrida (traducción del Makefile, sin shell ni make)
     │   ├── config/
     │   │   └── config.go         ← servicio de configuración: registro de claves tipadas y capas (por defecto < usuario < proyecto)
@@ -37,6 +40,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
     │   │   ├── settings.go       ← <UserConfigDir>/creative-ink/settings.json: repositorio, autoCompile y recientes (UpdateSettings no pisa otros campos)
     │   │   ├── repository.go     ← estructura del repositorio, Slugify, CreateProject, CreateQuickDoc, StaleQuickDocs
     │   │   ├── hide_{windows,other}.go ← ocultar .creative-ink en Windows (atributo hidden)
+    │   │   ├── templates.go      ← ListTemplates/CreateProjectFromTemplate: plantillas del repositorio y del usuario
     │   │   ├── trust.go          ← GetTrustStatus/TrustProject/UntrustProject: hash SHA-256 del .latexmkrc en settings.json
     │   │   ├── project_meta.go   ← <carpeta>/.creative-ink-meta: archivo principal del proyecto (ruta relativa)
     │   │   ├── watcher.go        ← FolderWatcher (fsnotify): cambios externos con debounce; TreeSignature
@@ -97,8 +101,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 ├── .creative-ink/                        ← oculta (en Windows con el atributo hidden): datos del editor
 │   ├── config.json                       ← valores por defecto del repositorio (servicio de configuración, paso 2)
 │   ├── plugins/                          ← plugins del usuario (solo en repositorios personales)
-│   ├── templates/                        ← plantillas de "Nuevo proyecto" (paso 2+)
-│   └── guide/                            ← guía de `ci` autogenerada y compilada (paso 4)
+│   └── templates/<Nombre>/               ← plantillas de "Nuevo proyecto" compartidas con el repositorio
 ├── tmp-Workspaces/                       ← documentos rápidos de un solo archivo
 │   ├── unnamed-tmp1/main.tex             ← uno por subcarpeta: no mezclan auxiliares
 │   └── unnamed-tmp2/main.tex
@@ -108,6 +111,8 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 ```
 - **Convención de nombres:** todo lo que crea el editor usa `-` en lugar de espacios (`My-Creative-Ink-Repository`, `Tesis-de-Maestria`) y sin acentos en las carpetas (`core.Slugify`), para evitar problemas con herramientas que pasan por la shell (minted, externalización de TikZ) y con actualizaciones. El título del documento conserva el nombre original (escapado con `core.EscapeTeX`).
 - **Migración:** si `settings.json` apunta a `My Creative Ink Repository`, al arrancar se renombra a `My-Creative-Ink-Repository` (y se actualizan `repositoryPath` y los recientes). Si ya existen las dos carpetas, no se mueve nada y la pantalla de inicio lo avisa.
+- **Del usuario, en `<UserConfigDir>/creative-ink/`:** `templates/<Nombre>/` (sus plantillas de proyecto; ante un nombre repetido gana la del repositorio) y `guide/ci-guia.tex` → `.pdf` (la guía que genera `ci guide`).
+- **Plantillas de proyecto (§4.6 paso 4):** cada subcarpeta es una plantilla y se copia entera al crear el proyecto (`core.CreateProjectFromTemplate`). No se copian enlaces simbólicos, ocultos (salvo `.creative-ink-meta` y `.latexmkrc`) ni auxiliares, y hay un límite de 2000 archivos y 200 MB. En los archivos de texto, `{{TITULO}}`/`{{TITLE}}` se sustituyen por el nombre del proyecto escapado para LaTeX. El archivo principal sale del `.creative-ink-meta` de la plantilla o, si no hay, de `main.tex` o el primer `.tex`. Un `.latexmkrc` de una plantilla propia queda **de confianza** (decisión 7).
 - **Plugins por usuario:** en un repositorio personal, `<repo>/.creative-ink/plugins`; en uno compartido, `<UserConfigDir>/creative-ink/plugins` (nunca donde otras cuentas pueden escribir).
 - **Documentos rápidos antiguos:** al empezar cada sesión, la pantalla de inicio lista los que llevan **más de 8 h** sin modificarse (`core.StaleQuickDocs`) y ofrece abrir `tmp-Workspaces` en el Finder. **El editor nunca los borra** (por ahora no hay opción automática).
 - **En `settings.json` (por usuario, fuera del repositorio):** la ruta del repositorio, su ámbito, `autoCompile` y los **recientes** (`recentFolders`, 10 como máximo).
@@ -153,10 +158,12 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 | Binding | `GetWorkspace`        | UI → Go    | `() → main.WorkspaceState` = `{ needsSetup, needsStart, repositoryPath, canceled, folderPath, filePath, texFilePath, mainFilePath, autoCompile, tree: core.FileNode, truncated, trustStatus, trustFiles }`. **`trustStatus`** (`''`\|`trusted`\|`untrusted`\|`restricted`) y **`trustFiles`** describen el `.latexmkrc` de la carpeta donde corre latexmk (Sección 21). `filePath` es el documento activo (cualquier archivo de texto); **`texFilePath`** es el último `.tex` activo: el objetivo de compilación si no hay archivo principal (Sección 19). **`needsStart: true`** con el repositorio listo y sin proyecto abierto: la UI muestra la pantalla de inicio. `autoCompile` es el ajuste de `ci config autocompile` (por defecto `true`). `mainFilePath` es el archivo principal del proyecto (`""` si no hay, o si se borró). Carpeta abierta, documento activo y árbol. **`needsSetup: true`** en el primer arranque, sin crear nada en disco. Desde la Sección 18 **no abre la raíz del repositorio**: sin proyecto, `needsStart: true` | 9, 18 |
 | Binding | `GetRepositoryOptions` | UI → Go   | `() → system.RepositoryOptions` = `{ os, osName, user, shared: RepositoryOption; warnings: string[]; currentScope, currentPath }`, con `RepositoryOption` = `{ scope, path, available, reason }`. Rutas propuestas para este SO | 9 |
 | Binding | `SetupRepository`     | UI → Go    | `(scope: 'user'\|'shared') → main.WorkspaceState`. Crea el repositorio y su estructura (`.creative-ink/`, `tmp-Workspaces/`) en la ruta que calcula Go y guarda la elección. Devuelve `needsStart` (no abre ninguna carpeta). Rechaza ámbitos desconocidos o no disponibles | 9 |
-| Binding | `GetStartScreen`      | UI → Go    | `() → main.StartScreen` = `{ repositoryPath, projects, quickDocs, staleQuickDocs: core.ProjectInfo[]; staleAfterHours; recent: string[]; pluginsPath; warnings }`, con `ProjectInfo` = `{ name, path, mainFile, modified }` | 18 |
+| Binding | `GetStartScreen`      | UI → Go    | `() → main.StartScreen` = `{ repositoryPath, projects, quickDocs, staleQuickDocs: core.ProjectInfo[]; staleAfterHours; recent: string[]; pluginsPath; warnings; templates: core.TemplateInfo[] }` (`TemplateInfo` = `{ name, path, source: 'repository'\|'user' }`), con `ProjectInfo` = `{ name, path, mainFile, modified }` | 18 |
 | Binding | `CreateProject`       | UI → Go    | `(name) → main.WorkspaceState`. Crea `<repo>/<Slugify(name)>/` desde la plantilla con `main.tex` como principal, lo abre y lo compila. Error si ya existe o el nombre está reservado | 18 |
 | Binding | `CreateQuickDocument` | UI → Go    | `() → main.WorkspaceState`. Crea `tmp-Workspaces/unnamed-tmp<N>/main.tex` (N siguiente libre), lo abre y lo compila | 18 |
 | Binding | `OpenProject`         | UI → Go    | `(path) → main.WorkspaceState`. Solo carpetas **dentro del repositorio** (no la raíz, `.creative-ink` ni `tmp-Workspaces`) o **recientes** | 18 |
+| Binding | `CreateProjectFromTemplate` | UI → Go | `(name, template) → main.WorkspaceState`. Como `CreateProject`, pero copia la plantilla `template` (su `path`; **solo** las que lista `GetStartScreen`, nunca una carpeta arbitraria). Confía en su `.latexmkrc` si lo trae | 22 |
+| Binding | `ListTerminalCommands` | UI → Go   | `() → ci.CommandInfo[]` = `{ name, usage, description, requiresTrust, subcommands: { syntax, description, completion }[] }[]`: el **registro de comandos `ci`** sin manejadores. `completion` es la forma hasta su primer argumento (`compile solo `). La Terminal CI lo usa para Tab; `ci help` y `ci guide` salen del mismo registro | 22 |
 | Binding | `RevealQuickDocuments`| UI → Go    | `() → void`: abre `tmp-Workspaces` en el gestor de archivos (`open` / `xdg-open` / `explorer`, sin shell) | 18 |
 | Binding | `NewFileDialog`       | UI → Go    | `() → main.WorkspaceState`. **⌘N / Ctrl+N "Nuevo archivo…"**: diálogo nativo en la carpeta abierta; crea un archivo **vacío** de texto (`.tex` si no lleva extensión) con el nombre normalizado (`core.Slugify`, `Capítulo Dos` → `Capitulo-Dos.tex`) y lo hace documento activo, sin compilar. Debe quedar dentro de la carpeta abierta y **nunca reemplaza** un archivo (`core.ErrFileExists`). `canceled: true` si se cierra. Sin carpeta → `ErrNoFolder` (la UI crea entonces un documento rápido) | 19 |
 | Binding | `LoadFile`            | UI → Go    | `(path) → main.OpenedFile`. Lee un archivo de texto de la carpeta para el **segundo panel** del editor; a diferencia de `OpenFile`, **no** cambia el documento activo ni compila | 19 |
@@ -181,6 +188,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 | Evento  | `app:before-close`    | Go → UI    | Sin payload. Lo emite `OnBeforeClose` en el primer intento de cerrar la ventana; la UI hace `waitIdle()` y responde con `ConfirmClose`. Go cierra igual a los 2 s si no hay respuesta | 12 |
 | Binding | `TrustProject`        | UI → Go    | `() → main.WorkspaceState`. Confía en el `.latexmkrc`/`latexmkrc` de la carpeta donde corre latexmk (la del objetivo de compilación): guarda su SHA-256 en `settings.json`, quita una restricción previa, emite `trust:changed` y **recompila** (manual) con su configuración. Lo usa el botón "Confiar y recompilar"; `ci trust add` hace lo mismo sin recompilar | 21 |
 | Binding | `UntrustProject`      | UI → Go    | `() → main.WorkspaceState`. Restringe la carpeta: se olvida el hash y se compila **siempre con `-norc`**, sin volver a preguntar (`restricted`). Emite `trust:changed`. Botón "Mantener restringido" y `ci trust remove` | 21 |
+| Evento  | `preview:show`        | Go → UI    | `main.PreviewShowEvent` = `{ file, title, pdfVersion, pdfModTime }`: muestra en la vista previa un PDF que **no** es el objetivo de compilación (la guía de `ci guide`) hasta la siguiente compilación. La UI ofrece "Volver al documento" y desactiva SyncTeX mientras tanto | 22 |
 | Evento  | `trust:changed`       | Go → UI    | `main.TrustChangedEvent` = `core.TrustInfo` (`{ folder, status: 'trusted'\|'untrusted'\|'restricted', rcFiles, currentHash, trustedHash }`) + `{ project }`. Al decidir (banner o `ci trust`) o cuando una compilación ve que el `.latexmkrc` cambió (p. ej. tras un `git pull`). La UI lo aplica si `project` es la carpeta abierta | 21 |
 | Evento  | `config:changed`      | Go → UI    | `main.ConfigChangedEvent` = `config.Entry` + `{ written, folder }`: una clave cambió (p. ej. `ci config autocompile on`). `value`/`scope` son los efectivos para `folder`; la UI los aplica si es la carpeta abierta | 20 |
 | Evento  | `project:health`      | Go → UI    | `core.ProjectHealth` (ver `GetProjectHealth`). Se recalcula con un debounce de 2 s al abrir una carpeta, tras cambios externos y tras guardar; solo se emite si cambió. **Solo avisa:** la UI muestra "⚠ Proyecto grande" con un tooltip y no cambia nada más | 20 |
@@ -316,6 +324,7 @@ Los comandos se aplican al **archivo principal (★)** o, si no hay, al `.tex` a
 | `ci compile borrador` | `make borrador` | Dos pasadas de `xelatex … "\def\borrador{}\input{<doc>}"` (la primera puede fallar). Requiere que el preámbulo use `\borrador` |
 | `ci compile solo <capítulo>` | `make solo CAP=…` | Dos pasadas de `xelatex -jobname=<doc>_<carpeta> "\def\SoloCapitulo{<capítulo>}\input{<doc>}"` → `<doc>_<carpeta>.pdf` |
 | `ci compile completo` | `make pdf` | XeLaTeX → BibTeX → XeLaTeX → XeLaTeX (las XeLaTeX intermedias pueden fallar, como `\|\| true`) |
+| `ci guide` | — | Genera `<UserConfigDir>/creative-ink/guide/ci-guia.tex` **recorriendo el registro** (cada comando, su uso, su descripción y sus formas), lo compila con el orquestador y lo muestra en la vista previa (`preview:show`). Solo usa el núcleo de LaTeX (funciona con BasicTeX) |
 | `ci clean tikz` | `make tikz-clean` | Borra `*.pdf`, `*.md5`, `*.log` y `*.dpth` de `Figures/TiKz_Libraries/externalized/` |
 | `ci clean all` | `make limpiar-todo` | `latexmk -C <doc>.tex` (con `-norc` si el `.latexmkrc` no es de confianza) y los restos (`.brf`, `.run.xml`, `.idx`, `.ilg`, `.ind`, `.blg`, `.bbl`, `.xdv`). Borra también el PDF |
 
@@ -333,7 +342,7 @@ Los comandos se aplican al **archivo principal (★)** o, si no hay, al `.tex` a
 - **Salida compacta:** una línea por pasada (`▶ …`, `✓ 3.2 s` / `✗ falló`), con los errores de TeX o las últimas 15 líneas si algo falla.
 - **Progreso y salida completa (Sección 20, opciones B y C):** la salida de cada pasada **no se guarda en memoria**. Va en streaming a un archivo en disco (`core.OutputSpool`, carpeta temporal privada, 8 ejecuciones, 64 MB como mucho por ejecución), y Go solo conserva una cola de 256 KB para el resumen de errores. Del mismo flujo se extrae el progreso, que llega como `terminal:progress` (pasada, herramienta, página `[n]` y total esperado leído del `.log` anterior: "Pasada 2/4 · xelatex · página 143 de 212 · 34 s", con una barra). El botón **"Salida completa"** de cada comando lee del disco con `ReadTerminalOutput` (trozos de 64 KB; cada 500 ms mientras sigue corriendo; en la vista, los últimos 256 KB). Los comandos de la shell también se guardan en disco (`ExecuteCommandStream`).
 
-**Pendiente:** autocompletado de `ci` en el panel.
+**Registro de comandos (Sección 22, §4.6 paso 4):** `internal/ci/registry.go` declara cada comando (`CommandDef`: `Name`, `Usage`, `Description`, `Subcommands`, `RequiresTrust`, `Run`). `ci.Run` despacha por el registro y rechaza un comando `RequiresTrust` si la carpeta no es de confianza (`ErrNeedsTrust`). De él salen `ci help`, la guía de `ci guide` y `ListTerminalCommands`. En la Terminal CI, Tab completa: con una coincidencia la escribe (y se ve en gris antes); con varias, completa el prefijo común y abre un menú que Tab recorre.
 
 **Seguridad: confianza en el `.latexmkrc` (Sección 21, §4.6 paso 3).** latexmk lee el `.latexmkrc`/`latexmkrc` de la carpeta en la que corre, y ese archivo es **código Perl**. Una carpeta con uno que el usuario no ha aceptado (`untrusted`) se compila siempre con `latexmk -norc` (también `ci clean all`) y **nunca automáticamente**. La UI muestra un banner con "Confiar y recompilar" / "Mantener restringido".
 
@@ -365,13 +374,13 @@ Los comandos se aplican al **archivo principal (★)** o, si no hay, al `.tex` a
   - `latexmk -norc` mientras no sea `trusted`; `compile.auto` rechazado si `untrusted`;
   - `ci trust status|add|remove`, banner en la UI y `WorkspaceState.trustStatus/trustFiles`.
   - *Pendiente:* elegir la política en la instalación (hoy, por defecto, se pregunta por cada carpeta con rc), y que los proyectos creados por el editor nazcan confiados (hoy no traen `.latexmkrc`, así que ya lo son).
-- [ ] **Paso 4 — Registro de comandos `ci`** + guía autogenerada (`.creative-ink/guide/ci-guia.tex` → PDF) + `ci guide`. *La salida en disco y el progreso ya están hechos (Sección 20).*
+- [x] **Paso 4 — Registro de comandos `ci` (Sección 22):** `internal/ci/registry.go` y `ci.Info()`/`ListTerminalCommands`; `ci help` generado; `ci guide` (guía `.tex` del registro, compilada y mostrada con `preview:show`, en `<UserConfigDir>/creative-ink/guide/`); autocompletado con Tab y menú en la Terminal CI; plantillas de proyecto del repositorio y del usuario (`CreateProjectFromTemplate`).
 - [ ] **Paso 5 — Host de plugins** (JSON-RPC por stdio, manifiesto con contribuciones y capacidades).
 
 ### Diseño pendiente (pasos 3 a 5)
 El análisis original del 2026-11-08 quedó resuelto en los pasos 1 y 2: `compile.auto` por proyecto con respaldo del usuario, configuración del proyecto en `.creative-ink-meta` y orden 1 → 2 → 3 → 4. Queda como referencia para lo que falta:
 - **Confianza (paso 3):** almacén del usuario con la ruta real de la carpeta y el **hash del `.latexmkrc`** (si cambia, por ejemplo tras un `git pull`, se vuelve a preguntar). Una carpeta sin confianza y con `latexmkrc`/`.latexmkrc` se compila en **modo restringido** (`latexmk -norc`, con los rc del sistema y del usuario explícitos con `-r`), sin compilación automática y sin `shell-escape`. Una franja discreta en la UI ofrece "Confiar en esta carpeta"; en la terminal, `ci trust` / `ci trust status` / `ci untrust`. Sin `.latexmkrc` no se pregunta nada.
-- **Registro de comandos `ci` (paso 4):** cada comando con nombre, uso, descripción, argumentos y si requiere confianza. `ci help` y la guía en LaTeX se generan del registro, y `ListTerminalCommands()` permitirá autocompletar.
+- **Registro de comandos `ci` (paso 4):** hecho en la Sección 22. Los plugins añadirán sus comandos al mismo registro.
 - **Host de plugins (paso 5; el modelo sigue sin decidir):** recomendación, procesos externos con JSON-RPC por stdin/stdout, al estilo LSP. Un manifiesto declara contribuciones (comandos `ci <plugin> …`, claves `plugin.<id>.*`) y capacidades (leer o escribir en el proyecto, herramientas, red). `ci check` y `ci formatear` (los `tools/*.py` de la tesis) serían el primer plugin.
 - **Claves de configuración previstas:** `compile.engine` (`xelatex`\|`pdflatex`\|`lualatex`), `compile.timeoutMs`, `compile.shellEscape` (requerirá confianza).
 
