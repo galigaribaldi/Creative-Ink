@@ -931,7 +931,7 @@ func TestCreateProjectAndQuickDocument(t *testing.T) {
 	if err != nil || len(screen.Projects) != 1 || len(screen.QuickDocs) != 1 {
 		t.Fatalf("start screen = %+v, %v", screen, err)
 	}
-	if len(screen.Recent) != 2 || screen.Recent[0] != quick {
+	if len(screen.Recent) != 2 || screen.Recent[0].Path != quick || screen.Recent[0].Location != core.LocationQuickDoc {
 		t.Fatalf("recent = %v, want the quick document first", screen.Recent)
 	}
 }
@@ -1586,4 +1586,78 @@ func TestOpenSystemTerminalNeedsAFolder(t *testing.T) {
 	}
 	_, err := a.OpenSystemTerminal()
 	assert.ErrorIs(t, err, core.ErrNoFolder)
+}
+
+// ── Project location (docs/MAP.md §4.7) ────────────────────────────────────
+
+func TestOpenFolderDialogClassifiesTheLocationBeforeOpening(t *testing.T) {
+	a, root := newRepoApp(t)
+	if _, err := a.CreateProject("Tesis"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.OpenProject(filepath.Join(root, "Tesis"))
+	require.NoError(t, err)
+	assert.Equal(t, core.LocationRepository, st.Location.Kind)
+	assert.Empty(t, st.Location.Notices, "a project of the repository needs no notice")
+
+	// External, no git: a light suggestion.
+	plain := t.TempDir()
+	a.pickFolder = func(string) (string, error) { return plain, nil }
+	st, err = a.OpenFolderDialog()
+	require.NoError(t, err)
+	assert.Equal(t, core.LocationExternal, st.Location.Kind)
+	require.NotEmpty(t, st.Location.Notices)
+	assert.Equal(t, core.NoticeInfo, st.Location.Notices[0].Level)
+
+	// External with git: the strong warning, and the terminal works the same.
+	versioned := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(versioned, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(versioned, "main.tex"), []byte("\\documentclass{article}"), 0o644))
+	a.pickFolder = func(string) (string, error) { return versioned, nil }
+	st, err = a.OpenFolderDialog()
+	require.NoError(t, err)
+	assert.Equal(t, versioned, st.Location.GitRoot)
+	assert.Equal(t, core.NoticeExternalGit, st.Location.Notices[0].ID)
+	assert.Equal(t, core.NoticeWarning, st.Location.Notices[0].Level)
+
+	result, err := a.RunTerminalCommand("ci status")
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.Contains(t, result.Output, "fuera de My-Creative-Ink-Repository")
+	assert.Contains(t, result.Output, "esta carpeta es el repositorio")
+	assert.Contains(t, result.Output, "git commit")
+
+	screen, err := a.GetStartScreen()
+	require.NoError(t, err)
+	require.NotEmpty(t, screen.Recent)
+	assert.Equal(t, versioned, screen.Recent[0].Path)
+	assert.Equal(t, core.LocationExternal, screen.Recent[0].Location)
+	assert.Equal(t, versioned, screen.Recent[0].GitRoot)
+}
+
+func TestOpenFolderDialogRejectsTheLauncherAndBroadFolders(t *testing.T) {
+	a, root := newRepoApp(t)
+	before, _ := a.workspace()
+	for _, bad := range []string{root, filepath.Join(root, ".creative-ink"), filepath.Join(root, "tmp-Workspaces")} {
+		a.pickFolder = func(string) (string, error) { return bad, nil }
+		_, err := a.OpenFolderDialog()
+		assert.ErrorIs(t, err, core.ErrBroadFolder, bad)
+	}
+	after, _ := a.workspace()
+	assert.Equal(t, before, after, "a rejected folder is never opened")
+}
+
+func TestSaveAsIntoABroadFolderIsRejectedBeforeWriting(t *testing.T) {
+	a, root := newRepoApp(t)
+	st, err := a.CreateQuickDocument()
+	require.NoError(t, err)
+	target := filepath.Join(root, "suelto.tex") // the launcher's root
+	a.pickSavePath = func(string, string) (string, error) { return target, nil }
+
+	_, err = a.SaveAsDialog("texto")
+	assert.ErrorIs(t, err, core.ErrBroadFolder)
+	_, statErr := os.Stat(target)
+	assert.True(t, os.IsNotExist(statErr), "nothing is written")
+	folder, _ := a.workspace()
+	assert.Equal(t, st.FolderPath, folder)
 }

@@ -113,6 +113,10 @@ type App struct {
 	// from <folder>/.creative-ink-meta whenever the folder changes. When set,
 	// it is compiled instead of the active document.
 	mainFile string
+	// location is where the open folder lives (repository, quick document
+	// or external, git, sync), computed when the folder changes, before it
+	// is opened (core.ClassifyLocation; docs/MAP.md §4.7).
+	location core.ProjectLocation
 
 	// Safe-close protocol (see beforeClose). quit and confirmQuit are
 	// injected: the real ones need a Wails context.
@@ -171,6 +175,10 @@ type SaveResult struct {
 
 // WorkspaceState describes the open folder for the explorer.
 type WorkspaceState struct {
+	// Location of the open folder: kind (repository, quickdoc, external),
+	// git root, sync service and the default notices the Terminal CI and the
+	// Shell show (core.LocationNotice). Zero without a project.
+	Location core.ProjectLocation `json:"location"`
 	// NeedsSetup: first run, the user has not chosen where the central
 	// repository lives yet (see GetRepositoryOptions / SetupRepository).
 	NeedsSetup bool `json:"needsSetup"`
@@ -209,13 +217,21 @@ type StartScreen struct {
 	// StaleAfterHours. Only reported; deleting them is the user's call.
 	StaleQuickDocs  []core.ProjectInfo `json:"staleQuickDocs"`
 	StaleAfterHours int                `json:"staleAfterHours"`
-	// Recent: folders opened before that still exist, newest first.
-	Recent      []string `json:"recent"`
-	PluginsPath string   `json:"pluginsPath"`
-	Warnings    []string `json:"warnings"`
+	// Recent: folders opened before that still exist, newest first, with
+	// their location (an external one is marked, with git or not).
+	Recent      []RecentFolder `json:"recent"`
+	PluginsPath string         `json:"pluginsPath"`
+	Warnings    []string       `json:"warnings"`
 	// Templates for "Nuevo proyecto" (CreateProjectFromTemplate), from
 	// <repo>/.creative-ink/templates and <UserConfigDir>/creative-ink/templates.
 	Templates []core.TemplateInfo `json:"templates"`
+}
+
+// RecentFolder is one entry of the start screen's recent list.
+type RecentFolder struct {
+	Path     string            `json:"path"`
+	Location core.LocationKind `json:"location"`
+	GitRoot  string            `json:"gitRoot"` // "" if not under git (external folders only)
 }
 
 // OpenedFile is a document loaded into the editor.
@@ -700,7 +716,7 @@ func (a *App) GetStartScreen() (StartScreen, error) {
 		QuickDocs:       quick,
 		StaleQuickDocs:  stale,
 		StaleAfterHours: int(core.QuickDocMaxAge / time.Hour),
-		Recent:          []string{},
+		Recent:          []RecentFolder{},
 		PluginsPath:     a.pluginsDir(),
 		Warnings:        []string{},
 		Templates:       core.ListTemplates(a.templateSources()...),
@@ -708,8 +724,10 @@ func (a *App) GetStartScreen() (StartScreen, error) {
 	if a.settingsPath != "" {
 		if s, err := core.ReadSettings(a.settingsPath); err == nil {
 			for _, f := range s.RecentFolders {
-				if dirExists(f) {
-					screen.Recent = append(screen.Recent, f)
+				// Broad folders opened before the rule are no longer offered.
+				if dirExists(f) && core.CheckProjectFolder(root, f) == nil {
+					loc := core.ClassifyLocation(root, f)
+					screen.Recent = append(screen.Recent, RecentFolder{Path: f, Location: loc.Kind, GitRoot: loc.GitRoot})
 				}
 			}
 		}
@@ -762,6 +780,9 @@ func (a *App) OpenProject(path string) (WorkspaceState, error) {
 	}
 	if !a.isOpenableProject(clean) {
 		return WorkspaceState{}, fmt.Errorf("%q no es un proyecto del repositorio ni una carpeta reciente", path)
+	}
+	if err := core.CheckProjectFolder(a.repository(), clean); err != nil {
+		return WorkspaceState{}, err // a recent from before the rule (e.g. Desktop)
 	}
 	doc := core.DefaultTeXFile(clean)
 	if meta, err := core.LoadProjectMeta(clean); err == nil {
@@ -836,6 +857,11 @@ func (a *App) OpenFolderDialog() (WorkspaceState, error) {
 		return WorkspaceState{Canceled: true}, nil
 	}
 	dir = filepath.Clean(dir)
+	// Checked before opening: the launcher, the home folder, Desktop…
+	// are not projects (core.ErrBroadFolder).
+	if err := core.CheckProjectFolder(a.repository(), dir); err != nil {
+		return WorkspaceState{}, err
+	}
 	a.setWorkspace(dir, core.DefaultTeXFile(dir))
 	return a.workspaceState()
 }
@@ -974,11 +1000,20 @@ func (a *App) SaveAsDialog(content string) (WorkspaceState, error) {
 	if !filepath.IsAbs(target) || !core.IsEditableFile(target) {
 		return WorkspaceState{}, core.ErrNotEditable
 	}
+	// Saved elsewhere: that folder is opened, so it must be a project
+	// folder. Checked before writing anything.
+	outside := false
+	if _, err := core.ResolveInFolder(folder, target); err != nil {
+		outside = true
+		if err := core.CheckProjectFolder(a.repository(), filepath.Dir(target)); err != nil {
+			return WorkspaceState{}, fmt.Errorf("guardar como: %w", err)
+		}
+	}
 
 	if err := a.files.SaveDocument(content, target); err != nil {
 		return WorkspaceState{}, err
 	}
-	if _, err := core.ResolveInFolder(folder, target); err != nil {
+	if outside {
 		folder = filepath.Dir(target) // saved elsewhere: open that folder
 	}
 	a.setWorkspace(folder, target)
@@ -1164,6 +1199,7 @@ func (a *App) ciEnv(runID int, output io.Writer) ci.Env {
 		GuideDir:      a.guideDir(),
 		ShowGuide:     a.showGuide,
 		OpenTerminal:  a.OpenSystemTerminal,
+		Location:      a.projectLocation(),
 		Output: compiler.BuildOutput{
 			Log: output,
 			Progress: func(p compiler.BuildProgress) {
@@ -1377,8 +1413,12 @@ func (a *App) setWorkspace(folder, docPath string) {
 	current, _ := a.workspace()
 	changed := folder != current
 	var main string
+	var location core.ProjectLocation
 	if changed {
 		main = loadMainFile(folder)
+		if folder != "" {
+			location = core.ClassifyLocation(a.repository(), folder)
+		}
 	}
 
 	a.mu.Lock()
@@ -1386,6 +1426,7 @@ func (a *App) setWorkspace(folder, docPath string) {
 	if changed {
 		a.mainFile = main
 		a.texDoc = ""
+		a.location = location
 	}
 	if core.IsTeXFile(docPath) {
 		a.texDoc = docPath
@@ -1522,6 +1563,7 @@ func (a *App) workspaceState() (WorkspaceState, error) {
 	}
 	trust := a.trustInfo()
 	return WorkspaceState{
+		Location:       a.projectLocation(),
 		FolderPath:     folder,
 		RepositoryPath: a.repository(),
 		FilePath:       doc,
@@ -1533,6 +1575,13 @@ func (a *App) workspaceState() (WorkspaceState, error) {
 		TrustStatus:    trust.Status,
 		TrustFiles:     trust.RCFiles,
 	}, nil
+}
+
+// projectLocation is the open folder's location (zero without a project).
+func (a *App) projectLocation() core.ProjectLocation {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.location
 }
 
 // lastTeX is the last .tex made active in the open folder (see texDoc).
