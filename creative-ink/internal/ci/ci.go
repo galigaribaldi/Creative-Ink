@@ -69,6 +69,9 @@ type Env struct {
 	GuideDir string
 	// ShowGuide asks the App to show the compiled guide in the preview.
 	ShowGuide func(pdf string) error
+	// OpenTerminal opens the OS's own terminal in the open folder and
+	// returns its name (nil = `ci terminal` unavailable).
+	OpenTerminal func() (string, error)
 
 	// Overridable in tests.
 	runPasses    func(ctx context.Context, workdir string, passes []compiler.Pass, after func() string, out compiler.BuildOutput) (string, error)

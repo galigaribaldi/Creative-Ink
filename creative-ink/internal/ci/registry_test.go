@@ -22,7 +22,7 @@ func TestRegistryHasTheNativeCommands(t *testing.T) {
 		assert.NotEmpty(t, c.Usage, c.Name)
 		assert.NotEmpty(t, c.Subcommands, c.Name)
 	}
-	assert.Equal(t, []string{"help", "compile", "clean", "config", "trust", "guide"}, names)
+	assert.Equal(t, []string{"help", "compile", "clean", "config", "trust", "guide", "terminal"}, names)
 }
 
 func TestHelpIsGeneratedFromTheRegistry(t *testing.T) {
@@ -109,4 +109,20 @@ func TestRequiresTrustIsEnforced(t *testing.T) {
 	_, err = Run(context.Background(), "ci peligroso", env)
 	require.NoError(t, err)
 	assert.True(t, ran)
+}
+
+func TestCiTerminalOpensTheSystemTerminal(t *testing.T) {
+	opened := 0
+	env := Env{OpenTerminal: func() (string, error) { opened++; return "Terminal", nil }}
+	out, err := Run(context.Background(), "ci terminal", env)
+	require.NoError(t, err)
+	assert.Equal(t, 1, opened)
+	assert.Contains(t, out, "Terminal abierta")
+
+	_, err = Run(context.Background(), "ci terminal ahora", env)
+	assert.ErrorIs(t, err, ErrUsage)
+	assert.Equal(t, 1, opened, "con argumentos no se abre nada")
+
+	_, err = Run(context.Background(), "ci terminal", Env{})
+	assert.Error(t, err, "sin OpenTerminal no está disponible")
 }
