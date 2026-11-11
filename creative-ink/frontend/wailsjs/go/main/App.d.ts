@@ -38,6 +38,8 @@ export function OpenFolderDialog():Promise<main.WorkspaceState>;
 
 export function OpenProject(arg1:string):Promise<main.WorkspaceState>;
 
+export function OpenSystemTerminal():Promise<string>;
+
 export function ReadTerminalOutput(arg1:number,arg2:number):Promise<core.OutputChunk>;
 
 export function RefreshWorkspace():Promise<main.WorkspaceState>;

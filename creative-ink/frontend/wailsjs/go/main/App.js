@@ -66,6 +66,10 @@ export function OpenProject(arg1) {
   return window['go']['main']['App']['OpenProject'](arg1);
 }
 
+export function OpenSystemTerminal() {
+  return window['go']['main']['App']['OpenSystemTerminal']();
+}
+
 export function ReadTerminalOutput(arg1, arg2) {
   return window['go']['main']['App']['ReadTerminalOutput'](arg1, arg2);
 }
