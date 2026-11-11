@@ -14,6 +14,10 @@ export function CreateProject(arg1) {
   return window['go']['main']['App']['CreateProject'](arg1);
 }
 
+export function CreateProjectFromTemplate(arg1, arg2) {
+  return window['go']['main']['App']['CreateProjectFromTemplate'](arg1, arg2);
+}
+
 export function CreateQuickDocument() {
   return window['go']['main']['App']['CreateQuickDocument']();
 }
@@ -36,6 +40,10 @@ export function GetStartScreen() {
 
 export function GetWorkspace() {
   return window['go']['main']['App']['GetWorkspace']();
+}
+
+export function ListTerminalCommands() {
+  return window['go']['main']['App']['ListTerminalCommands']();
 }
 
 export function LoadFile(arg1) {

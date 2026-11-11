@@ -4,12 +4,15 @@ import {main} from '../models';
 import {config} from '../models';
 import {core} from '../models';
 import {system} from '../models';
+import {ci} from '../models';
 
 export function CancelTerminalCommand():Promise<void>;
 
 export function ConfirmClose(arg1:boolean):Promise<void>;
 
 export function CreateProject(arg1:string):Promise<main.WorkspaceState>;
+
+export function CreateProjectFromTemplate(arg1:string,arg2:string):Promise<main.WorkspaceState>;
 
 export function CreateQuickDocument():Promise<main.WorkspaceState>;
 
@@ -22,6 +25,8 @@ export function GetRepositoryOptions():Promise<system.RepositoryOptions>;
 export function GetStartScreen():Promise<main.StartScreen>;
 
 export function GetWorkspace():Promise<main.WorkspaceState>;
+
+export function ListTerminalCommands():Promise<Array<ci.CommandInfo>>;
 
 export function LoadFile(arg1:string):Promise<main.OpenedFile>;
 
