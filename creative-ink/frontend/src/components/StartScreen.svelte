@@ -2,7 +2,9 @@
   import { onMount } from 'svelte'
   import { GetStartScreen, RevealQuickDocuments } from '../../wailsjs/go/main/App.js'
   import { createProject, createQuickDocument, openFolder, openProject } from '../lib/actions.js'
+  import { importer, startImport } from '../lib/import.svelte.js'
   import { ui } from '../lib/ui.svelte.js'
+  import ImportDialog from './ImportDialog.svelte'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
   /** @type {import('../../wailsjs/go/models').main.StartScreen | null} */
@@ -59,6 +61,7 @@
   }
 
   function onkeydown(event) {
+    if (importer.preview) return // Escape closes the import summary first
     if (event.key === 'Escape' && closable) ui.startOpen = false
   }
 </script>
@@ -187,10 +190,19 @@
     {#if error}<p class="error" role="alert">{error}</p>{/if}
 
     <footer>
+      <button class="link" onclick={() => run(startImport)} disabled={busy} title="Copiar una carpeta al repositorio o abrirla en su ubicación">
+        Importar proyecto…
+      </button>
       <button class="link" onclick={openFolder} disabled={busy}>Abrir otra carpeta…</button>
     </footer>
   </div>
 </div>
+
+{#if importer.preview}
+  {#key importer.preview.id}
+    <ImportDialog preview={importer.preview} />
+  {/key}
+{/if}
 
 <style>
   .backdrop {
@@ -487,6 +499,7 @@
   footer {
     display: flex;
     justify-content: flex-end;
+    gap: 1.25rem;
   }
 
   /* Links are not accent-coloured (A2). */

@@ -99,7 +99,8 @@ Pruebas de rendimiento con la tesis (unas 200 páginas, imágenes pesadas, TikZ,
 - [ ] Ajustar con esos datos los umbrales del detector (`core/project_health.go`) y de la cancelación (`compiler/scheduler.go`)
 
 ### En curso: `DEV-feat-Ubicacion-proyectos` (Sección 23, nace de `DEV-feat-UX-Editor`)
-Proyectos fuera del repositorio (§4.7). Fase 1 (ubicación, git, avisos en la terminal, `ci status`, carpetas demasiado amplias) hecha y **probada a mano el 2026-11-11** con `Trabajos-Maestria-Urbanismo` (repositorio git con ~30 documentos). Fases 2 (importar) y 3 (guardar proyecto en otra ruta) pendientes: las decisiones del 2026-11-10, las observaciones de la prueba (crear carpetas desde el explorador, Makefile y git en la Shell) y lo que falta decidir están en §4.7.
+Proyectos fuera del repositorio (§4.7). Fase 1 (ubicación, git, avisos en la terminal, `ci status`, carpetas demasiado amplias) hecha y **probada a mano el 2026-11-11** con `Trabajos-Maestria-Urbanismo` (repositorio git con ~30 documentos). Fase 2 (importar: `InspectImport`/`ImportProject`, colecciones, `COPIA-DE-GIT.md`) **hecha el 2026-11-11, pendiente de prueba manual**. Fase 3 (guardar proyecto en otra ruta) pendiente. Las decisiones, las observaciones de la prueba (crear carpetas desde el explorador, Makefile y git en la Shell, guardar un `.md` recompila) y lo que falta decidir están en §4.7.
+- **Orden acordado con el usuario (2026-11-11):** al terminar las pruebas de §4.7 y **antes de empezar otra sección**, retomar la deuda de UI/UX del layout (MAP §4.4, #9).
 
 ### Pendientes (siguientes secciones; no empezar sin confirmación)
 - **§4.6 paso 5 — Host de plugins** (JSON-RPC por stdio; el modelo de plugins sigue sin decidir).

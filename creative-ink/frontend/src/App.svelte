@@ -15,6 +15,7 @@
   } from './lib/actions.js'
   import { listenCompileEvents, resetCompilation } from './lib/compilation.svelte.js'
   import { listenConfigEvents } from './lib/config.svelte.js'
+  import { listenImportEvents } from './lib/import.svelte.js'
   import { listenTerminalEvents } from './lib/terminal.svelte.js'
   import { ui } from './lib/ui.svelte.js'
   import { compileTarget, workspace } from './lib/workspace.svelte.js'
@@ -35,6 +36,7 @@
   onDestroy(listenConfigEvents(() => workspace.currentFolderPath))
   // Terminal runs: id of the spooled output and build progress.
   onDestroy(listenTerminalEvents())
+  onDestroy(listenImportEvents())
   void initWorkspace()
 
   // A different compile target (another file, or the main file changed): the
