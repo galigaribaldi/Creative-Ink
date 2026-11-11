@@ -1,15 +1,13 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode/utf8"
 )
 
 // Project templates (docs/MAP.md §1, `.creative-ink/templates/`): every
@@ -121,69 +119,10 @@ func CreateProjectFromTemplate(root, name, templateDir string) (dir, mainTex str
 }
 
 func copyTemplate(src, dst, title string) error {
-	files, total := 0, int64(0)
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, path)
-		if rel == "." {
-			return nil
-		}
-		name := d.Name()
-		hidden := strings.HasPrefix(name, ".")
-		switch {
-		case d.Type()&fs.ModeSymlink != 0:
-			return nil // a link could point outside the template
-		case d.IsDir():
-			if hidden || skippedDirs[name] {
-				return filepath.SkipDir
-			}
-			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
-		case !d.Type().IsRegular(), hidden && !templateHiddenFiles[name], isBuildArtifact(name):
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if files++; files > maxTemplateFiles {
-			return fmt.Errorf("la plantilla tiene más de %d archivos", maxTemplateFiles)
-		}
-		if total += info.Size(); total > maxTemplateBytes {
-			return fmt.Errorf("la plantilla ocupa más de %d MB", maxTemplateBytes>>20)
-		}
-		return copyTemplateFile(path, filepath.Join(dst, rel), title)
+	return CopyTree(context.Background(), src, dst, CopyOptions{
+		Title:       title,
+		HiddenFiles: templateHiddenFiles,
+		MaxFiles:    maxTemplateFiles,
+		MaxBytes:    maxTemplateBytes,
 	})
-}
-
-// copyTemplateFile copies one file (never replacing one). UTF-8 text files
-// get their title placeholders replaced; anything else is copied as is.
-func copyTemplateFile(src, dst, title string) error {
-	if IsEditableFile(src) {
-		if data, err := os.ReadFile(src); err == nil && len(data) <= MaxEditableBytes && utf8.Valid(data) {
-			text := string(data)
-			for _, p := range titlePlaceholders {
-				text = strings.ReplaceAll(text, p, title)
-			}
-			return writeNew(dst, text)
-		}
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return fmt.Errorf("create %q: %w", dst, err)
-	}
-	_, cerr := io.Copy(out, in)
-	if err := out.Close(); cerr == nil {
-		cerr = err
-	}
-	return cerr
 }

@@ -94,6 +94,12 @@ var hostProbes = probes{
 	repository: DetectRepositoryOptions,
 }
 
+// FreeBytes is the free space of the disk that holds path (the import
+// checks it before copying a project into the repository).
+func FreeBytes(path string) (uint64, error) {
+	return hostProbes.freeDiskOn(path)
+}
+
 // CheckHealth audits the LaTeX toolchain and the hardware of the host system.
 func CheckHealth() HealthStatus {
 	return checkHealth(hostProbes)

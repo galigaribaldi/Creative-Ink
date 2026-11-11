@@ -121,10 +121,15 @@ func TestCheckProjectFolderRejectsBroadFolders(t *testing.T) {
 }
 
 func TestGitCopyNoteExplainsHowToKeepTheOriginalInSync(t *testing.T) {
-	note := GitCopyNoteFile("/home/u/tesis")
-	assert.Contains(t, note, "COPIA")
-	assert.Contains(t, note, "/home/u/tesis")
-	assert.Contains(t, note, "git push")
-	assert.Contains(t, note, "git pull")
+	whole := GitCopyNoteFile(ImportInfo{From: "/home/u/tesis", GitRoot: "/home/u/tesis", WithHistory: true})
+	assert.Contains(t, whole, "COPIA")
+	assert.Contains(t, whole, "/home/u/tesis")
+	assert.Contains(t, whole, "git push")
+	assert.Contains(t, whole, "git pull")
+
+	part := GitCopyNoteFile(ImportInfo{From: "/home/u/repo/Registro1", GitRoot: "/home/u/repo"})
+	assert.Contains(t, part, "NO tiene historial")
+	assert.Contains(t, part, "/home/u/repo/Registro1")
+	assert.Contains(t, part, "Abrir en su ubicación")
 	assert.Len(t, gitSaveSteps, 5, "GitCopyNotice must not alter the shared steps")
 }
