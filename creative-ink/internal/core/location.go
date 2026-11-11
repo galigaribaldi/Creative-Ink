@@ -50,6 +50,10 @@ func ClassifyLocation(repoRoot, folder string) ProjectLocation {
 		if isInside(filepath.Join(repoRoot, QuickDocsDirName), folder) {
 			loc.Kind = LocationQuickDoc
 		}
+		// A copy of a git project: reminded every time it is opened.
+		if meta, err := LoadProjectMeta(folder); err == nil && meta.Imported != nil && meta.Imported.GitRoot != "" {
+			loc.Notices = append(loc.Notices, GitCopyNotice(*meta.Imported))
+		}
 		return loc
 	}
 	home, _ := os.UserHomeDir()

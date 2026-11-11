@@ -136,6 +136,14 @@ type App struct {
 	// (the worker's OnFinished and `ci compile`), so it needs no lock of its own.
 	lastPreview previewStamp
 
+	// Imports (import_app.go): previews by id (the source path never comes
+	// from the UI), and the copy in progress. freeBytes is injectable.
+	importMu     sync.Mutex
+	imports      map[string]core.ImportPreview
+	importOrder  []string
+	importCancel context.CancelFunc
+	freeBytes    func(path string) (uint64, error)
+
 	// termMu guards termCancel: at most one terminal command runs at a time.
 	termMu     sync.Mutex
 	termCancel context.CancelFunc
@@ -345,6 +353,7 @@ func NewApp() *App {
 	a.quit = a.quitWails
 	a.confirmQuit = a.dialogConfirmQuit
 	a.openTerminal = system.OpenTerminal
+	a.freeBytes = system.FreeBytes
 	if previews, err := core.NewPDFSnapshots("", previewSnapshotsKept); err == nil {
 		a.previews = previews
 	} else {
@@ -373,6 +382,7 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 		confirmQuit:  func(string) bool { return true },
 		healthDelay:  healthCheckDelay,
 		openTerminal: func(string) (string, error) { return "", errors.New("terminal del sistema no disponible") },
+		freeBytes:    func(string) (uint64, error) { return 1 << 40, nil },
 	}
 	if folder != "" {
 		a.mainFile = loadMainFile(folder)
@@ -428,6 +438,7 @@ func (a *App) startup(ctx context.Context) {
 // does not outlive the window.
 func (a *App) shutdown(_ context.Context) {
 	a.CancelTerminalCommand()
+	a.CancelImport() // its goroutine removes the half-made copy
 	a.stopWatching()
 	a.stopHealthChecks()
 	a.compiles.Close(shutdownTimeout)

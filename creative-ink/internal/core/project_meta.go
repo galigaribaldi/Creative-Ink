@@ -25,6 +25,17 @@ type ProjectMeta struct {
 	// Config is the project layer of the configuration service
 	// (internal/config): raw JSON values by key id. It overrides the user's.
 	Config map[string]json.RawMessage `json:"config,omitempty"`
+	// Imported records where an imported project was copied from
+	// (docs/MAP.md §4.7). With a GitRoot, every time the copy is opened the
+	// terminal reminds that it is a copy of a git project (git-copy).
+	Imported *ImportInfo `json:"imported,omitempty"`
+}
+
+// ImportInfo is the origin of an imported project.
+type ImportInfo struct {
+	From        string `json:"from"`              // original folder (absolute)
+	GitRoot     string `json:"gitRoot,omitempty"` // repository it belonged to ("" = not under git)
+	WithHistory bool   `json:"withHistory"`       // its .git was copied
 }
 
 // LoadProjectMeta reads folder/.creative-ink-meta. A missing file is not an
