@@ -8,10 +8,16 @@
 /**
  * @typedef {{ name: string, path: string, isDir: boolean, editable: boolean, children?: FileNode[] }} FileNode
  * @typedef {'' | 'trusted' | 'untrusted' | 'restricted'} TrustStatus
- * @typedef {{ needsSetup: boolean, needsStart: boolean, repositoryPath: string, canceled: boolean, folderPath: string, filePath: string, texFilePath: string, mainFilePath: string, autoCompile: boolean, tree: FileNode, truncated: boolean, trustStatus: TrustStatus, trustFiles: string[] }} WorkspaceState
+ * @typedef {{ id: string, level: 'info' | 'warning', title: string, text: string, steps: string[] }} LocationNotice
+ * @typedef {{ kind: '' | 'repository' | 'quickdoc' | 'external', folder: string, gitRoot: string, syncService: string, notices: LocationNotice[] }} ProjectLocation
+ * @typedef {{ location: ProjectLocation, needsSetup: boolean, needsStart: boolean, repositoryPath: string, canceled: boolean, folderPath: string, filePath: string, texFilePath: string, mainFilePath: string, autoCompile: boolean, tree: FileNode, truncated: boolean, trustStatus: TrustStatus, trustFiles: string[] }} WorkspaceState
  * @typedef {{ kind: 'files' | 'size' | 'images', message: string }} ProjectWarning
  */
 import { config } from './config.svelte.js'
+import { noteLocation } from './terminal.svelte.js'
+
+/** @type {ProjectLocation} */
+const NO_LOCATION = { kind: '', folder: '', gitRoot: '', syncService: '', notices: [] }
 
 export const workspace = $state({
   /** Absolute path of the open folder ("" before the first load). */
@@ -58,7 +64,14 @@ export const workspace = $state({
    */
   trustStatus: '',
   /** The rc files found there (".latexmkrc", "latexmkrc"). @type {string[]} */
-  trustFiles: []
+  trustFiles: [],
+  /**
+   * Where the open folder lives (Go decides, before opening it): outside
+   * the repository it carries default notices, light without git and strong
+   * with git (docs/MAP.md §4.7). The terminal only shows them.
+   * @type {ProjectLocation}
+   */
+  location: NO_LOCATION
 })
 
 /** Applies a WorkspaceState returned by Go. */
@@ -68,8 +81,12 @@ export function applyWorkspace(/** @type {WorkspaceState} */ state) {
   if (state.folderPath !== workspace.currentFolderPath || state.filePath === workspace.secondaryFilePath) {
     workspace.secondaryFilePath = ''
   }
+  const folderChanged = state.folderPath !== workspace.currentFolderPath
   // Another project: its own analysis arrives later (project:health).
-  if (state.folderPath !== workspace.currentFolderPath) workspace.healthWarnings = []
+  if (folderChanged) workspace.healthWarnings = []
+  workspace.location = state.location ?? NO_LOCATION
+  // Opening a folder outside the repository leaves a line in both terminals.
+  if (folderChanged && state.folderPath) noteLocation(workspace.location)
   config.autoCompile = state.autoCompile
   applyTrust(state)
   workspace.needsSetup = state.needsSetup

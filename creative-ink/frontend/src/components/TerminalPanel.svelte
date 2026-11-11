@@ -2,6 +2,7 @@
   import { onMount, tick, untrack } from 'svelte'
   import { ListTerminalCommands } from '../../wailsjs/go/main/App.js'
   import { openSystemTerminal } from '../lib/actions.js'
+  import LocationBanner from './LocationBanner.svelte'
   import { CI_COMMANDS, cancelCommand, commandHistory, runCommand, terminal, toggleFullOutput } from '../lib/terminal.svelte.js'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
@@ -241,6 +242,14 @@
       {/if}
     {/if}
     {#each entries as entry (entry.id)}
+      {#if entry.kind === 'notice' && entry.notice}
+        <!-- Where the folder just opened lives (Go's default messages). -->
+        <div class="entry notice-line notice-{entry.notice.level}" role="note">
+          <div class="notice-title">{entry.notice.level === 'warning' ? '⚠' : 'ℹ'} {entry.notice.title}</div>
+          <div class="notice-text">{entry.notice.text}</div>
+          {#if entry.notice.steps?.length}<pre>{entry.notice.steps.join('\n')}</pre>{/if}
+        </div>
+      {:else}
       {@const info = entry.status === 'running' ? null : summary(entry)}
       <div class="entry">
         <!-- The same prompt as the input: every run is easy to spot. -->
@@ -280,8 +289,11 @@
           {/if}
         </div>
       </div>
+      {/if}
     {/each}
   </div>
+
+  <LocationBanner />
 
   {#if nativeError}
     <div class="notice" role="alert">
@@ -386,6 +398,31 @@
 
   .command {
     color: var(--text-primary);
+  }
+
+  /* Location notices in the history: light (info) or strong (warning). */
+  .notice-line {
+    padding: 0.25rem 0 0.25rem 0.6rem;
+    border-left: 2px solid var(--border-strong);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    line-height: 1.45;
+    color: var(--text-muted);
+  }
+
+  .notice-line.notice-warning {
+    border-left-color: var(--warning);
+    background: var(--warning-soft);
+    color: var(--text-secondary);
+  }
+
+  .notice-title {
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .notice-warning .notice-title {
+    color: var(--warning);
   }
 
   /* The Terminal CI's own prompt (A2, accent rule 4): sets it apart from

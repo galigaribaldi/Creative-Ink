@@ -43,7 +43,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
    - **`DEV`**: integración. Recibe las ramas de trabajo terminadas.
    - **`DEV-feat-<Tema>`**: ramas de trabajo, que **nacen siempre de `DEV`**. Ahí se escriben los cambios y se proponen los commits.
    - Integración siempre con *fast-forward* (`git merge --ff-only`), para que la historia siga lineal. Al integrar, la rama de trabajo se borra.
-   - **Rama de trabajo actual: `DEV-feat-Rendimiento-latex`**: pruebas de rendimiento con documentos grandes (la tesis) antes de empezar otra cosa.
+   - **Rama de trabajo actual: `DEV-feat-Ubicacion-proyectos`** (Sección 23), apilada sobre `DEV-feat-UX-Editor`, que aún no está integrada en `DEV`: integra primero `DEV-feat-UX-Editor` y después esta, las dos con `--ff-only`. Las pruebas de rendimiento con la tesis (`DEV-feat-Rendimiento-latex`) siguen pendientes.
    - Antes de proponer commits, confirma la rama con `git branch --show-current`. Si es `main` o `DEV`, propón primero crear o cambiar a la rama `DEV-feat-…` correspondiente.
 
 ## Gotchas técnicos
@@ -61,6 +61,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 - **macOS necesita el menú nativo (`menu.go`):** sin el rol Edición, ⌘C/⌘X/⌘V no funcionan en WKWebView. Los atajos de la app viven en `App.svelte` (`runCommand`) y hacen `preventDefault`, así el menú no los repite. En Linux y Windows no se crea menú.
 - **Archivos de texto:** Go solo abre UTF-8 sin bytes nulos y de hasta 8 MB (`FileManager.LoadText`). Nunca abras un archivo que el puente pueda alterar: el autoguardado lo reescribiría.
 - **Editor dividido:** un mismo archivo nunca puede estar en los dos paneles (los autoguardados se pisarían). Usa siempre `openFile()` de `actions.js`; no asignes `workspace.currentFilePath` directamente desde otros módulos.
+- **Ubicación del proyecto (Sección 23, §4.7):** la decide Go al cambiar de carpeta (`core.ClassifyLocation`, en `App.setWorkspace`). Los textos de los avisos viven **solo** en `core/location_messages.go`; no los escribas en Svelte. Toda vía nueva para abrir una carpeta (importar, guardar proyecto como…) debe pasar antes por `core.CheckProjectFolder`.
 - **Convención de nombres:** todo lo que crea el editor usa `-` en lugar de espacios y sin acentos (`core.Slugify`). Nunca crees carpetas o archivos con espacios.
 - **Dependencias del frontend:** `npm install` se ejecuta **siempre en `creative-ink/frontend/`**. En `creative-ink/` crea un `package.json` y un `node_modules` sueltos (ya pasó una vez).
 
@@ -96,6 +97,9 @@ Pruebas de rendimiento con la tesis (unas 200 páginas, imágenes pesadas, TikZ,
 - [ ] Programador: reiniciar `wails dev` y probar la Sección 20: abrir sin compilar (PDF `cached`), `ci config autocompile on|off`, ⌘S, `ci compile completo` con progreso y "Salida completa", el aviso "⚠ Proyecto grande" y escribir con la vista previa recargándose
 - [ ] Medir: `durationMs` (primera e incrementales), CPU mientras se escribe, tiempo de carga y de dibujo del PDF, y memoria del WebView tras 20 compilaciones
 - [ ] Ajustar con esos datos los umbrales del detector (`core/project_health.go`) y de la cancelación (`compiler/scheduler.go`)
+
+### En curso: `DEV-feat-Ubicacion-proyectos` (Sección 23, nace de `DEV-feat-UX-Editor`)
+Proyectos fuera del repositorio (§4.7). Fase 1 (ubicación, git, avisos en la terminal, `ci status`, carpetas demasiado amplias) hecha; fases 2 (importar) y 3 (guardar proyecto en otra ruta) pendientes, con las decisiones del 2026-11-10 ya registradas en §4.7.
 
 ### Pendientes (siguientes secciones; no empezar sin confirmación)
 - **§4.6 paso 5 — Host de plugins** (JSON-RPC por stdio; el modelo de plugins sigue sin decidir).

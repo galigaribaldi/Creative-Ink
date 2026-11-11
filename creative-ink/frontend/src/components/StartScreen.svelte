@@ -163,10 +163,16 @@
           <section>
             <h2>Recientes</h2>
             <ul>
-              {#each screen.recent as path (path)}
+              {#each screen.recent as r (r.path)}
                 <li>
-                  <button onclick={() => run(() => openProject(path))} disabled={busy} title={path}>
-                    <span class="name">{baseName(path)}</span>
+                  <button onclick={() => run(() => openProject(r.path))} disabled={busy} title={r.path}>
+                    <span class="name">{baseName(r.path)}</span>
+                    {#if r.location === 'external' && r.gitRoot}
+                      <!-- Strong: git outside the repository (work there, do not copy). -->
+                      <span class="badge badge-git" title="Repositorio git fuera de Creative-ink ({r.gitRoot}): trabaja en su ubicación">git · fuera del repositorio</span>
+                    {:else if r.location === 'external'}
+                      <span class="badge" title="Fuera de My-Creative-Ink-Repository">fuera del repositorio</span>
+                    {/if}
                   </button>
                 </li>
               {/each}
@@ -453,6 +459,23 @@
     flex-shrink: 0;
     color: var(--text-muted);
     font-size: var(--text-xs);
+  }
+
+  /* Where a recent folder lives: light outside the repository, strong with git. */
+  .badge {
+    flex-shrink: 0;
+    padding: 0 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+
+  .badge-git {
+    border-color: var(--warning);
+    background: var(--warning-soft);
+    color: var(--warning);
   }
 
   code {
