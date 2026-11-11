@@ -31,7 +31,9 @@ export const ui = $state({
   /** Pane that last had the focus: the explorer opens files there. @type {EditorPane} */
   focusedPane: 'primary',
   /** Width of the main pane in the split editor (0.2–0.8), dragged on the divider. */
-  splitRatio: readSplitRatio()
+  splitRatio: readSplitRatio(),
+  /** The terminals' location banner was hidden (until another folder opens). */
+  locationBannerHidden: false
 })
 
 function readSplitRatio() {

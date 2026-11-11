@@ -69,6 +69,8 @@ const FULL_POLL_MS = 500
 /**
  * @typedef {{
  *   id: number,
+ *   kind: 'command' | 'notice',
+ *   notice: import('./workspace.svelte.js').LocationNotice | null,
  *   context: TerminalContext,
  *   command: string,
  *   display: string,
@@ -127,6 +129,8 @@ export async function runCommand(input, context) {
 
   terminal.entries.push({
     id: nextId++,
+    kind: 'command',
+    notice: null,
     context,
     command,
     display,
@@ -163,6 +167,37 @@ export async function runCommand(input, context) {
     terminal.running = false
     terminal.runningContext = ''
   }
+}
+
+/**
+ * Logs the location notices of a folder just opened (Go's default
+ * messages) in both terminals, so the history shows where each run
+ * happened. Nothing for projects of the repository (no notices).
+ * @param {import('./workspace.svelte.js').ProjectLocation} location
+ */
+export function noteLocation(location) {
+  for (const notice of location.notices ?? []) {
+    for (const context of /** @type {TerminalContext[]} */ (['ci', 'shell'])) {
+      terminal.entries.push({
+        id: nextId++,
+        kind: 'notice',
+        notice,
+        context,
+        command: '',
+        display: '',
+        output: '',
+        status: 'done',
+        exitCode: 0,
+        timedOut: false,
+        canceled: false,
+        durationMs: 0,
+        runId: 0,
+        progress: null,
+        full: { open: false, text: '', next: 0, size: 0, done: true, truncated: false, loading: false, error: '' }
+      })
+    }
+  }
+  while (terminal.entries.length > MAX_ENTRIES) terminal.entries.shift()
 }
 
 /** Stops the running command (the Go side kills its whole process group). */
