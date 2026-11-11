@@ -18,6 +18,13 @@ const createNoWindow = 0x08000000
 // passed as-is (CmdLine): cmd.exe has its own quoting rules, and Go's
 // argument escaping would mangle quoted paths.
 //
+// The line is `cmd.exe /d /s /c "<command>"` (cmdLine). Without /s, a
+// command that starts with a quote and has more than two quotes
+// (`"C:\Program Files\Git\bin\git.exe" log "--format=%h %s"`) loses its
+// first and last quote and breaks; with /s, cmd.exe strips exactly the
+// pair added here. /d skips the AutoRun commands from the registry, so a
+// command runs the same on every machine.
+//
 // Known limit: on timeout or cancel only cmd.exe is killed; grandchildren
 // may survive (a Job Object would be needed to kill the whole tree).
 func shellCommand(ctx context.Context, command string) *exec.Cmd {
@@ -27,7 +34,7 @@ func shellCommand(ctx context.Context, command string) *exec.Cmd {
 	}
 	cmd := exec.CommandContext(ctx, shell)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CmdLine:       `"` + shell + `" /c ` + command,
+		CmdLine:       cmdLine(shell, command),
 		HideWindow:    true,
 		CreationFlags: createNoWindow,
 	}
