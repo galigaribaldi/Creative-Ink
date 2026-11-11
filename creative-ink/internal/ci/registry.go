@@ -119,7 +119,29 @@ func init() {
 			Subcommands: []Subcommand{{"guide", "Guía de todos los comandos (se regenera del registro)"}},
 			Run:         runGuide,
 		},
+		{
+			Name:        "terminal",
+			Usage:       "ci terminal",
+			Description: "Abre la terminal del sistema en la carpeta del proyecto",
+			Subcommands: []Subcommand{{"terminal", "Terminal nativa (sudo, comandos interactivos, tu shell)"}},
+			Run:         runTerminal,
+		},
 	}
+}
+
+// runTerminal is `ci terminal`: the App opens the OS's terminal.
+func runTerminal(_ context.Context, args []string, env Env) (string, error) {
+	if len(args) > 0 {
+		return "", usage("ci terminal no lleva argumentos")
+	}
+	if env.OpenTerminal == nil {
+		return "", errors.New("la terminal del sistema no está disponible")
+	}
+	name, err := env.OpenTerminal()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("✓ %s abierta en la carpeta del proyecto\n", name), nil
 }
 
 // Commands returns the registry, in display order.

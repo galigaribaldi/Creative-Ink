@@ -85,6 +85,9 @@ type App struct {
 	pickFolder   func(defaultDir string) (string, error)
 	pickSavePath func(defaultDir, defaultName string) (string, error)
 	pickNewPath  func(defaultDir, defaultName string) (string, error)
+	// openTerminal opens the OS's own terminal in a folder and returns its
+	// name (system.OpenTerminal; injected so tests never open a window).
+	openTerminal func(dir string) (string, error)
 	// repoOptions proposes repository locations for this OS (injectable).
 	repoOptions func() system.RepositoryOptions
 	// settingsPath is the per-user settings file ("" = cannot persist).
@@ -325,6 +328,7 @@ func NewApp() *App {
 	}
 	a.quit = a.quitWails
 	a.confirmQuit = a.dialogConfirmQuit
+	a.openTerminal = system.OpenTerminal
 	if previews, err := core.NewPDFSnapshots("", previewSnapshotsKept); err == nil {
 		a.previews = previews
 	} else {
@@ -352,6 +356,7 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 		closeTimeout: closeFlushTimeout,
 		confirmQuit:  func(string) bool { return true },
 		healthDelay:  healthCheckDelay,
+		openTerminal: func(string) (string, error) { return "", errors.New("terminal del sistema no disponible") },
 	}
 	if folder != "" {
 		a.mainFile = loadMainFile(folder)
@@ -777,6 +782,19 @@ func (a *App) RevealQuickDocuments() error {
 	return system.RevealInFileManager(core.QuickDocsDir(root))
 }
 
+// OpenSystemTerminal opens the OS's own terminal (Terminal, the Linux
+// desktop's emulator, Windows Terminal or cmd.exe) in the open folder and
+// returns its name. Go chooses the folder: the UI sends nothing, so no
+// text from the WebView ever reaches the launcher. For what the integrated
+// terminal cannot do (sudo, interactive prompts, the user's own shell).
+func (a *App) OpenSystemTerminal() (string, error) {
+	folder, _ := a.workspace()
+	if folder == "" {
+		return "", core.ErrNoFolder
+	}
+	return a.openTerminal(folder)
+}
+
 func (a *App) isOpenableProject(dir string) bool {
 	if root := a.repository(); root != "" {
 		rel, err := filepath.Rel(root, dir)
@@ -1145,6 +1163,7 @@ func (a *App) ciEnv(runID int, output io.Writer) ci.Env {
 		LatexmkRCArgs: rcArgs,
 		GuideDir:      a.guideDir(),
 		ShowGuide:     a.showGuide,
+		OpenTerminal:  a.OpenSystemTerminal,
 		Output: compiler.BuildOutput{
 			Log: output,
 			Progress: func(p compiler.BuildProgress) {

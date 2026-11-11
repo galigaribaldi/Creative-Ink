@@ -40,7 +40,9 @@ export const CI_COMMANDS = [
   'config unset ',
   'trust status',
   'trust add',
-  'trust remove'
+  'trust remove',
+  'guide',
+  'terminal'
 ]
 
 /**

@@ -1,6 +1,7 @@
 <script>
   import { onMount, tick, untrack } from 'svelte'
   import { ListTerminalCommands } from '../../wailsjs/go/main/App.js'
+  import { openSystemTerminal } from '../lib/actions.js'
   import { CI_COMMANDS, cancelCommand, commandHistory, runCommand, terminal, toggleFullOutput } from '../lib/terminal.svelte.js'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
@@ -27,6 +28,12 @@
   // `ci` works without a project (help, config); the shell needs a folder.
   let disabled = $derived(!isCI && !workspace.currentFolderPath)
   let busyElsewhere = $derived(terminal.running && terminal.runningContext !== context)
+
+  // Shell: the OS's own terminal, for what this one cannot do (sudo, prompts).
+  let nativeError = $state('')
+  async function openNative() {
+    nativeError = await openSystemTerminal()
+  }
 
   // ── Terminal CI completion, from Go's `ci` registry ─────────────────────
   /** @typedef {{ completion: string, syntax: string, description: string }} Completion */
@@ -228,8 +235,8 @@
         <p class="hint">
           <span class="shell-prompt">$</span> Shell del sistema en <strong>{folderName}</strong>: la línea se
           ejecuta tal cual (p. ej. <code>git status</code>, <code>tlmgr info siunitx</code>). Sin TTY: los
-          comandos interactivos (sudo, editores) no funcionan. Límite de 30 s · <code>clear</code> limpia ·
-          ↑/↓ historial.
+          comandos interactivos (sudo, editores) no funcionan; para ellos, <strong>Terminal del sistema</strong>.
+          Límite de 30 s · <code>clear</code> limpia · ↑/↓ historial.
         </p>
       {/if}
     {/if}
@@ -276,6 +283,12 @@
     {/each}
   </div>
 
+  {#if nativeError}
+    <div class="notice" role="alert">
+      <span>{nativeError}</span>
+      <button class="link" onclick={() => (nativeError = '')}>Cerrar</button>
+    </div>
+  {/if}
   <div class="input-row">
     <span class="cwd" title={workspace.currentFolderPath}>{folderName}</span>
     {#if isCI}
@@ -316,6 +329,22 @@
     </div>
     {#if terminal.running && !busyElsewhere}
       <button class="stop" onclick={cancelCommand} title="Cancelar (Ctrl+C)">Detener</button>
+    {/if}
+    {#if !isCI}
+      <button
+        class="native"
+        onclick={openNative}
+        disabled={!workspace.currentFolderPath}
+        title="Abrir la terminal del sistema en {folderName} (sudo, comandos interactivos, tu shell)"
+      >
+        <!-- Lucide "square-terminal" -->
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m7 11 2-2-2-2" />
+          <path d="M11 13h4" />
+          <rect width="18" height="18" x="3" y="3" rx="2" />
+        </svg>
+        Terminal del sistema
+      </button>
     {/if}
   </div>
 </div>
@@ -593,5 +622,59 @@
 
   .stop:hover {
     background: var(--surface-hover);
+  }
+
+  /* Secondary action (A2), like Detener, with its thin-stroke icon (A5). */
+  .native {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.1rem 0.6rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
+  }
+
+  .native:hover:not(:disabled) {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+  }
+
+  .native:disabled {
+    color: var(--text-disabled);
+    cursor: default;
+  }
+
+  .native:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .native svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: var(--icon-stroke);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .notice {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.25rem 0.75rem;
+    border-top: 1px solid var(--border);
+    color: var(--danger);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
   }
 </style>

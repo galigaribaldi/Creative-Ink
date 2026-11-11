@@ -1559,3 +1559,31 @@ func TestCreateProjectFromTemplate(t *testing.T) {
 	_, err = a.CreateProjectFromTemplate("Otro", t.TempDir())
 	assert.ErrorIs(t, err, core.ErrUnknownTemplate)
 }
+
+func TestOpenSystemTerminalUsesTheOpenFolder(t *testing.T) {
+	a, _ := newTestApp(t, func(context.Context, string, string) (string, error) { return "", nil })
+	folder, _ := a.workspace()
+	var got string
+	a.openTerminal = func(dir string) (string, error) { got = dir; return "Terminal", nil }
+
+	name, err := a.OpenSystemTerminal()
+	require.NoError(t, err)
+	assert.Equal(t, "Terminal", name)
+	assert.Equal(t, folder, got)
+
+	// Through the Terminal CI: `ci terminal` reaches the same binding.
+	result, err := a.RunTerminalCommand("ci terminal")
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.Contains(t, result.Output, "Terminal abierta")
+}
+
+func TestOpenSystemTerminalNeedsAFolder(t *testing.T) {
+	a := newApp("", "", func(context.Context, string, string) (string, error) { return "", nil })
+	a.openTerminal = func(string) (string, error) {
+		t.Fatal("no debe abrir una terminal sin carpeta")
+		return "", nil
+	}
+	_, err := a.OpenSystemTerminal()
+	assert.ErrorIs(t, err, core.ErrNoFolder)
+}

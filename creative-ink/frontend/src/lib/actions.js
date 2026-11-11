@@ -12,6 +12,7 @@ import {
   NewFileDialog,
   OpenFolderDialog,
   OpenProject,
+  OpenSystemTerminal,
   RefreshWorkspace,
   RequestCompile,
   SaveAsDialog,
@@ -406,6 +407,19 @@ export function runCommand(id) {
  */
 export function listenMenuEvents() {
   return EventsOn(MENU_COMMAND, (/** @type {{ id: string }} */ event) => runCommand(event.id))
+}
+
+/**
+ * Opens the OS's own terminal in the open folder (Go picks the folder and
+ * the emulator). Returns an error message or ''.
+ */
+export async function openSystemTerminal() {
+  try {
+    await OpenSystemTerminal()
+    return ''
+  } catch (err) {
+    return String(err)
+  }
 }
 
 /**
