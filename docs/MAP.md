@@ -10,6 +10,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
 ├── .claude/skills/go-wails-ipc-bridge/ ← skill de backend Go/Wails (fachada, eventos, async)
 ├── .claude/skills/latex-toolchain-orchestrator/ ← skill de compilación con latexmk
 ├── docs/MAP.md                   ← este archivo
+├── docs/WORKFLOW_BLUEPRINT.md    ← la metodología de trabajo (Tríada, contrato IPC, deuda técnica), generalizada para otros proyectos
 └── creative-ink/                 ← app Wails (generada por `wails init`)
     ├── main.go                   ← arranque de Wails: ventana, assets, Bind(&App{})
     ├── app.go                    ← struct App: ÚNICA fachada IPC expuesta al frontend
