@@ -99,7 +99,7 @@ Pruebas de rendimiento con la tesis (unas 200 páginas, imágenes pesadas, TikZ,
 - [ ] Ajustar con esos datos los umbrales del detector (`core/project_health.go`) y de la cancelación (`compiler/scheduler.go`)
 
 ### En curso: `DEV-feat-Ubicacion-proyectos` (Sección 23, nace de `DEV-feat-UX-Editor`)
-Proyectos fuera del repositorio (§4.7). Fase 1 (ubicación, git, avisos en la terminal, `ci status`, carpetas demasiado amplias) hecha; fases 2 (importar) y 3 (guardar proyecto en otra ruta) pendientes, con las decisiones del 2026-11-10 ya registradas en §4.7.
+Proyectos fuera del repositorio (§4.7). Fase 1 (ubicación, git, avisos en la terminal, `ci status`, carpetas demasiado amplias) hecha y **probada a mano el 2026-11-11** con `Trabajos-Maestria-Urbanismo` (repositorio git con ~30 documentos). Fases 2 (importar) y 3 (guardar proyecto en otra ruta) pendientes: las decisiones del 2026-11-10, las observaciones de la prueba (crear carpetas desde el explorador, Makefile y git en la Shell) y lo que falta decidir están en §4.7.
 
 ### Pendientes (siguientes secciones; no empezar sin confirmación)
 - **§4.6 paso 5 — Host de plugins** (JSON-RPC por stdio; el modelo de plugins sigue sin decidir).
@@ -107,4 +107,6 @@ Proyectos fuera del repositorio (§4.7). Fase 1 (ubicación, git, avisos en la t
 - **Decisión abierta:** ofrecer o no `--shell-escape` (externalización de TikZ).
 - **Escalabilidad (§4.5):** prioridad baja para latexmk (`nice`), valores por defecto según el hardware, progreso de latexmk en la compilación automática.
 - **UI:** cambiar el repositorio desde la UI (hoy hay que borrar `settings.json`); un selector de tema claro/oscuro.
+- **Deuda UI/UX necesaria (MAP §4.4, #9, 2026-11-11):** layout rígido. Sin divisor Editor | Vista previa ni en el panel inferior; visor PDF de una página, sin zoom ni scroll continuo, fijo a la derecha; como mucho dos archivos a la vista (revisar con el usuario la decisión "sin pestañas").
+- **Guardar un archivo que no es de LaTeX (`.md`, `.txt`…) recompila el documento** (MAP §4.7, observación 4): Go debería decidir si el guardado afecta al objetivo (familia TeX o `<doc>.fls`).
 - **Windows:** Job Objects para que la shell de la terminal mate a todos los nietos (latexmk y `ci` ya usan `taskkill /T`); compilar en Linux con `-tags webkit2_41` para tener rangos HTTP.
