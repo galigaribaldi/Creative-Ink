@@ -1,3 +1,62 @@
+export namespace ci {
+	
+	export class SubcommandInfo {
+	    syntax: string;
+	    description: string;
+	    completion: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SubcommandInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.syntax = source["syntax"];
+	        this.description = source["description"];
+	        this.completion = source["completion"];
+	    }
+	}
+	export class CommandInfo {
+	    name: string;
+	    usage: string;
+	    description: string;
+	    requiresTrust: boolean;
+	    subcommands: SubcommandInfo[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CommandInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.usage = source["usage"];
+	        this.description = source["description"];
+	        this.requiresTrust = source["requiresTrust"];
+	        this.subcommands = this.convertValues(source["subcommands"], SubcommandInfo);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace config {
 	
 	export class Entry {
@@ -190,6 +249,23 @@ export namespace core {
 		    return a;
 		}
 	}
+	
+	export class TemplateInfo {
+	    name: string;
+	    path: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TemplateInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.source = source["source"];
+	    }
+	}
 
 }
 
@@ -230,6 +306,7 @@ export namespace main {
 	    recent: string[];
 	    pluginsPath: string;
 	    warnings: string[];
+	    templates: core.TemplateInfo[];
 	
 	    static createFrom(source: any = {}) {
 	        return new StartScreen(source);
@@ -245,6 +322,7 @@ export namespace main {
 	        this.recent = source["recent"];
 	        this.pluginsPath = source["pluginsPath"];
 	        this.warnings = source["warnings"];
+	        this.templates = this.convertValues(source["templates"], core.TemplateInfo);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
