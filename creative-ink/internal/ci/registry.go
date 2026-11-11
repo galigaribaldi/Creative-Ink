@@ -120,6 +120,13 @@ func init() {
 			Run:         runGuide,
 		},
 		{
+			Name:        "status",
+			Usage:       "ci status",
+			Description: "Dónde está el proyecto (repositorio, documento rápido o fuera), git, sincronización, objetivo, confianza y compilación automática",
+			Subcommands: []Subcommand{{"status", "Estado del proyecto abierto y sus avisos"}},
+			Run:         func(_ context.Context, args []string, env Env) (string, error) { return runStatus(args, env) },
+		},
+		{
 			Name:        "terminal",
 			Usage:       "ci terminal",
 			Description: "Abre la terminal del sistema en la carpeta del proyecto",

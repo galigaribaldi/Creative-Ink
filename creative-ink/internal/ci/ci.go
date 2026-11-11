@@ -72,6 +72,9 @@ type Env struct {
 	// OpenTerminal opens the OS's own terminal in the open folder and
 	// returns its name (nil = `ci terminal` unavailable).
 	OpenTerminal func() (string, error)
+	// Location is where the open folder lives (zero Kind = no project),
+	// for `ci status`.
+	Location core.ProjectLocation
 
 	// Overridable in tests.
 	runPasses    func(ctx context.Context, workdir string, passes []compiler.Pass, after func() string, out compiler.BuildOutput) (string, error)

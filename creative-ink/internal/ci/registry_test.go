@@ -22,7 +22,7 @@ func TestRegistryHasTheNativeCommands(t *testing.T) {
 		assert.NotEmpty(t, c.Usage, c.Name)
 		assert.NotEmpty(t, c.Subcommands, c.Name)
 	}
-	assert.Equal(t, []string{"help", "compile", "clean", "config", "trust", "guide", "terminal"}, names)
+	assert.Equal(t, []string{"help", "compile", "clean", "config", "trust", "guide", "status", "terminal"}, names)
 }
 
 func TestHelpIsGeneratedFromTheRegistry(t *testing.T) {
@@ -125,4 +125,30 @@ func TestCiTerminalOpensTheSystemTerminal(t *testing.T) {
 
 	_, err = Run(context.Background(), "ci terminal", Env{})
 	assert.Error(t, err, "sin OpenTerminal no está disponible")
+}
+
+func TestCiStatusShowsTheLocationAndItsNotices(t *testing.T) {
+	out, err := Run(context.Background(), "ci status", Env{})
+	require.NoError(t, err)
+	assert.Contains(t, out, "No hay ningún proyecto abierto")
+
+	folder := "/home/u/tesis"
+	env := Env{
+		Target: folder + "/main.tex",
+		Location: core.ProjectLocation{
+			Kind: core.LocationExternal, Folder: folder, GitRoot: folder, SyncService: "Dropbox",
+			Notices: []core.LocationNotice{core.ExternalGitNotice(folder, folder), core.SyncedNotice("Dropbox")},
+		},
+	}
+	out, err = Run(context.Background(), "ci status", env)
+	require.NoError(t, err)
+	assert.Contains(t, out, "⚠ fuera de My-Creative-Ink-Repository")
+	assert.Contains(t, out, "esta carpeta es el repositorio")
+	assert.Contains(t, out, "⚠ Dropbox")
+	assert.Contains(t, out, "main.tex")
+	assert.Contains(t, out, "⚠ Repositorio git fuera de Creative-ink")
+	assert.Contains(t, out, "git push")
+
+	_, err = Run(context.Background(), "ci status ya", env)
+	assert.ErrorIs(t, err, ErrUsage)
 }
