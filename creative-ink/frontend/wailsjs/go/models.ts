@@ -126,6 +126,26 @@ export namespace core {
 		    return a;
 		}
 	}
+	export class LocationNotice {
+	    id: string;
+	    level: string;
+	    title: string;
+	    text: string;
+	    steps: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LocationNotice(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.level = source["level"];
+	        this.title = source["title"];
+	        this.text = source["text"];
+	        this.steps = source["steps"];
+	    }
+	}
 	export class OutputChunk {
 	    runId: number;
 	    data: string;
@@ -249,6 +269,44 @@ export namespace core {
 		    return a;
 		}
 	}
+	export class ProjectLocation {
+	    kind: string;
+	    folder: string;
+	    gitRoot: string;
+	    syncService: string;
+	    notices: LocationNotice[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectLocation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.folder = source["folder"];
+	        this.gitRoot = source["gitRoot"];
+	        this.syncService = source["syncService"];
+	        this.notices = this.convertValues(source["notices"], LocationNotice);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	export class TemplateInfo {
 	    name: string;
@@ -285,6 +343,22 @@ export namespace main {
 	        this.content = source["content"];
 	    }
 	}
+	export class RecentFolder {
+	    path: string;
+	    location: string;
+	    gitRoot: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecentFolder(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.location = source["location"];
+	        this.gitRoot = source["gitRoot"];
+	    }
+	}
 	export class SaveResult {
 	    saved: boolean;
 	
@@ -303,7 +377,7 @@ export namespace main {
 	    quickDocs: core.ProjectInfo[];
 	    staleQuickDocs: core.ProjectInfo[];
 	    staleAfterHours: number;
-	    recent: string[];
+	    recent: RecentFolder[];
 	    pluginsPath: string;
 	    warnings: string[];
 	    templates: core.TemplateInfo[];
@@ -319,7 +393,7 @@ export namespace main {
 	        this.quickDocs = this.convertValues(source["quickDocs"], core.ProjectInfo);
 	        this.staleQuickDocs = this.convertValues(source["staleQuickDocs"], core.ProjectInfo);
 	        this.staleAfterHours = source["staleAfterHours"];
-	        this.recent = source["recent"];
+	        this.recent = this.convertValues(source["recent"], RecentFolder);
 	        this.pluginsPath = source["pluginsPath"];
 	        this.warnings = source["warnings"];
 	        this.templates = this.convertValues(source["templates"], core.TemplateInfo);
@@ -412,6 +486,7 @@ export namespace main {
 	    }
 	}
 	export class WorkspaceState {
+	    location: core.ProjectLocation;
 	    needsSetup: boolean;
 	    needsStart: boolean;
 	    repositoryPath: string;
@@ -432,6 +507,7 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.location = this.convertValues(source["location"], core.ProjectLocation);
 	        this.needsSetup = source["needsSetup"];
 	        this.needsStart = source["needsStart"];
 	        this.repositoryPath = source["repositoryPath"];
