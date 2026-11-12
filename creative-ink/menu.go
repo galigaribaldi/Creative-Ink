@@ -76,6 +76,9 @@ func (a *App) buildMenu(goos string) *menu.Menu {
 	a.addSubmenu(root, "Ver", []menuEntry{
 		{"toggle-sidebar", "Explorador", cmd("b")},
 		{"toggle-terminal", "Terminal CI", cmd("j")},
+		{"mode-pdf", "Modo: Solo PDF", nil},
+		{"mode-minimal", "Modo: Minimalista", nil},
+		{"mode-multi", "Modo: Multiventana (pestañas)", nil},
 		{"split-editor", "Dividir el editor", cmd("\\")},
 		{"toggle-preview", "Vista previa", combo("p", keys.OptionOrAltKey)},
 		{"preview-side", "Cambiar de lado la vista previa", nil},

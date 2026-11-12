@@ -27,8 +27,11 @@ import {
   UntrustProject
 } from '../../wailsjs/go/main/App.js'
 import { EventsOn } from '../../wailsjs/runtime/runtime.js'
+import { addTab, paneOf, removeTab, tabs } from './tabs.svelte.js'
 import {
+  saveEditorMode,
   setDirExpanded,
+  setPreviewVisible,
   showToast,
   swapPreviewSide,
   toggleBottomTab,
@@ -246,16 +249,69 @@ export function listenWorkspaceEvents() {
  * @param {string} path absolute
  */
 export function openFile(path) {
+  // A file is never in both panes: if one has it (as a tab), it opens there.
+  const owner = paneOf(path)
+  /** @type {import('./ui.svelte.js').EditorPane} */
+  let pane = ui.splitEditor && ui.focusedPane === 'secondary' ? 'secondary' : 'primary'
+  if (owner === 'primary' || (owner === 'secondary' && ui.splitEditor)) pane = owner
   // Leaving the untitled document (the editor refuses it if it has text).
-  if (workspace.untitled && !(ui.splitEditor && ui.focusedPane === 'secondary')) {
-    workspace.untitled = false
-    workspace.currentFilePath = path
+  const leavingUntitled = pane === 'primary' && workspace.untitled
+  if (leavingUntitled) workspace.untitled = false
+  const current = pane === 'primary' ? workspace.currentFilePath : workspace.secondaryFilePath
+  // Multiventana: one more tab. Minimalista: it takes the place of the shown one.
+  addTab(pane, path, current, ui.editorMode !== 'multi')
+  ui.focusedPane = pane
+  if (path === current && !leavingUntitled) return void editors[pane]?.focus()
+  if (pane === 'primary') workspace.currentFilePath = path
+  else workspace.secondaryFilePath = path
+}
+
+/**
+ * Closes a tab. The shown one is saved first (a failed save keeps it open);
+ * the neighbour tab is shown instead, and the second pane closes with its
+ * last tab.
+ * @param {import('./ui.svelte.js').EditorPane} pane
+ * @param {string} path
+ */
+export async function closeTab(pane, path) {
+  const active = pane === 'primary' ? workspace.currentFilePath : workspace.secondaryFilePath
+  if (path === active) {
+    const editor = editors[pane]
+    if (editor && !(await editor.waitIdle())) {
+      showToast('No se pudo guardar el archivo: la pestaña sigue abierta.', 'warning')
+      return
+    }
+  }
+  const next = removeTab(pane, path)
+  if (path !== active) return
+  if (pane === 'secondary' && !next) {
+    await closeSplit()
     return
   }
-  if (path === workspace.currentFilePath) return focusPane('primary')
-  if (ui.splitEditor && path === workspace.secondaryFilePath) return focusPane('secondary')
-  if (ui.splitEditor && ui.focusedPane === 'secondary') workspace.secondaryFilePath = path
-  else workspace.currentFilePath = path
+  if (pane === 'primary') workspace.currentFilePath = next
+  else workspace.secondaryFilePath = next
+}
+
+/** Closes the untitled tab: refused while it has text (it would be lost). */
+export function closeUntitled() {
+  if (editors.primary?.hasUntitledText()) return showToast(UNTITLED_BLOCKS.replace('otro proyecto', 'cerrarlo'), 'warning')
+  workspace.untitled = false
+  workspace.currentFilePath = tabs.primary.at(-1) ?? ''
+}
+
+/**
+ * Editor mode (ActionBar menu, Ver menu): 'pdf' Solo PDF, 'minimal' one
+ * code pane + viewer, 'multi' panes with tabs. Leaving 'multi' closes the
+ * second pane (saving it first); the tabs stay for when 'multi' returns.
+ * @param {import('./ui.svelte.js').EditorMode} mode
+ */
+export async function setEditorMode(mode) {
+  ui.modeMenuOpen = false
+  if (mode === ui.editorMode) return
+  if (mode !== 'multi' && ui.splitEditor && !(await closeSplit())) return
+  if (mode === 'pdf') setPreviewVisible(true)
+  saveEditorMode(mode)
+  if (mode !== 'pdf') editors.primary?.focus()
 }
 
 function focusPane(/** @type {import('./ui.svelte.js').EditorPane} */ pane) {
@@ -277,12 +333,15 @@ export const FILE_DRAG_TYPE = 'application/x-creative-ink-path'
  */
 export function openInSecondaryPane(path) {
   if (!isEditableInTree(workspace.fileTree, path)) return false
-  if (path === workspace.currentFilePath) {
+  if (path === workspace.currentFilePath || paneOf(path) === 'primary') {
     focusPane('primary')
+    if (path !== workspace.currentFilePath) openFile(path)
     return true
   }
+  if (ui.editorMode !== 'multi') saveEditorMode('multi') // two panes side by side
   ui.splitEditor = true
   ui.focusedPane = 'secondary'
+  addTab('secondary', path, workspace.secondaryFilePath)
   if (path === workspace.secondaryFilePath) editors.secondary?.focus()
   else workspace.secondaryFilePath = path
   return true
@@ -302,15 +361,23 @@ function isEditableInTree(node, path) {
  */
 export async function toggleSplitEditor() {
   if (!ui.splitEditor) {
+    if (ui.editorMode !== 'multi') saveEditorMode('multi') // two panes = Multiventana
     ui.splitEditor = true
     ui.focusedPane = 'secondary'
     ui.sidebarOpen = true // the explorer is how a file gets into the new pane
     return
   }
-  if (editors.secondary && !(await editors.secondary.waitIdle())) return // keep it: unsaved
+  await closeSplit()
+}
+
+/** Closes the second pane after saving it; false if it could not be saved. */
+async function closeSplit() {
+  if (editors.secondary && !(await editors.secondary.waitIdle())) return false // keep it: unsaved
   ui.splitEditor = false
   workspace.secondaryFilePath = ''
+  tabs.secondary = []
   focusPane('primary')
+  return true
 }
 
 /**
@@ -493,6 +560,9 @@ const COMMANDS = {
   'toggle-sidebar': toggleSidebar,
   'toggle-terminal': () => toggleBottomTab('terminal'),
   'split-editor': toggleSplitEditor,
+  'mode-pdf': () => setEditorMode('pdf'),
+  'mode-minimal': () => setEditorMode('minimal'),
+  'mode-multi': () => setEditorMode('multi'),
   'search-project': () => void import('./search.svelte.js').then((m) => m.focusSearch()),
   'toggle-preview': togglePreview,
   'preview-side': swapPreviewSide,
