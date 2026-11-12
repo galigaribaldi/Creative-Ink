@@ -6,6 +6,8 @@ import {core} from '../models';
 import {system} from '../models';
 import {ci} from '../models';
 
+export function CancelImport():Promise<void>;
+
 export function CancelTerminalCommand():Promise<void>;
 
 export function ConfirmClose(arg1:boolean):Promise<void>;
@@ -26,15 +28,25 @@ export function GetStartScreen():Promise<main.StartScreen>;
 
 export function GetWorkspace():Promise<main.WorkspaceState>;
 
+export function ImportProject(arg1:main.ImportOptions):Promise<void>;
+
+export function InspectDrop(arg1:string):Promise<core.ImportPreview>;
+
+export function InspectImport():Promise<core.ImportPreview>;
+
 export function ListTerminalCommands():Promise<Array<ci.CommandInfo>>;
 
 export function LoadFile(arg1:string):Promise<main.OpenedFile>;
 
 export function NewFileDialog():Promise<main.WorkspaceState>;
 
+export function OpenBlankDocument():Promise<main.WorkspaceState>;
+
 export function OpenFile(arg1:string):Promise<main.OpenedFile>;
 
 export function OpenFolderDialog():Promise<main.WorkspaceState>;
+
+export function OpenImportInPlace(arg1:string):Promise<main.WorkspaceState>;
 
 export function OpenProject(arg1:string):Promise<main.WorkspaceState>;
 
