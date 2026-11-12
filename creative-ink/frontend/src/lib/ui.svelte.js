@@ -1,7 +1,7 @@
 // Purely visual UI state (which drawer is open, which modal is visible).
 // It lives only in the frontend and is never sent to Go.
 
-/** @typedef {'explorer'} SidebarTool */
+/** @typedef {'explorer' | 'search'} SidebarTool */
 /** @typedef {'problems' | 'terminal' | 'shell'} BottomTab  'terminal' = Terminal CI */
 /** @typedef {'primary' | 'secondary'} EditorPane */
 
