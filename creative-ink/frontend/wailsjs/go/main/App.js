@@ -14,6 +14,14 @@ export function ConfirmClose(arg1) {
   return window['go']['main']['App']['ConfirmClose'](arg1);
 }
 
+export function CreateFile(arg1, arg2) {
+  return window['go']['main']['App']['CreateFile'](arg1, arg2);
+}
+
+export function CreateFolder(arg1, arg2) {
+  return window['go']['main']['App']['CreateFolder'](arg1, arg2);
+}
+
 export function CreateProject(arg1) {
   return window['go']['main']['App']['CreateProject'](arg1);
 }

@@ -454,6 +454,7 @@ export namespace main {
 	    path: string;
 	    content: string;
 	    compileTarget: string;
+	    affectsBuild: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new OpenedFile(source);
@@ -464,6 +465,7 @@ export namespace main {
 	        this.path = source["path"];
 	        this.content = source["content"];
 	        this.compileTarget = source["compileTarget"];
+	        this.affectsBuild = source["affectsBuild"];
 	    }
 	}
 	export class RecentFolder {
@@ -484,6 +486,7 @@ export namespace main {
 	}
 	export class SaveResult {
 	    saved: boolean;
+	    affectsBuild: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SaveResult(source);
@@ -492,6 +495,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.saved = source["saved"];
+	        this.affectsBuild = source["affectsBuild"];
 	    }
 	}
 	export class StartScreen {
