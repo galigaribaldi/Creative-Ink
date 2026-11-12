@@ -25,13 +25,13 @@
     gotoLine
   } from '@codemirror/search'
   import { LoadFile, OpenFile, RequestCompile, SaveContent } from '../../wailsjs/go/main/App.js'
-  import { registerEditor } from '../lib/actions.js'
+  import { UNTITLED_BLOCKS, registerEditor } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
   import { config } from '../lib/config.svelte.js'
   import { editorTheme } from '../lib/editor-theme.js'
   import { languageFor } from '../lib/languages.js'
   import { sync, syncForward } from '../lib/synctex.svelte.js'
-  import { ui } from '../lib/ui.svelte.js'
+  import { showToast, ui } from '../lib/ui.svelte.js'
   import { baseName, compileTarget, isTeXPath, workspace } from '../lib/workspace.svelte.js'
 
   /**
@@ -93,6 +93,7 @@
     dirty: 'Sin guardar',
     saving: 'Guardando…',
     error: 'Error al guardar',
+    untitled: `Sin título · ${SAVE_SHORTCUT} para guardar`,
     loadError: 'No se pudo abrir el archivo'
   }
 
@@ -107,6 +108,9 @@
   // docFile is the file whose text is in CodeMirror. Every save captures it
   // at flush time, so text can never be written to another file.
   let docFile = ''
+  // untitled: CodeMirror holds the ⌘N document (main pane only). It has no
+  // file yet: no autosave, no compile; ⌘S saves it (actions.js saveUntitled).
+  let untitled = false
   let timer = null // pending save debounce
   let compileTimer = null // pending compile debounce
   let saving = false // a SaveContent call is in flight
@@ -133,6 +137,10 @@
   // Keystrokes only reset timers; nothing crosses the IPC bridge here.
   function scheduleSave() {
     dirty = true
+    if (untitled) {
+      status = 'untitled' // nothing to save to until ⌘S picks a name
+      return
+    }
     status = 'dirty'
     clearTimeout(timer)
     timer = setTimeout(flush, SAVE_DELAY_MS)
@@ -174,6 +182,13 @@
     if (saving) {
       pending = true
       return
+    }
+    // The untitled document is "clean" only while it is empty: with text,
+    // waitIdle() reports unsaved edits (so nothing switches away from it and
+    // closing the window asks first).
+    if (untitled) {
+      dirty = (view?.state.doc.length ?? 0) > 0
+      return settle()
     }
     if (!view || !docFile || !dirty) return settle()
 
@@ -334,19 +349,61 @@
 
   /** Renames the current document in place (Save As): same text, new file. */
   function adopt(path) {
+    if (untitled) {
+      // ⌘S saved the untitled document: it is that file now.
+      untitled = false
+      dirty = false
+      status = 'saved'
+    }
     docFile = path
     filePath = path
     fileName = baseName(path)
   }
 
+  /** ⌘N: an empty untitled document, after saving the current file. */
+  async function showUntitled() {
+    if (!view) return
+    if (untitled) return view.focus()
+    const seq = ++switchSeq
+    setEditable(false)
+    const clean = await waitIdle()
+    if (seq !== switchSeq) return
+    if (!clean) {
+      workspace.untitled = false // the current file could not be saved: stay on it
+      setEditable(docFile !== '')
+      return
+    }
+    clearTimeout(compileTimer)
+    compileTimer = null
+    untitled = true
+    docFile = ''
+    dirty = false
+    view.setState(createState('', true, 'sin-titulo.tex'))
+    filePath = ''
+    fileName = 'Sin título'
+    status = 'untitled'
+    errorMsg = ''
+    select('')
+    view.focus()
+  }
+
   /** Switches the editor to `target`, saving the current file first. */
   async function switchTo(target) {
-    if (!view || target === docFile) return
+    if (!view || (target === docFile && !untitled)) return
     const seq = ++switchSeq
     setEditable(false)
 
     const clean = await waitIdle()
     if (seq !== switchSeq) return
+    if (!clean && untitled) {
+      // The untitled document has text: never thrown away silently.
+      workspace.untitled = true
+      setEditable(true)
+      select('')
+      showToast(UNTITLED_BLOCKS.replace('otro proyecto', 'otro archivo'), 'warning')
+      return
+    }
+    untitled = false
     if (!clean) {
       // The current file could not be saved: stay on it instead of losing edits.
       sync.reveal = null // a pending SyncTeX jump must not fire later
@@ -384,6 +441,8 @@
       isDirty: () => dirty || saving || timer !== null,
       getContent: () => view?.state.doc.toString() ?? '',
       adopt,
+      isUntitled: () => untitled,
+      hasUntitledText: () => untitled && (view?.state.doc.length ?? 0) > 0,
       focus: () => view?.focus(),
       run: (id) => {
         const command = COMMANDS[id]
@@ -423,9 +482,11 @@
 
   // The only place where the editor's document changes: when the selected
   // file changes. CodeMirror itself is never remounted.
+  // ⌘N shows the untitled document in the main pane instead.
   $effect(() => {
     const target = isPrimary ? workspace.currentFilePath : workspace.secondaryFilePath
-    untrack(() => void switchTo(target))
+    const wantUntitled = isPrimary && workspace.untitled
+    untrack(() => void (wantUntitled ? showUntitled() : switchTo(target)))
   })
 </script>
 
