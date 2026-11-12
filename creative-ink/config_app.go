@@ -49,6 +49,9 @@ func (a *App) SetConfig(key, value, scope string) (config.Entry, error) {
 		return config.Entry{}, err
 	}
 	folder, _ := a.workspace()
+	if sc == config.ScopeProject && a.openSingleFile() != "" {
+		return config.Entry{}, errSingleFile // it would write .creative-ink-meta in Desktop
+	}
 	switch sc {
 	case config.ScopeUser:
 		if a.settingsPath == "" {

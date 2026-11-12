@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"creative-ink/internal/core"
@@ -99,6 +100,13 @@ func (a *App) InspectImport() (core.ImportPreview, error) {
 	if err != nil {
 		return core.ImportPreview{}, err
 	}
+	p.ID = newImportID()
+	return a.finishPreview(root, p), nil
+}
+
+// finishPreview adds what needs the App (free disk space, the notices) and
+// keeps the preview under its id.
+func (a *App) finishPreview(root string, p core.ImportPreview) core.ImportPreview {
 	if free, err := a.freeBytes(root); err == nil {
 		p.FreeBytes = free
 		if p.CanCopy && uint64(p.Bytes)+importSpaceMargin > free {
@@ -107,10 +115,9 @@ func (a *App) InspectImport() (core.ImportPreview, error) {
 				core.FormatBytes(p.Bytes), core.FormatBytes(int64(free)))
 		}
 	}
-	p.ID = newImportID()
 	p.Notices = core.ImportNotices(p)
 	a.rememberImport(p)
-	return p, nil
+	return p
 }
 
 // ImportProject starts copying a previewed folder into the repository as
@@ -134,9 +141,12 @@ func (a *App) ImportProject(opts ImportOptions) error {
 		opts.MainFile = p.MainCandidates[0]
 	}
 	withGit := opts.IncludeGit && p.HasGit
-	dir, err := core.ImportedProjectDir(root, opts.Name)
-	if err != nil {
-		return err
+	dir := "" // a single file goes to a new quick document (chosen when copying)
+	if p.File == "" {
+		var err error
+		if dir, err = core.ImportedProjectDir(root, opts.Name); err != nil {
+			return err
+		}
 	}
 	need := p.Bytes
 	if withGit {
@@ -177,7 +187,14 @@ func (a *App) OpenImportInPlace(id string) (WorkspaceState, error) {
 	if !ok {
 		return WorkspaceState{}, errImportUnknown
 	}
-	if err := core.CheckProjectFolder(a.repository(), p.Source); err != nil {
+	root := a.repository()
+	if p.File != "" {
+		return a.openFileInPlace(root, p.File)
+	}
+	if project := repositoryProjectOf(root, filepath.Join(p.Source, "x")); project != "" && project != p.Source {
+		p.Source = project // a subfolder of a project of the repository: the project
+	}
+	if err := core.CheckProjectFolder(root, p.Source); err != nil {
 		return WorkspaceState{}, err
 	}
 	doc := core.DefaultTeXFile(p.Source)
@@ -188,9 +205,49 @@ func (a *App) OpenImportInPlace(id string) (WorkspaceState, error) {
 	return a.workspaceState()
 }
 
+// openFileInPlace opens one text file where it is: inside the repository,
+// its project; in a project folder elsewhere, that folder; in Desktop or
+// Downloads (not projects), only that file (single-file mode).
+func (a *App) openFileInPlace(root, file string) (WorkspaceState, error) {
+	if !core.IsEditableFile(file) {
+		return WorkspaceState{}, core.ErrNotEditable
+	}
+	if project := repositoryProjectOf(root, file); project != "" {
+		a.setWorkspace(project, file)
+		return a.workspaceState()
+	}
+	parent := filepath.Dir(file)
+	if core.CheckProjectFolder(root, parent) == nil {
+		a.setWorkspace(parent, file)
+	} else {
+		a.setWorkspaceMode(parent, file, file)
+	}
+	return a.workspaceState()
+}
+
+// repositoryProjectOf returns the project of the repository that holds file
+// (<repo>/<Project>/ or <repo>/tmp-Workspaces/<doc>/), "" if none.
+func repositoryProjectOf(root, file string) string {
+	if root == "" || !isInsideDir(root, file) {
+		return ""
+	}
+	rel, _ := filepath.Rel(root, file)
+	parts := strings.Split(rel, string(filepath.Separator))
+	switch {
+	case len(parts) >= 3 && parts[0] == core.QuickDocsDirName:
+		return filepath.Join(root, parts[0], parts[1])
+	case len(parts) >= 2 && parts[0] != core.QuickDocsDirName && parts[0] != core.MetaDirName:
+		return filepath.Join(root, parts[0])
+	}
+	return ""
+}
+
 func (a *App) runImport(ctx context.Context, root, dir string, p core.ImportPreview, mainRel string, withGit bool) {
 	staging := core.ImportStagingDir(root, p.ID)
 	finished := ImportFinishedEvent{ID: p.ID}
+	// Held while copying: another window's cleanup (cleanStaleImports) only
+	// removes staging folders whose lock is free.
+	unlock, lockErr := core.LockFile(staging + ".lock")
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[import] panic: %v", r)
@@ -199,12 +256,30 @@ func (a *App) runImport(ctx context.Context, root, dir string, p core.ImportPrev
 		if !finished.Success {
 			_ = os.RemoveAll(staging)
 		}
+		if unlock != nil {
+			unlock()
+			_ = os.Remove(staging + ".lock")
+		}
 		a.importMu.Lock()
 		a.importCancel = nil
 		a.importMu.Unlock()
 		a.emit(EventImportFinished, finished)
 	}()
+	if lockErr != nil {
+		finished.Error = lockErr.Error()
+		return
+	}
 
+	if p.File != "" { // one dropped file: straight into a new quick document
+		quick, _, err := core.CopyFileToQuickDoc(root, p)
+		if err != nil {
+			finished.Error = err.Error()
+			return
+		}
+		finished.Success, finished.Folder = true, quick
+		a.forgetImport(p.ID)
+		return
+	}
 	total := ImportProgressEvent{ID: p.ID, TotalFiles: p.Files, TotalBytes: p.Bytes}
 	if withGit {
 		total.TotalFiles += p.GitFiles
@@ -266,14 +341,27 @@ func (a *App) forgetImport(id string) {
 	a.importOrder = slices.DeleteFunc(a.importOrder, func(s string) bool { return s == id })
 }
 
-// cleanStaleImports removes staging folders left by a crash (only when no
-// import is running).
+// cleanStaleImports removes staging folders left by a crash. A copy in
+// progress, in this window or in another one, holds the lock of its staging
+// folder, so only abandoned ones are removed.
 func (a *App) cleanStaleImports(root string) {
-	a.importMu.Lock()
-	running := a.importCancel != nil
-	a.importMu.Unlock()
-	if !running {
-		_ = os.RemoveAll(filepath.Dir(core.ImportStagingDir(root, "x")))
+	parent := filepath.Dir(core.ImportStagingDir(root, "x"))
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		staging := filepath.Join(parent, e.Name())
+		unlock, err := core.TryLockFile(staging + ".lock")
+		if err != nil {
+			continue // being copied right now
+		}
+		_ = os.RemoveAll(staging)
+		unlock()
+		_ = os.Remove(staging + ".lock")
 	}
 }
 

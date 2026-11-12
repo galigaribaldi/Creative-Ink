@@ -31,6 +31,11 @@ type ProjectLocation struct {
 	// SyncService is the cloud service that syncs the folder ("Dropbox",
 	// "iCloud Drive"…; "" when none was recognised).
 	SyncService string `json:"syncService"`
+	// Collection: the folder holds several documents in subfolders (no
+	// document at its top level). Each one compiles on its own, with the
+	// root document nearest to the file being edited (RootDocumentFor).
+	Collection bool `json:"collection"`
+	Documents  int  `json:"documents"`
 	// Notices, most important first (see location_messages.go). Empty for
 	// projects of the repository.
 	Notices []LocationNotice `json:"notices"`
@@ -45,6 +50,9 @@ var ErrBroadFolder = errors.New("no es una carpeta de proyecto")
 // central repository ("" if not set up: every folder is external).
 func ClassifyLocation(repoRoot, folder string) ProjectLocation {
 	loc := ProjectLocation{Kind: LocationExternal, Folder: folder, Notices: []LocationNotice{}}
+	if c := DetectCollection(folder); c.Collection {
+		loc.Collection, loc.Documents = true, c.Documents
+	}
 	if repoRoot != "" && isInside(repoRoot, folder) {
 		loc.Kind = LocationRepository
 		if isInside(filepath.Join(repoRoot, QuickDocsDirName), folder) {
@@ -53,6 +61,9 @@ func ClassifyLocation(repoRoot, folder string) ProjectLocation {
 		// A copy of a git project: reminded every time it is opened.
 		if meta, err := LoadProjectMeta(folder); err == nil && meta.Imported != nil && meta.Imported.GitRoot != "" {
 			loc.Notices = append(loc.Notices, GitCopyNotice(*meta.Imported))
+		}
+		if loc.Collection {
+			loc.Notices = append(loc.Notices, CollectionNotice(loc.Documents))
 		}
 		return loc
 	}

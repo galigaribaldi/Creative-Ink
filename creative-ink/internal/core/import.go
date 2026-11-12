@@ -39,12 +39,17 @@ var (
 // ImportPreview is what the import summary shows. Bytes and Files are what
 // will be copied without the history; GitBytes/GitFiles are the .git on top.
 type ImportPreview struct {
-	Canceled     bool   `json:"canceled"` // the user closed the folder dialog
-	ID           string `json:"id"`
-	Source       string `json:"source"`
-	ProposedName string `json:"proposedName"`
-	Files        int    `json:"files"`
-	Bytes        int64  `json:"bytes"`
+	Canceled bool   `json:"canceled"` // the user closed the folder dialog
+	ID       string `json:"id"`
+	Source   string `json:"source"` // the folder (for a file: its folder)
+	// File is set for a single file (dropped from the system): it is copied
+	// into a new quick document. InPlaceSingle: its folder is not a project
+	// (Desktop, Downloads), so "open in place" opens only this file.
+	File          string `json:"file"`
+	InPlaceSingle bool   `json:"inPlaceSingle"`
+	ProposedName  string `json:"proposedName"`
+	Files         int    `json:"files"`
+	Bytes         int64  `json:"bytes"`
 	// HasGit: Source itself holds a .git directory (its history can be
 	// copied). GitRoot is the nearest repository, Source or a parent.
 	HasGit   bool   `json:"hasGit"`
@@ -149,7 +154,7 @@ func InspectImport(ctx context.Context, repoRoot, src string) (ImportPreview, er
 		p.RCFiles = files
 	}
 	if !p.Collection {
-		findExternalRefs(src, compileDir, texFiles, &p)
+		findExternalRefs(src, compileDir, texFiles, &p, func(target string) bool { return isInside(src, target) })
 	}
 	p.Large = p.Bytes+p.GitBytes > LargeImportBytes
 	p.CanCopy = !p.Collection
@@ -238,7 +243,7 @@ var refRe = regexp.MustCompile(`\\(input|include|includegraphics|includepdf|incl
 // findExternalRefs lists references that resolve outside src. TeX resolves
 // relative paths against the folder it runs in (the main file's), not the
 // file that has them.
-func findExternalRefs(src, compileDir string, texFiles []string, p *ImportPreview) {
+func findExternalRefs(src, compileDir string, texFiles []string, p *ImportPreview, copied func(target string) bool) {
 	for _, rel := range texFiles {
 		f, err := os.Open(filepath.Join(src, rel))
 		if err != nil {
@@ -254,7 +259,7 @@ func findExternalRefs(src, compileDir string, texFiles []string, p *ImportPrevie
 					if !filepath.IsAbs(target) {
 						target = filepath.Join(compileDir, filepath.FromSlash(ref))
 					}
-					if isInside(src, target) {
+					if copied(target) {
 						continue
 					}
 					p.ExternalRefCount++
@@ -328,6 +333,89 @@ func appendCapped(list *[]string, s string) {
 	if len(*list) < maxListed {
 		*list = append(*list, s)
 	}
+}
+
+// InspectFileImport analyses a single text file (dropped from the system)
+// for "copy into a quick document" or "open in place". Every file it
+// references is outside the copy (only the file is copied).
+func InspectFileImport(repoRoot, file string) (ImportPreview, error) {
+	file = filepath.Clean(file)
+	info, err := os.Stat(file)
+	switch {
+	case err != nil:
+		return ImportPreview{}, err
+	case !info.Mode().IsRegular() || !IsEditableFile(file):
+		return ImportPreview{}, ErrNotEditable
+	case info.Size() > MaxEditableBytes:
+		return ImportPreview{}, fmt.Errorf("%s ocupa más de %d MB: el editor no lo abre", filepath.Base(file), MaxEditableBytes>>20)
+	case !isUTF8File(file):
+		return ImportPreview{}, ErrNotUTF8
+	}
+	parent := filepath.Dir(file)
+	name := filepath.Base(file)
+	p := ImportPreview{
+		Source:         parent,
+		File:           file,
+		ProposedName:   Slugify(strings.TrimSuffix(name, filepath.Ext(name))),
+		Files:          1,
+		Bytes:          info.Size(),
+		Documents:      []string{},
+		MainCandidates: []string{},
+		ExternalRefs:   []ExternalRef{},
+		NotUTF8:        []string{},
+		Symlinks:       []string{},
+		RCFiles:        []string{},
+		Notices:        []LocationNotice{},
+		CanCopy:        true,
+	}
+	home, _ := os.UserHomeDir()
+	p.GitRoot = FindGitRoot(parent, home)
+	p.InPlaceSingle = CheckProjectFolder(repoRoot, parent) != nil
+	if IsTeXFile(name) {
+		p.MainCandidates = []string{name}
+		if IsRootDocument(file) {
+			p.Documents, p.DocumentCount = []string{name}, 1
+		}
+		findExternalRefs(parent, parent, []string{name}, &p, func(target string) bool { return target == file })
+	}
+	if _, files, _ := RCHash(parent); len(files) > 0 {
+		p.RCFiles = files
+	}
+	return p, nil
+}
+
+// CopyFileToQuickDoc copies file into a new quick document folder and
+// records where it came from; with gitRoot, COPIA-DE-GIT.md goes with it.
+// It returns the folder and the copied file. On error nothing is left.
+func CopyFileToQuickDoc(root string, p ImportPreview) (dir, copied string, err error) {
+	if dir, err = newQuickDocDir(root); err != nil {
+		return "", "", err
+	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(dir) // created above: nothing else lives there
+			dir, copied = "", ""
+		}
+	}()
+	info, err := os.Stat(p.File)
+	if err != nil {
+		return
+	}
+	copied = filepath.Join(dir, filepath.Base(p.File))
+	if err = copyOneFile(p.File, copied, copyEntry{size: info.Size(), mode: info.Mode().Perm()}, ""); err != nil {
+		return
+	}
+	meta := ProjectMeta{Imported: &ImportInfo{From: p.File, GitRoot: p.GitRoot}}
+	if IsTeXFile(copied) {
+		meta.MainFile = filepath.Base(copied)
+	}
+	if err = SaveProjectMeta(dir, meta); err != nil {
+		return
+	}
+	if p.GitRoot != "" {
+		err = writeNew(filepath.Join(dir, GitCopyNoteName), GitCopyNoteFile(*meta.Imported))
+	}
+	return
 }
 
 // ImportStagingDir is where copies are made before becoming a project

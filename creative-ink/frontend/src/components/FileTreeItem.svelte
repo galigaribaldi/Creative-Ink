@@ -71,7 +71,8 @@
       {/if}
     </button>
 
-    {#if isTeX}
+    <!-- No ★ in a collection (each document compiles its own main.tex) or for a loose file. -->
+    {#if isTeX && !workspace.location.collection && !workspace.singleFile}
       <button
         class="main-toggle"
         class:is-main={isMain}

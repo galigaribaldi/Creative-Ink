@@ -302,7 +302,7 @@
   }
 
   /** Shows `content` as the document `path`. setState fires no update listener (no autosave) and starts a fresh undo history for the file. */
-  function load(path, content) {
+  function load(path, content, target = '') {
     clearTimeout(compileTimer) // OpenFile already queued a compile in Go
     compileTimer = null
     docFile = path
@@ -310,6 +310,8 @@
     view.setState(createState(content, path !== '', path))
     // Go's compile target without a main file is the last .tex of this pane.
     if (isPrimary && isTeXPath(path)) workspace.texFilePath = path
+    // What Go compiles now (a chapter of a collection: its document's main.tex).
+    if (isPrimary && target) workspace.compileTargetPath = target
     adopt(path)
     status = path ? 'saved' : 'empty'
     errorMsg = ''
@@ -359,7 +361,7 @@
       // The main pane makes it Go's active document; the second one only reads it.
       const file = await (isPrimary ? OpenFile(target) : LoadFile(target))
       if (seq !== switchSeq) return
-      load(file.path, file.content)
+      load(file.path, file.content, isPrimary ? file.compileTarget : '')
     } catch (err) {
       if (seq !== switchSeq) return
       status = 'loadError'

@@ -113,6 +113,15 @@ type App struct {
 	// from <folder>/.creative-ink-meta whenever the folder changes. When set,
 	// it is compiled instead of the active document.
 	mainFile string
+	// texTarget is the root document that compiles texDoc: texDoc itself
+	// if it has a \documentclass, otherwise the nearest main.tex above it
+	// (core.RootDocumentFor). It makes collections and chapters work without
+	// a main file. "" = use texDoc.
+	texTarget string
+	// singleFile is set when one loose file is open where it is, in a
+	// folder that is not a project (Desktop, Downloads): only that file can
+	// be opened or saved, nothing is created, watched or analysed there.
+	singleFile string
 	// location is where the open folder lives (repository, quick document
 	// or external, git, sync), computed when the folder changes, before it
 	// is opened (core.ClassifyLocation; docs/MAP.md §4.7).
@@ -187,6 +196,11 @@ type WorkspaceState struct {
 	// git root, sync service and the default notices the Terminal CI and the
 	// Shell show (core.LocationNotice). Zero without a project.
 	Location core.ProjectLocation `json:"location"`
+	// CompileTarget is what Go compiles and previews now: the main file, or
+	// the root document of the last .tex (a chapter compiles its main.tex).
+	CompileTarget string `json:"compileTarget"`
+	// SingleFile is the loose file open where it is ("" = a normal folder).
+	SingleFile string `json:"singleFile"`
 	// NeedsSetup: first run, the user has not chosen where the central
 	// repository lives yet (see GetRepositoryOptions / SetupRepository).
 	NeedsSetup bool `json:"needsSetup"`
@@ -246,6 +260,9 @@ type RecentFolder struct {
 type OpenedFile struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+	// CompileTarget after opening it (main pane only): opening a chapter of
+	// a collection compiles its document's main.tex.
+	CompileTarget string `json:"compileTarget"`
 }
 
 // WorkspaceChangedEvent is the payload of EventWorkspaceChanged. Folder lets
@@ -284,6 +301,14 @@ type TerminalProgressEvent struct {
 
 // errTerminalBusy rejects a second command while one is running.
 var errTerminalBusy = errors.New("ya hay un comando en ejecución; espera o cancélalo")
+
+var (
+	// errSingleFile: a loose file is open where it is (Desktop, Downloads):
+	// that folder is not a project, so nothing else is opened or created there.
+	errSingleFile = errors.New("solo está abierto un archivo suelto: para crear archivos o abrir otros, copia el archivo a Creative-ink o abre una carpeta de proyecto")
+	// errCollectionMain: in a collection each document compiles its own main.tex.
+	errCollectionMain = errors.New("en una colección cada documento compila su propio main.tex: no hace falta marcar un principal (se escribiría .creative-ink-meta en la raíz)")
+)
 
 // SyncTexForwardResult is where a source line appears in the PDF of the
 // compile target: 1-based page and a box in PDF points from the page's
@@ -432,6 +457,8 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("[workspace] no se pudo preparar el repositorio central: %v", err)
 	}
 	a.ensureUserTemplatesDir()
+	// Files and folders dropped from the system (EnableFileDrop in main.go).
+	runtime.OnFileDrop(ctx, a.onFileDrop)
 }
 
 // shutdown is called by Wails when the app is closing: stop latexmk so it
@@ -886,11 +913,11 @@ func (a *App) OpenFile(path string) (OpenedFile, error) {
 	if err != nil {
 		return OpenedFile{}, err
 	}
-	a.setWorkspace(folder, clean)
+	a.setWorkspaceMode(folder, clean, a.openSingleFile())
 	if a.compileTarget() != "" {
 		a.compileOnOpen()
 	}
-	return OpenedFile{Path: clean, Content: content}, nil
+	return OpenedFile{Path: clean, Content: content, CompileTarget: a.compileTarget()}, nil
 }
 
 // LoadFile reads a text file inside the open folder for the second editor
@@ -925,6 +952,9 @@ func (a *App) NewFileDialog() (WorkspaceState, error) {
 	folder, _ := a.workspace()
 	if folder == "" {
 		return WorkspaceState{}, core.ErrNoFolder
+	}
+	if a.openSingleFile() != "" {
+		return WorkspaceState{}, errSingleFile
 	}
 	target, err := a.pickNewPath(folder, "nuevo-archivo.tex")
 	if err != nil {
@@ -1013,8 +1043,8 @@ func (a *App) SaveAsDialog(content string) (WorkspaceState, error) {
 	}
 	// Saved elsewhere: that folder is opened, so it must be a project
 	// folder. Checked before writing anything.
-	outside := false
-	if _, err := core.ResolveInFolder(folder, target); err != nil {
+	outside := a.openSingleFile() != "" // Desktop is not a project folder
+	if _, err := core.ResolveInFolder(folder, target); err != nil || outside {
 		outside = true
 		if err := core.CheckProjectFolder(a.repository(), filepath.Dir(target)); err != nil {
 			return WorkspaceState{}, fmt.Errorf("guardar como: %w", err)
@@ -1042,6 +1072,12 @@ func (a *App) SetMainFile(path string) (WorkspaceState, error) {
 	folder, _ := a.workspace()
 	if folder == "" {
 		return WorkspaceState{}, core.ErrNoFolder
+	}
+	switch {
+	case a.openSingleFile() != "":
+		return WorkspaceState{}, errSingleFile
+	case a.projectLocation().Collection && path != "":
+		return WorkspaceState{}, errCollectionMain
 	}
 
 	main := ""
@@ -1421,14 +1457,42 @@ func (a *App) workspace() (folder, docPath string) {
 // different folder reloads its main file from .creative-ink-meta (read
 // before locking: it is disk I/O).
 func (a *App) setWorkspace(folder, docPath string) {
+	a.setWorkspaceMode(folder, docPath, "")
+}
+
+// setWorkspaceMode is setWorkspace that can open one loose file (single,
+// absolute; "" = a normal folder). Everything that depends on the folder
+// (main file, location, collection, watcher, health) is decided here, once
+// per change.
+func (a *App) setWorkspaceMode(folder, docPath, single string) {
 	current, _ := a.workspace()
-	changed := folder != current
+	a.mu.RLock()
+	prevSingle, prevTarget, prevTex := a.singleFile, a.texTarget, a.texDoc
+	collection := a.location.Collection
+	a.mu.RUnlock()
+	changed := folder != current || single != prevSingle
 	var main string
 	var location core.ProjectLocation
 	if changed {
-		main = loadMainFile(folder)
+		if single == "" {
+			main = loadMainFile(folder)
+		}
 		if folder != "" {
 			location = core.ClassifyLocation(a.repository(), folder)
+			if single != "" {
+				location.Collection = false
+				location.Notices = append([]core.LocationNotice{core.SingleFileNotice(single)}, location.Notices...)
+			}
+		}
+		collection = location.Collection
+		prevTarget = ""
+	}
+	target := ""
+	if core.IsTeXFile(docPath) {
+		target = docPath
+		if single == "" {
+			// Outside the lock: it may read a few files.
+			target = core.RootDocumentFor(folder, docPath, prevTarget)
 		}
 	}
 
@@ -1436,20 +1500,26 @@ func (a *App) setWorkspace(folder, docPath string) {
 	a.folder, a.docPath = folder, docPath
 	if changed {
 		a.mainFile = main
-		a.texDoc = ""
+		a.texDoc, a.texTarget = "", ""
 		a.location = location
+		a.singleFile = single
 	}
-	if core.IsTeXFile(docPath) {
-		a.texDoc = docPath
+	if target != "" {
+		a.texDoc, a.texTarget = docPath, target
 	}
 	a.mu.Unlock()
 
-	if changed {
+	switch {
+	case changed:
 		a.restartWatcher()
-		a.rememberRecent(folder)
-		if folder != "" {
+		if single == "" {
+			a.rememberRecent(folder)
+		}
+		if folder != "" && single == "" {
 			a.scheduleHealthCheck()
 		}
+	case collection && target != "" && target != prevTarget && docPath != prevTex:
+		a.scheduleHealthCheck() // another document of the collection: its own analysis
 	}
 }
 
@@ -1473,8 +1543,8 @@ func (a *App) restartWatcher() {
 		a.watcher = nil
 	}
 	folder, _ := a.workspace()
-	if a.watchFolder == nil || folder == "" {
-		return
+	if a.watchFolder == nil || folder == "" || a.openSingleFile() != "" {
+		return // a loose file in Desktop/Downloads: never watch that folder
 	}
 	if tree, truncated, err := core.ScanTree(folder); err == nil {
 		a.treeSig = core.TreeSignature(tree, truncated)
@@ -1551,7 +1621,19 @@ func (a *App) compileTarget() string {
 	if main := a.effectiveMainFile(); main != "" {
 		return main
 	}
-	return a.lastTeX()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.texTarget != "" {
+		return a.texTarget
+	}
+	return a.texDoc
+}
+
+// openSingleFile is the loose file open where it is ("" = a normal folder).
+func (a *App) openSingleFile() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.singleFile
 }
 
 // texOnly returns path if it is a .tex file, else "".
@@ -1568,12 +1650,24 @@ func (a *App) workspaceState() (WorkspaceState, error) {
 		root := a.repository()
 		return WorkspaceState{NeedsStart: root != "", RepositoryPath: root, AutoCompile: a.autoCompileEnabled()}, nil
 	}
-	tree, truncated, err := core.ScanTree(folder)
-	if err != nil {
-		return WorkspaceState{}, err
+	var tree core.FileNode
+	var truncated bool
+	single := a.openSingleFile()
+	if single != "" {
+		// Only the loose file: the rest of Desktop/Downloads is not shown.
+		tree = core.FileNode{Name: filepath.Base(folder), Path: folder, IsDir: true, Children: []core.FileNode{
+			{Name: filepath.Base(single), Path: single, Editable: true},
+		}}
+	} else {
+		var err error
+		if tree, truncated, err = core.ScanTree(folder); err != nil {
+			return WorkspaceState{}, err
+		}
 	}
 	trust := a.trustInfo()
 	return WorkspaceState{
+		CompileTarget:  a.compileTarget(),
+		SingleFile:     single,
 		Location:       a.projectLocation(),
 		FolderPath:     folder,
 		RepositoryPath: a.repository(),
@@ -1607,6 +1701,9 @@ func (a *App) validateEditablePath(folder, path string) (string, error) {
 	clean, err := core.ResolveInFolder(folder, path)
 	if err != nil {
 		return "", err
+	}
+	if single := a.openSingleFile(); single != "" && clean != single {
+		return "", errSingleFile
 	}
 	if !core.IsEditableFile(clean) {
 		return "", core.ErrNotEditable

@@ -42,9 +42,13 @@ func main() {
 		},
 		// macOS only (nil elsewhere): Edit menu for the clipboard, plus the
 		// app's commands. See menu.go.
-		Menu:       app.applicationMenu(),
-		OnStartup:  app.startup,
-		OnShutdown: app.shutdown,
+		Menu: app.applicationMenu(),
+		// Files and folders dropped from the Finder/Explorer reach Go with
+		// their real paths (drop_app.go). The page's own drags (explorer →
+		// editor) are not affected.
+		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true},
+		OnStartup:   app.startup,
+		OnShutdown:  app.shutdown,
 		// Flush CodeMirror to disk before the window closes (see App.beforeClose).
 		OnBeforeClose: app.beforeClose,
 		Bind: []any{

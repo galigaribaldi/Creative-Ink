@@ -9,15 +9,15 @@
  * @typedef {{ name: string, path: string, isDir: boolean, editable: boolean, children?: FileNode[] }} FileNode
  * @typedef {'' | 'trusted' | 'untrusted' | 'restricted'} TrustStatus
  * @typedef {{ id: string, level: 'info' | 'warning', title: string, text: string, steps: string[] }} LocationNotice
- * @typedef {{ kind: '' | 'repository' | 'quickdoc' | 'external', folder: string, gitRoot: string, syncService: string, notices: LocationNotice[] }} ProjectLocation
- * @typedef {{ location: ProjectLocation, needsSetup: boolean, needsStart: boolean, repositoryPath: string, canceled: boolean, folderPath: string, filePath: string, texFilePath: string, mainFilePath: string, autoCompile: boolean, tree: FileNode, truncated: boolean, trustStatus: TrustStatus, trustFiles: string[] }} WorkspaceState
+ * @typedef {{ kind: '' | 'repository' | 'quickdoc' | 'external', folder: string, gitRoot: string, syncService: string, collection: boolean, documents: number, notices: LocationNotice[] }} ProjectLocation
+ * @typedef {{ location: ProjectLocation, compileTarget: string, singleFile: string, needsSetup: boolean, needsStart: boolean, repositoryPath: string, canceled: boolean, folderPath: string, filePath: string, texFilePath: string, mainFilePath: string, autoCompile: boolean, tree: FileNode, truncated: boolean, trustStatus: TrustStatus, trustFiles: string[] }} WorkspaceState
  * @typedef {{ kind: 'files' | 'size' | 'images', message: string }} ProjectWarning
  */
 import { config } from './config.svelte.js'
 import { noteLocation } from './terminal.svelte.js'
 
 /** @type {ProjectLocation} */
-const NO_LOCATION = { kind: '', folder: '', gitRoot: '', syncService: '', notices: [] }
+const NO_LOCATION = { kind: '', folder: '', gitRoot: '', syncService: '', collection: false, documents: 0, notices: [] }
 
 export const workspace = $state({
   /** Absolute path of the open folder ("" before the first load). */
@@ -71,7 +71,15 @@ export const workspace = $state({
    * with git (docs/MAP.md §4.7). The terminal only shows them.
    * @type {ProjectLocation}
    */
-  location: NO_LOCATION
+  location: NO_LOCATION,
+  /**
+   * What Go compiles and previews (WorkspaceState.compileTarget / OpenFile):
+   * the main file, or the root document of the last .tex — in a collection,
+   * the main.tex of the document being edited. "" = nothing.
+   */
+  compileTargetPath: '',
+  /** A loose file open where it is (Desktop, Downloads): only it is shown. */
+  singleFile: ''
 })
 
 /** Applies a WorkspaceState returned by Go. */
@@ -98,6 +106,8 @@ export function applyWorkspace(/** @type {WorkspaceState} */ state) {
   workspace.currentFilePath = state.filePath
   workspace.texFilePath = state.texFilePath
   workspace.mainFilePath = state.mainFilePath
+  workspace.compileTargetPath = state.compileTarget ?? ''
+  workspace.singleFile = state.singleFile ?? ''
   workspace.error = ''
 }
 
@@ -112,6 +122,7 @@ export function applyTree(/** @type {WorkspaceState} */ state) {
   workspace.fileTree = state.tree
   workspace.truncated = state.truncated
   workspace.mainFilePath = state.mainFilePath
+  workspace.compileTargetPath = state.compileTarget ?? workspace.compileTargetPath
   applyTrust(state)
 }
 
@@ -127,7 +138,7 @@ export function applyTrust(/** @type {{ trustStatus?: TrustStatus, trustFiles?: 
  * Reactive when read inside $derived/$effect.
  */
 export function compileTarget() {
-  return workspace.mainFilePath || workspace.texFilePath
+  return workspace.compileTargetPath || workspace.mainFilePath || workspace.texFilePath
 }
 
 /** LaTeX source (can be compiled, be the main file, use SyncTeX). */

@@ -11,6 +11,7 @@ import {
   GetWorkspace,
   NewFileDialog,
   OpenFolderDialog,
+  OpenBlankDocument,
   OpenImportInPlace,
   OpenProject,
   OpenSystemTerminal,
@@ -156,6 +157,11 @@ export function createProject(/** @type {string} */ name, /** @type {string} */ 
 /** Creates tmp-Workspaces/unnamed-tmp<N>/ and opens it. */
 export function createQuickDocument() {
   return switchProject(() => CreateQuickDocument())
+}
+
+/** Start screen ✕ with nothing open: an empty quick document (reused if untouched). */
+export function openBlankDocument() {
+  return switchProject(() => OpenBlankDocument())
 }
 
 /** Import summary: opens the analysed folder where it is (no copy). */

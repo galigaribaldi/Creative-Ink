@@ -33,8 +33,25 @@ export const ui = $state({
   /** Width of the main pane in the split editor (0.2–0.8), dragged on the divider. */
   splitRatio: readSplitRatio(),
   /** The terminals' location banner was hidden (until another folder opens). */
-  locationBannerHidden: false
+  locationBannerHidden: false,
+  /** A short message at the bottom (dropped files that cannot be opened…). @type {{ id: number, text: string, level: 'info' | 'warning' } | null} */
+  toast: null
 })
+
+let toastTimer = 0
+let toastId = 0
+
+/**
+ * Shows a short message for a few seconds (purely visual). Go writes the
+ * texts; the UI only shows them.
+ * @param {string} text
+ * @param {'info' | 'warning'} [level]
+ */
+export function showToast(text, level = 'info') {
+  ui.toast = { id: ++toastId, text, level }
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => (ui.toast = null), 6000)
+}
 
 function readSplitRatio() {
   try {

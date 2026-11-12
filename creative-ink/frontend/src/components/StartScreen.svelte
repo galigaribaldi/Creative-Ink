@@ -1,10 +1,9 @@
 <script>
   import { onMount } from 'svelte'
   import { GetStartScreen, RevealQuickDocuments } from '../../wailsjs/go/main/App.js'
-  import { createProject, createQuickDocument, openFolder, openProject } from '../lib/actions.js'
+  import { createProject, createQuickDocument, openBlankDocument, openFolder, openProject } from '../lib/actions.js'
   import { importer, startImport } from '../lib/import.svelte.js'
   import { ui } from '../lib/ui.svelte.js'
-  import ImportDialog from './ImportDialog.svelte'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
   /** @type {import('../../wailsjs/go/models').main.StartScreen | null} */
@@ -60,9 +59,16 @@
     }
   }
 
+  // ✕ / Escape: back to the open project, or, with none, a blank document
+  // (an untouched quick document is reused) to write or drop files on.
+  function close() {
+    if (closable) ui.startOpen = false
+    else if (!busy) void run(openBlankDocument)
+  }
+
   function onkeydown(event) {
     if (importer.preview) return // Escape closes the import summary first
-    if (event.key === 'Escape' && closable) ui.startOpen = false
+    if (event.key === 'Escape') close()
   }
 </script>
 
@@ -75,9 +81,13 @@
         <h1 id="start-title">¿Cómo quieres trabajar?</h1>
         {#if screen}<p class="repo" title={screen.repositoryPath}>{screen.repositoryPath}</p>{/if}
       </div>
-      {#if closable}
-        <button class="close" onclick={() => (ui.startOpen = false)} aria-label="Cerrar" title="Cerrar (Esc)">✕</button>
-      {/if}
+      <button
+        class="close"
+        onclick={close}
+        disabled={busy}
+        aria-label="Cerrar"
+        title={closable ? 'Cerrar (Esc)' : 'Cerrar y empezar con un documento en blanco (Esc): luego puedes arrastrar una carpeta o un archivo'}
+      >✕</button>
     </header>
 
     {#if screen}
@@ -198,11 +208,6 @@
   </div>
 </div>
 
-{#if importer.preview}
-  {#key importer.preview.id}
-    <ImportDialog preview={importer.preview} />
-  {/key}
-{/if}
 
 <style>
   .backdrop {

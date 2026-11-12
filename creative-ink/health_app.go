@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"reflect"
 	"time"
 
@@ -39,10 +40,19 @@ func (a *App) scheduleHealthCheck() {
 // It only informs: nothing about compilation or the preview changes.
 func (a *App) checkProjectHealth() {
 	folder, _ := a.workspace()
-	if folder == "" {
+	if folder == "" || a.openSingleFile() != "" {
 		return
 	}
-	h := core.AnalyzeProject(folder)
+	// A collection is measured per document (the one being edited), or it
+	// would always look "large" (docs/MAP.md §4.7).
+	root := folder
+	if a.projectLocation().Collection {
+		if target := a.compileTarget(); target != "" && isInsideDir(folder, target) {
+			root = filepath.Dir(target)
+		}
+	}
+	h := core.AnalyzeProject(root)
+	h.Folder = folder // the UI matches results with the open folder
 	if current, _ := a.workspace(); current != folder {
 		return // the folder changed meanwhile: its own check is scheduled
 	}

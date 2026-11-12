@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -32,6 +33,8 @@ type LocationNotice struct {
 
 // Notice IDs.
 const (
+	NoticeCollection  = "collection"
+	NoticeSingleFile  = "single-file"
 	NoticeExternal    = "external"
 	NoticeExternalGit = "external-git"
 	NoticeSynced      = "synced"
@@ -59,6 +62,9 @@ func externalNotices(loc ProjectLocation) []LocationNotice {
 	}
 	if loc.SyncService != "" {
 		notices = append(notices, SyncedNotice(loc.SyncService))
+	}
+	if loc.Collection {
+		notices = append(notices, CollectionNotice(loc.Documents))
 	}
 	return notices
 }
@@ -93,6 +99,32 @@ func ExternalGitNotice(folder, gitRoot string) LocationNotice {
 			"porque la copia y el original se separarían y tus commits quedarían en uno solo. " +
 			"La compilación, la Terminal CI y la Shell funcionan igual. Guarda tus cambios con git:",
 		Steps: gitSaveSteps,
+	}
+}
+
+// CollectionNotice (light): the folder is a collection of documents.
+func CollectionNotice(documents int) LocationNotice {
+	return LocationNotice{
+		ID:    NoticeCollection,
+		Level: NoticeInfo,
+		Title: fmt.Sprintf("Colección de %d documentos", documents),
+		Text: "Cada documento se compila por su cuenta: al abrir cualquier archivo de un documento (un capítulo, una sección) " +
+			"se compila el main.tex de su carpeta. No hace falta marcar un archivo principal.",
+		Steps: []string{},
+	}
+}
+
+// SingleFileNotice (strong): one loose file opened where it is, in a folder
+// that is not a project (Desktop, Downloads…).
+func SingleFileNotice(file string) LocationNotice {
+	return LocationNotice{
+		ID:    NoticeSingleFile,
+		Level: NoticeWarning,
+		Title: "Archivo suelto",
+		Text: fmt.Sprintf("Abriste solo %s, en una carpeta que no es de proyecto. LaTeX escribirá sus auxiliares "+
+			"(.aux, .log, .pdf) junto a él. Aquí no se pueden crear archivos ni marcar un principal; para un proyecto, "+
+			"arrástralo de nuevo y elige «Copiar a Creative-ink», o usa Inicio → Importar proyecto….", filepath.Base(file)),
+		Steps: []string{},
 	}
 }
 
@@ -169,9 +201,13 @@ func ImportNotices(p ImportPreview) []LocationNotice {
 			Steps: []string{},
 		})
 	case p.GitRoot != "":
+		what := "Esta carpeta forma"
+		if p.File != "" {
+			what = "Este archivo forma"
+		}
 		out = append(out, LocationNotice{
 			ID: "import-git-part", Level: NoticeWarning, Title: "Parte de un repositorio git",
-			Text: fmt.Sprintf("Esta carpeta forma parte del repositorio git %s. NO se recomienda copiarla: la copia no tendrá historial "+
+			Text: fmt.Sprintf(what+" parte del repositorio git %s. NO se recomienda copiarla: la copia no tendrá historial "+
 				"y sus cambios no llegarán a git. Recomendado: «Abrir en su ubicación». Si la copias, se añade %s y la terminal "+
 				"te lo recordará al abrirla.", p.GitRoot, GitCopyNoteName),
 			Steps: []string{},
@@ -181,6 +217,9 @@ func ImportNotices(p ImportPreview) []LocationNotice {
 		size := LocationNotice{
 			ID: "import-size", Level: NoticeInfo, Title: "Tamaño de la copia",
 			Text: fmt.Sprintf("Se copiarán %d archivos (%s)", p.Files, FormatBytes(p.Bytes)), Steps: []string{},
+		}
+		if p.File != "" {
+			size.Text = fmt.Sprintf("Se copiará %s (%s) a un documento rápido nuevo (tmp-Workspaces)", filepath.Base(p.File), FormatBytes(p.Bytes))
 		}
 		if p.HasGit {
 			size.Text += fmt.Sprintf(", más el historial git: %d archivos (%s)", p.GitFiles, FormatBytes(p.GitBytes))
@@ -193,6 +232,14 @@ func ImportNotices(p ImportPreview) []LocationNotice {
 		}
 		out = append(out, size)
 	}
+	if p.File != "" && p.InPlaceSingle {
+		out = append(out, LocationNotice{
+			ID: "import-single", Level: NoticeInfo, Title: "Abrir en su ubicación: solo este archivo",
+			Text: fmt.Sprintf("%s no es una carpeta de proyecto: «Abrir en su ubicación» abrirá solo este archivo, sin el resto "+
+				"de la carpeta, y LaTeX escribirá sus auxiliares junto a él.", p.Source),
+			Steps: []string{},
+		})
+	}
 	if p.ExternalRefCount > 0 {
 		examples := []string{}
 		for _, r := range p.ExternalRefs {
@@ -202,8 +249,8 @@ func ImportNotices(p ImportPreview) []LocationNotice {
 		}
 		out = append(out, LocationNotice{
 			ID: "import-external", Level: NoticeWarning, Title: "Archivos fuera de la carpeta",
-			Text: fmt.Sprintf("%d referencias apuntan fuera de esta carpeta (p. ej. %s). Esos archivos no se copian: en la copia, "+
-				"el documento no compilará igual hasta que los añadas a mano.", p.ExternalRefCount, strings.Join(examples, ", ")),
+			Text: fmt.Sprintf("%d referencias apuntan fuera de %s (p. ej. %s). Esos archivos no se copian: en la copia, "+
+				"el documento no compilará igual hasta que los añadas a mano.", p.ExternalRefCount, outsideOf(p), strings.Join(examples, ", ")),
 			Steps: []string{},
 		})
 	}
@@ -231,6 +278,13 @@ func ImportNotices(p ImportPreview) []LocationNotice {
 		})
 	}
 	return out
+}
+
+func outsideOf(p ImportPreview) string {
+	if p.File != "" {
+		return "este archivo"
+	}
+	return "esta carpeta"
 }
 
 // FormatBytes writes a size for people, with a decimal comma: "476 KB",
