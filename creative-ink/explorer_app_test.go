@@ -58,3 +58,18 @@ func TestSavingANonLaTeXFileDoesNotAskToCompile(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.AffectsBuild)
 }
+
+func TestSearchProjectSearchesTheOpenFolder(t *testing.T) {
+	a, _ := newTestApp(t, okCompile)
+	folder, _ := a.workspace()
+	require.NoError(t, os.WriteFile(filepath.Join(folder, "notas.md"), []byte("Una nota\notra Nota"), 0o644))
+	res, err := a.SearchProject(core.SearchQuery{Text: "nota"})
+	require.NoError(t, err)
+	require.Len(t, res.Files, 1)
+	assert.Equal(t, "notas.md", res.Files[0].Rel)
+	assert.Equal(t, 2, res.Total)
+
+	empty := newApp("", "", okCompile)
+	_, err = empty.SearchProject(core.SearchQuery{Text: "x"})
+	assert.ErrorIs(t, err, core.ErrNoFolder)
+}

@@ -65,6 +65,7 @@ func (a *App) buildMenu(goos string) *menu.Menu {
 	root.Append(menu.EditMenu())
 	a.addSubmenu(root, "Buscar", []menuEntry{
 		{"find", "Buscar y reemplazar…", cmd("f")},
+		{"search-project", "Buscar en el proyecto…", combo("f", keys.ShiftKey)},
 		{"find-next", "Buscar siguiente", cmd("g")},
 		{"find-previous", "Buscar anterior", combo("g", keys.ShiftKey)},
 		{"select-next", "Seleccionar la siguiente coincidencia", cmd("d")},
