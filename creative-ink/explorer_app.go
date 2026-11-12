@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -88,4 +89,27 @@ func (a *App) newEntryPath(parent, name string, file bool) (string, error) {
 		return "", core.ErrNotEditable
 	}
 	return core.ResolveInFolder(folder, path)
+}
+
+// SearchProject is the sidebar's "Buscar": the matching lines of the text
+// files of the open folder (only the loose file in single-file mode). A new
+// search cancels the one still running, so typing never piles them up.
+func (a *App) SearchProject(q core.SearchQuery) (core.SearchResult, error) {
+	folder, _ := a.workspace()
+	if folder == "" {
+		return core.SearchResult{Files: []core.SearchFileResult{}}, core.ErrNoFolder
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.searchMu.Lock()
+	if a.searchCancel != nil {
+		a.searchCancel()
+	}
+	a.searchCancel = cancel
+	a.searchMu.Unlock()
+	defer cancel()
+	res, err := core.SearchFolder(ctx, folder, a.openSingleFile(), q)
+	if errors.Is(err, context.Canceled) {
+		return core.SearchResult{Files: []core.SearchFileResult{}}, nil // superseded by a newer search
+	}
+	return res, err
 }

@@ -158,6 +158,9 @@ type App struct {
 	importOrder  []string
 	importCancel context.CancelFunc
 	freeBytes    func(path string) (uint64, error)
+	// searchCancel stops the project search still running (SearchProject).
+	searchMu     sync.Mutex
+	searchCancel context.CancelFunc
 	// launchInstance starts another app instance (NewWindow); injectable.
 	launchInstance func() error
 
