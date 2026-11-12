@@ -493,6 +493,7 @@ const COMMANDS = {
   'toggle-sidebar': toggleSidebar,
   'toggle-terminal': () => toggleBottomTab('terminal'),
   'split-editor': toggleSplitEditor,
+  'search-project': () => void import('./search.svelte.js').then((m) => m.focusSearch()),
   'toggle-preview': togglePreview,
   'preview-side': swapPreviewSide,
   'zoom-in': () => zoomBy(ZOOM_STEP),

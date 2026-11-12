@@ -337,15 +337,20 @@
     errorMsg = ''
     if (path) view.focus()
     // A backward search may have asked for a line of this file.
-    if (sync.reveal && sync.reveal.file === path) revealLine(sync.reveal.line)
+    if (sync.reveal && sync.reveal.file === path) revealLine(sync.reveal.line, sync.reveal.column, sync.reveal.length)
   }
 
-  /** Selects line n (1-based) and scrolls it to the middle (SyncTeX backward). */
-  function revealLine(n) {
+  /**
+   * Selects line n (1-based), or only `length` characters from `column`
+   * (1-based, a search match), and scrolls it to the middle.
+   */
+  function revealLine(n, column = 0, length = 0) {
     if (!view) return
     const line = view.state.doc.line(Math.min(Math.max(1, n), view.state.doc.lines))
+    const from = column > 0 ? Math.min(line.from + column - 1, line.to) : line.from
+    const to = column > 0 ? Math.min(from + length, line.to) : line.to
     view.dispatch({
-      selection: { anchor: line.from, head: line.to },
+      selection: { anchor: from, head: to },
       effects: EditorView.scrollIntoView(line.from, { y: 'center' })
     })
     view.focus()
@@ -472,7 +477,7 @@
   // reveals the line once the switch finishes.
   $effect(() => {
     const reveal = sync.reveal
-    if (reveal) untrack(() => reveal.file === docFile && revealLine(reveal.line))
+    if (reveal) untrack(() => reveal.file === docFile && revealLine(reveal.line, reveal.column, reveal.length))
   })
 
   // A heavy result pauses auto-compile, and `ci config autocompile off`

@@ -94,6 +94,7 @@
     if ((event.ctrlKey && event.code === 'Backquote') || (key === 'j' && !shift)) command = 'toggle-terminal'
     else if (key === 'n') command = shift ? 'new-window' : 'new-file'
     else if (key === 's') command = shift ? 'save-as' : 'save' // no "Save page" from the webview
+    else if (key === 'f' && shift) command = 'search-project' // ⌘F stays CodeMirror's find
     else if (key === 'b' && !shift) command = 'toggle-sidebar'
     else if (key === 'o' && !shift) command = 'open-folder'
     // ⇧⌘\ is CodeMirror's "go to matching bracket".

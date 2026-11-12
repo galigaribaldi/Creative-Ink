@@ -10,7 +10,9 @@ const NOTICE_MS = 4000
 
 /**
  * @typedef {{ page: number, x: number, y: number, width: number, height: number, nonce: number }} SyncHighlight
- * @typedef {{ file: string, line: number, nonce: number }} SyncReveal
+ * column/length (optional, characters from 1): select that span instead of the
+ * whole line (the project search uses it).
+ * @typedef {{ file: string, line: number, nonce: number, column?: number, length?: number }} SyncReveal
  */
 
 export const sync = $state({

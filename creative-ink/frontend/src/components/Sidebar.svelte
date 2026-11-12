@@ -1,11 +1,12 @@
 <script>
   import FileTreeItem from './FileTreeItem.svelte'
+  import SearchPanel from './SearchPanel.svelte'
   import { tick } from 'svelte'
   import { createInExplorer, openFolder, refreshWorkspace } from '../lib/actions.js'
   import { ui } from '../lib/ui.svelte.js'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
-  const TITLES = { explorer: 'Explorador' }
+  const TITLES = { explorer: 'Explorador', search: 'Buscar' }
 
   let tree = $derived(workspace.fileTree)
   let canCreate = $derived(!!tree && !workspace.singleFile)
@@ -71,6 +72,7 @@
   <div class="content">
     <header>
       <span>{TITLES[ui.activeTool]}</span>
+      {#if ui.activeTool === 'explorer'}
       <div class="tools">
         <button onclick={() => startCreate('file')} aria-label="Nuevo archivo" title="Nuevo archivo en la carpeta (clic derecho en una carpeta: dentro de ella)" disabled={!canCreate}>
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -96,6 +98,7 @@
           </svg>
         </button>
       </div>
+      {/if}
     </header>
 
     {#if ui.activeTool === 'explorer'}
@@ -142,6 +145,8 @@
       {#if workspace.error}
         <p class="error" role="alert">{workspace.error}</p>
       {/if}
+    {:else if ui.activeTool === 'search'}
+      <SearchPanel />
     {/if}
   </div>
 </aside>
