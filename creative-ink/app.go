@@ -118,6 +118,12 @@ type App struct {
 	// (core.RootDocumentFor). It makes collections and chapters work without
 	// a main file. "" = use texDoc.
 	texTarget string
+	// The open folder is locked against other Creative-ink windows (one
+	// process per window): the same project in two windows would overwrite
+	// each other's autosaves. lockDir "" = no locking (tests); see
+	// window_app.go.
+	lockDir     string
+	releaseLock func()
 	// singleFile is set when one loose file is open where it is, in a
 	// folder that is not a project (Desktop, Downloads): only that file can
 	// be opened or saved, nothing is created, watched or analysed there.
@@ -152,6 +158,8 @@ type App struct {
 	importOrder  []string
 	importCancel context.CancelFunc
 	freeBytes    func(path string) (uint64, error)
+	// launchInstance starts another app instance (NewWindow); injectable.
+	launchInstance func() error
 
 	// termMu guards termCancel: at most one terminal command runs at a time.
 	termMu     sync.Mutex
@@ -379,6 +387,10 @@ func NewApp() *App {
 	a.confirmQuit = a.dialogConfirmQuit
 	a.openTerminal = system.OpenTerminal
 	a.freeBytes = system.FreeBytes
+	a.launchInstance = launchNewInstance
+	if dir, err := os.UserConfigDir(); err == nil {
+		a.lockDir = filepath.Join(dir, "creative-ink", "locks")
+	}
 	if previews, err := core.NewPDFSnapshots("", previewSnapshotsKept); err == nil {
 		a.previews = previews
 	} else {
@@ -402,12 +414,13 @@ func newApp(folder, docPath string, compile func(ctx context.Context, workdir, f
 		emit:    func(string, ...any) {},
 		quit:    func() {},
 		// Overridden by tests; production detects the host OS.
-		repoOptions:  system.DetectRepositoryOptions,
-		closeTimeout: closeFlushTimeout,
-		confirmQuit:  func(string) bool { return true },
-		healthDelay:  healthCheckDelay,
-		openTerminal: func(string) (string, error) { return "", errors.New("terminal del sistema no disponible") },
-		freeBytes:    func(string) (uint64, error) { return 1 << 40, nil },
+		repoOptions:    system.DetectRepositoryOptions,
+		closeTimeout:   closeFlushTimeout,
+		confirmQuit:    func(string) bool { return true },
+		healthDelay:    healthCheckDelay,
+		openTerminal:   func(string) (string, error) { return "", errors.New("terminal del sistema no disponible") },
+		freeBytes:      func(string) (uint64, error) { return 1 << 40, nil },
+		launchInstance: func() error { return errors.New("nueva ventana no disponible") },
 	}
 	if folder != "" {
 		a.mainFile = loadMainFile(folder)
@@ -466,6 +479,7 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(_ context.Context) {
 	a.CancelTerminalCommand()
 	a.CancelImport() // its goroutine removes the half-made copy
+	a.releaseLocation()
 	a.stopWatching()
 	a.stopHealthChecks()
 	a.compiles.Close(shutdownTimeout)
@@ -873,7 +887,9 @@ func (a *App) isOpenableProject(dir string) bool {
 // openProjectFolder makes dir the open folder with doc active ("" = none)
 // and compiles it.
 func (a *App) openProjectFolder(dir, doc string) (WorkspaceState, error) {
-	a.setWorkspace(dir, doc)
+	if err := a.setWorkspace(dir, doc); err != nil {
+		return WorkspaceState{}, err
+	}
 	if doc != "" {
 		a.compileOnOpen()
 	}
@@ -900,7 +916,9 @@ func (a *App) OpenFolderDialog() (WorkspaceState, error) {
 	if err := core.CheckProjectFolder(a.repository(), dir); err != nil {
 		return WorkspaceState{}, err
 	}
-	a.setWorkspace(dir, core.DefaultTeXFile(dir))
+	if err := a.setWorkspace(dir, core.DefaultTeXFile(dir)); err != nil {
+		return WorkspaceState{}, err
+	}
 	return a.workspaceState()
 }
 
@@ -913,7 +931,9 @@ func (a *App) OpenFile(path string) (OpenedFile, error) {
 	if err != nil {
 		return OpenedFile{}, err
 	}
-	a.setWorkspaceMode(folder, clean, a.openSingleFile())
+	if err := a.setWorkspaceMode(folder, clean, a.openSingleFile()); err != nil {
+		return OpenedFile{}, err
+	}
 	if a.compileTarget() != "" {
 		a.compileOnOpen()
 	}
@@ -970,7 +990,9 @@ func (a *App) NewFileDialog() (WorkspaceState, error) {
 	if err := core.CreateEmptyFile(clean); err != nil {
 		return WorkspaceState{}, err
 	}
-	a.setWorkspace(folder, clean)
+	if err := a.setWorkspace(folder, clean); err != nil {
+		return WorkspaceState{}, err
+	}
 	return a.workspaceState()
 }
 
@@ -1021,12 +1043,24 @@ func (a *App) SaveContent(path string, content string) (SaveResult, error) {
 // there and makes it the active document. If the destination is outside the
 // open folder, its directory becomes the open folder.
 func (a *App) SaveAsDialog(content string) (WorkspaceState, error) {
-	folder, active := a.workspace()
+	_, active := a.workspace()
 	defaultName, defaultExt := "documento.tex", ".tex"
 	if active != "" {
 		defaultName, defaultExt = filepath.Base(active), filepath.Ext(active)
 	}
+	return a.saveAs(content, defaultName, defaultExt, false)
+}
 
+// SaveNewDialog saves the untitled document of ⌘N (it only existed in the
+// editor): the dialog opens in the open folder, the name is normalized with
+// "-" like every file the editor creates, and it becomes the active
+// document. Same rules as Save As for other folders.
+func (a *App) SaveNewDialog(content string) (WorkspaceState, error) {
+	return a.saveAs(content, "sin-titulo.tex", ".tex", true)
+}
+
+func (a *App) saveAs(content, defaultName, defaultExt string, normalize bool) (WorkspaceState, error) {
+	folder, _ := a.workspace()
 	target, err := a.pickSavePath(folder, defaultName)
 	if err != nil {
 		return WorkspaceState{}, fmt.Errorf("guardar como: %w", err)
@@ -1038,15 +1072,27 @@ func (a *App) SaveAsDialog(content string) (WorkspaceState, error) {
 	if filepath.Ext(target) == "" {
 		target += defaultExt // same type as the document being saved
 	}
+	if normalize {
+		ext := strings.ToLower(filepath.Ext(target))
+		stem := core.Slugify(strings.TrimSuffix(filepath.Base(target), filepath.Ext(target)))
+		if stem == "" {
+			return WorkspaceState{}, errors.New("el nombre del archivo no tiene caracteres válidos")
+		}
+		target = filepath.Join(filepath.Dir(target), stem+ext)
+	}
 	if !filepath.IsAbs(target) || !core.IsEditableFile(target) {
 		return WorkspaceState{}, core.ErrNotEditable
 	}
 	// Saved elsewhere: that folder is opened, so it must be a project
-	// folder. Checked before writing anything.
+	// folder, and not open in another window. Checked before writing.
 	outside := a.openSingleFile() != "" // Desktop is not a project folder
 	if _, err := core.ResolveInFolder(folder, target); err != nil || outside {
 		outside = true
-		if err := core.CheckProjectFolder(a.repository(), filepath.Dir(target)); err != nil {
+		dir := filepath.Dir(target)
+		if err := core.CheckProjectFolder(a.repository(), dir); err != nil {
+			return WorkspaceState{}, fmt.Errorf("guardar como: %w", err)
+		}
+		if err := a.checkLocationFree(dir); err != nil {
 			return WorkspaceState{}, fmt.Errorf("guardar como: %w", err)
 		}
 	}
@@ -1057,7 +1103,9 @@ func (a *App) SaveAsDialog(content string) (WorkspaceState, error) {
 	if outside {
 		folder = filepath.Dir(target) // saved elsewhere: open that folder
 	}
-	a.setWorkspace(folder, target)
+	if err := a.setWorkspace(folder, target); err != nil {
+		return WorkspaceState{}, err
+	}
 	if a.compileTarget() != "" {
 		a.compileOnOpen()
 	}
@@ -1456,21 +1504,29 @@ func (a *App) workspace() (folder, docPath string) {
 // setWorkspace changes the open folder and active document. Entering a
 // different folder reloads its main file from .creative-ink-meta (read
 // before locking: it is disk I/O).
-func (a *App) setWorkspace(folder, docPath string) {
-	a.setWorkspaceMode(folder, docPath, "")
+func (a *App) setWorkspace(folder, docPath string) error {
+	return a.setWorkspaceMode(folder, docPath, "")
 }
 
 // setWorkspaceMode is setWorkspace that can open one loose file (single,
 // absolute; "" = a normal folder). Everything that depends on the folder
-// (main file, location, collection, watcher, health) is decided here, once
-// per change.
-func (a *App) setWorkspaceMode(folder, docPath, single string) {
+// (main file, location, collection, watcher, health, the lock against
+// other windows) is decided here, once per change. If another window has
+// the folder open, nothing changes and the error says so.
+func (a *App) setWorkspaceMode(folder, docPath, single string) error {
 	current, _ := a.workspace()
 	a.mu.RLock()
 	prevSingle, prevTarget, prevTex := a.singleFile, a.texTarget, a.texDoc
 	collection := a.location.Collection
 	a.mu.RUnlock()
 	changed := folder != current || single != prevSingle
+	var release func()
+	if changed && folder != "" {
+		var err error
+		if release, err = a.claimLocation(folder, single); err != nil {
+			return err
+		}
+	}
 	var main string
 	var location core.ProjectLocation
 	if changed {
@@ -1507,7 +1563,14 @@ func (a *App) setWorkspaceMode(folder, docPath, single string) {
 	if target != "" {
 		a.texDoc, a.texTarget = docPath, target
 	}
+	var previous func()
+	if changed {
+		previous, a.releaseLock = a.releaseLock, release
+	}
 	a.mu.Unlock()
+	if previous != nil {
+		previous() // the old folder is free for other windows now
+	}
 
 	switch {
 	case changed:
@@ -1521,6 +1584,7 @@ func (a *App) setWorkspaceMode(folder, docPath, single string) {
 	case collection && target != "" && target != prevTarget && docPath != prevTex:
 		a.scheduleHealthCheck() // another document of the collection: its own analysis
 	}
+	return nil
 }
 
 // rememberRecent adds folder to the start screen's recent list (best effort).

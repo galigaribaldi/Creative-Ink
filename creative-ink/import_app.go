@@ -201,7 +201,9 @@ func (a *App) OpenImportInPlace(id string) (WorkspaceState, error) {
 	if len(p.MainCandidates) > 0 && !p.Collection {
 		doc = filepath.Join(p.Source, filepath.FromSlash(p.MainCandidates[0]))
 	}
-	a.setWorkspace(p.Source, doc)
+	if err := a.setWorkspace(p.Source, doc); err != nil {
+		return WorkspaceState{}, err
+	}
 	return a.workspaceState()
 }
 
@@ -212,15 +214,17 @@ func (a *App) openFileInPlace(root, file string) (WorkspaceState, error) {
 	if !core.IsEditableFile(file) {
 		return WorkspaceState{}, core.ErrNotEditable
 	}
-	if project := repositoryProjectOf(root, file); project != "" {
-		a.setWorkspace(project, file)
-		return a.workspaceState()
+	var err error
+	switch project, parent := repositoryProjectOf(root, file), filepath.Dir(file); {
+	case project != "":
+		err = a.setWorkspace(project, file)
+	case core.CheckProjectFolder(root, parent) == nil:
+		err = a.setWorkspace(parent, file)
+	default:
+		err = a.setWorkspaceMode(parent, file, file)
 	}
-	parent := filepath.Dir(file)
-	if core.CheckProjectFolder(root, parent) == nil {
-		a.setWorkspace(parent, file)
-	} else {
-		a.setWorkspaceMode(parent, file, file)
+	if err != nil {
+		return WorkspaceState{}, err
 	}
 	return a.workspaceState()
 }

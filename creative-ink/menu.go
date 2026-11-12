@@ -50,8 +50,9 @@ func (a *App) buildMenu(goos string) *menu.Menu {
 	root.Append(menu.AppMenu())
 
 	a.addSubmenu(root, "Archivo", []menuEntry{
-		{"new-file", "Nuevo archivo…", cmd("n")},
-		{"new-quick-doc", "Nuevo documento rápido", combo("n", keys.ShiftKey)},
+		{"new-file", "Nuevo archivo", cmd("n")},
+		{"new-window", "Nueva ventana", combo("n", keys.ShiftKey)},
+		{"new-quick-doc", "Nuevo documento rápido", combo("n", keys.OptionOrAltKey)},
 		{},
 		{"open-folder", "Abrir carpeta…", cmd("o")},
 		{"start", "Pantalla de inicio", nil},
