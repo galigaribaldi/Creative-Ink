@@ -196,6 +196,10 @@ type App struct {
 // reported separately through EventCompileStarted / EventCompileFinished.
 type SaveResult struct {
 	Saved bool `json:"saved"`
+	// AffectsBuild: the saved file can change the PDF (LaTeX family, or read
+	// by the last build). The UI only compiles after saving such a file:
+	// saving a README.md never compiles (core.AffectsBuild).
+	AffectsBuild bool `json:"affectsBuild"`
 }
 
 // WorkspaceState describes the open folder for the explorer.
@@ -271,6 +275,8 @@ type OpenedFile struct {
 	// CompileTarget after opening it (main pane only): opening a chapter of
 	// a collection compiles its document's main.tex.
 	CompileTarget string `json:"compileTarget"`
+	// AffectsBuild: see SaveResult.AffectsBuild.
+	AffectsBuild bool `json:"affectsBuild"`
 }
 
 // WorkspaceChangedEvent is the payload of EventWorkspaceChanged. Folder lets
@@ -937,7 +943,8 @@ func (a *App) OpenFile(path string) (OpenedFile, error) {
 	if a.compileTarget() != "" {
 		a.compileOnOpen()
 	}
-	return OpenedFile{Path: clean, Content: content, CompileTarget: a.compileTarget()}, nil
+	target := a.compileTarget()
+	return OpenedFile{Path: clean, Content: content, CompileTarget: target, AffectsBuild: core.AffectsBuild(target, clean)}, nil
 }
 
 // LoadFile reads a text file inside the open folder for the second editor
@@ -949,7 +956,7 @@ func (a *App) LoadFile(path string) (OpenedFile, error) {
 	if err != nil {
 		return OpenedFile{}, err
 	}
-	return OpenedFile{Path: clean, Content: content}, nil
+	return OpenedFile{Path: clean, Content: content, AffectsBuild: core.AffectsBuild(a.compileTarget(), clean)}, nil
 }
 
 // readEditable validates path (editable, inside folder) and reads it.
@@ -1036,7 +1043,7 @@ func (a *App) SaveContent(path string, content string) (SaveResult, error) {
 		return SaveResult{}, err
 	}
 	a.scheduleHealthCheck() // debounced: a file may have grown past a limit
-	return SaveResult{Saved: true}, nil
+	return SaveResult{Saved: true, AffectsBuild: core.AffectsBuild(a.compileTarget(), clean)}, nil
 }
 
 // SaveAsDialog asks for a destination with the native dialog, writes content
