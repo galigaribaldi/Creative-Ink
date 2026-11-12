@@ -14,6 +14,7 @@
  * @typedef {{ kind: 'files' | 'size' | 'images', message: string }} ProjectWarning
  */
 import { config } from './config.svelte.js'
+import { addTab, removeTab, resetTabs } from './tabs.svelte.js'
 import { noteLocation } from './terminal.svelte.js'
 
 /** @type {ProjectLocation} */
@@ -93,8 +94,13 @@ export function applyWorkspace(/** @type {WorkspaceState} */ state) {
   // Another folder: the second pane's file belongs to the old one (its edits
   // were saved before the switch, see actions.js persistPendingEdits).
   if (state.folderPath !== workspace.currentFolderPath || state.filePath === workspace.secondaryFilePath) {
+    if (state.filePath && state.filePath === workspace.secondaryFilePath) removeTab('secondary', state.filePath)
     workspace.secondaryFilePath = ''
   }
+  // Tabs: another project starts with its open file; in the same one, Go's
+  // active file (Save As, a new file…) gets its tab next to the shown one.
+  if (state.folderPath !== workspace.currentFolderPath) resetTabs(state.filePath)
+  else if (state.filePath) addTab('primary', state.filePath, workspace.currentFilePath)
   const folderChanged = state.folderPath !== workspace.currentFolderPath
   // Another project: its own analysis arrives later (project:health).
   if (folderChanged) {

@@ -7,6 +7,7 @@
   import Editor from './Editor.svelte'
   import Preview from './Preview.svelte'
   import Splitter from './Splitter.svelte'
+  import TabStrip from './TabStrip.svelte'
   import TrustBanner from './TrustBanner.svelte'
 
   // Drag & drop from the explorer: dropping a file on the editor area opens
@@ -75,8 +76,12 @@
   /** @type {'editorRatio' | 'editorRatioSplit'} */
   let ratioName = $derived(ui.splitEditor ? 'editorRatioSplit' : 'editorRatio')
   let editorShare = $derived(ui[ratioName])
+  // Solo PDF: the editors are hidden (still mounted: CodeMirror keeps its
+  // state) and the preview takes the whole width.
+  let pdfOnly = $derived(ui.editorMode === 'pdf')
+  let showPreview = $derived(ui.previewVisible || pdfOnly)
   let outerColumns = $derived.by(() => {
-    if (!ui.previewVisible) return 'minmax(0, 1fr)'
+    if (pdfOnly || !ui.previewVisible) return 'minmax(0, 1fr)'
     const editors = `minmax(0, ${editorShare}fr)`
     const preview = `minmax(0, ${1 - editorShare}fr)`
     return ui.previewSide === 'right' ? `${editors} 4px ${preview}` : `${preview} 4px ${editors}`
@@ -104,6 +109,7 @@
   <section
     class="pane editor-pane"
     aria-label="Editor"
+    hidden={pdfOnly}
     bind:this={editorPaneEl}
     style:--bottom-h="{ui.bottomRatio * 100}%"
   >
@@ -121,6 +127,8 @@
       {ondropcapture}
     >
       <div class="editor-host" data-pane="primary">
+        <!-- The file's name on top: tabs (Multiventana) or one header (Minimalista). -->
+        <TabStrip pane="primary" single={ui.editorMode !== 'multi'} />
         <Editor pane="primary" />
       </div>
       {#if ui.splitEditor}
@@ -133,6 +141,7 @@
           onreset={() => setSplitRatio(0.5, true)}
         />
         <div class="editor-host secondary" aria-label="Segundo editor" data-pane="secondary">
+          <TabStrip pane="secondary" />
           <Editor pane="secondary" />
         </div>
       {/if}
@@ -156,7 +165,7 @@
     <BottomPanel />
   </section>
 
-  {#if ui.previewVisible}
+  {#if ui.previewVisible && !pdfOnly}
     <div class="outer-splitter">
       <Splitter
         orientation="vertical"
@@ -171,7 +180,7 @@
   {/if}
 
   <!-- Hidden, not unmounted: the PDF, its page and the worker stay. -->
-  <section class="pane preview-pane" aria-label="Vista previa" hidden={!ui.previewVisible}>
+  <section class="pane preview-pane" aria-label="Vista previa" hidden={!showPreview}>
     <Preview
       compileState={compilation.status}
       pdfVersion={compilation.pdfVersion}
@@ -206,7 +215,8 @@
     min-height: 0;
   }
 
-  .preview-pane[hidden] {
+  .preview-pane[hidden],
+  .editor-pane[hidden] {
     display: none;
   }
 
@@ -227,9 +237,18 @@
     display: grid; /* columns come from splitRatio (inline style) */
   }
 
+  /* Tabs (auto height) above the editor (the rest): a grid row gives the
+     editor a definite height for its height: 100%. */
   .editor-host {
     min-width: 0;
     min-height: 0;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  /* Always the second row, even when there is no tab to show above. */
+  .editor-host > :global(.editor) {
+    grid-row: 2;
   }
 
   .drop-hint {

@@ -1,5 +1,5 @@
 <script>
-  import { compileDocument, openFolder, saveAs, saveDocument, toggleSplitEditor } from '../lib/actions.js'
+  import { compileDocument, saveAs, saveDocument, setEditorMode } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
   import { terminal } from '../lib/terminal.svelte.js'
   import { toggleBottomTab, togglePreview, toggleTool, ui } from '../lib/ui.svelte.js'
@@ -14,18 +14,41 @@
   let compiling = $derived(compilation.status === 'compiling')
   let compileFailed = $derived(compilation.status === 'error')
   let terminalOpen = $derived(ui.bottomPanelOpen && ui.bottomTab === 'terminal')
+
+  /** @type {{ id: import('../lib/ui.svelte.js').EditorMode, label: string, hint: string }[]} */
+  const MODES = [
+    { id: 'pdf', label: 'Solo PDF', hint: 'Oculta el código: para presentar (Beamer) o enseñar un artículo' },
+    { id: 'minimal', label: 'Minimalista', hint: 'Un panel de código y la vista previa' },
+    { id: 'multi', label: 'Multiventana', hint: `Pestañas y dos paneles (${MOD}\\ divide)` }
+  ]
+  let currentMode = $derived(MODES.find((m) => m.id === ui.editorMode) ?? MODES[1])
+
+  /** @param {KeyboardEvent} event */
+  function onmenukeydown(event) {
+    if (event.key === 'Escape') ui.modeMenuOpen = false
+  }
 </script>
+
+<svelte:window onclick={() => (ui.modeMenuOpen = false)} onkeydown={onmenukeydown} />
+
+<!-- Lucide icons of the three editor modes (ISC licence, lucide.dev). -->
+{#snippet modeIcon(/** @type {string} */ id)}
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    {#if id === 'pdf'}
+      <!-- "presentation" -->
+      <path d="M2 3h20" /><path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3" /><path d="m7 21 5-5 5 5" />
+    {:else if id === 'minimal'}
+      <!-- "columns-2" -->
+      <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M12 3v18" />
+    {:else}
+      <!-- "panels-top-left": tabs above, panes below -->
+      <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M3 9h18" /><path d="M9 21V9" />
+    {/if}
+  </svg>
+{/snippet}
 
 <nav class="actionbar" aria-label="Barra de acciones">
   <div class="group">
-    <button onclick={() => (ui.startOpen = true)} aria-label="Inicio" title="Inicio: proyectos y documentos rápidos">
-      <!-- Lucide "house": the launcher (start screen) -->
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
-        <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-      </svg>
-    </button>
-
     <button
       class:active={explorerActive}
       onclick={() => toggleTool('explorer')}
@@ -56,7 +79,8 @@
       </svg>
     </button>
 
-    <button onclick={openFolder} aria-label="Abrir carpeta" title="Abrir carpeta ({MOD}O)">
+    <!-- The launcher: projects, recents, import, "Abrir otra carpeta…" (⌘O opens a folder directly). -->
+    <button onclick={() => (ui.startOpen = true)} aria-label="Proyectos" title="Proyectos: inicio, recientes, importar y abrir carpeta ({MOD}O abre una carpeta)">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
       </svg>
@@ -96,17 +120,38 @@
   </div>
 
   <div class="group">
-    <button
-      class:active={ui.splitEditor}
-      onclick={toggleSplitEditor}
-      aria-label="Dividir el editor"
-      aria-pressed={ui.splitEditor}
-      title="Dividir el editor: dos archivos lado a lado ({MOD}\)"
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM12 5v14" />
-      </svg>
-    </button>
+    <!-- Editor mode: one button with the current mode's icon; a side menu
+         offers the three (docs/MAP.md §4.4, #9). -->
+    <div class="mode-wrap">
+      <button
+        class:active={ui.modeMenuOpen}
+        onclick={(e) => (e.stopPropagation(), (ui.modeMenuOpen = !ui.modeMenuOpen))}
+        aria-label="Modo del editor: {currentMode.label}"
+        aria-haspopup="menu"
+        aria-expanded={ui.modeMenuOpen}
+        title="Modo del editor: {currentMode.label}"
+      >
+        {@render modeIcon(currentMode.id)}
+      </button>
+      {#if ui.modeMenuOpen}
+        <div class="mode-menu" role="menu" aria-label="Modo del editor">
+          {#each MODES as mode (mode.id)}
+            <button
+              role="menuitemradio"
+              aria-checked={mode.id === ui.editorMode}
+              class:current={mode.id === ui.editorMode}
+              onclick={(e) => (e.stopPropagation(), void setEditorMode(mode.id))}
+            >
+              {@render modeIcon(mode.id)}
+              <span class="text">
+                <span class="label">{mode.label}</span>
+                <span class="hint">{mode.hint}</span>
+              </span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
 
     <button
       class:active={ui.previewVisible}
@@ -163,6 +208,69 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+  }
+
+  /* Mode menu: a side flyout next to the bar (raised surface, A3). */
+  .mode-wrap {
+    position: relative;
+  }
+
+  .mode-menu {
+    position: absolute;
+    top: 0;
+    left: calc(100% + 6px);
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    width: 17rem;
+    padding: 0.3rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-overlay);
+  }
+
+  .mode-menu button {
+    width: 100%;
+    height: auto;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.45rem 0.55rem;
+    text-align: left;
+  }
+
+  .mode-menu button.current {
+    background: var(--surface-active);
+  }
+
+  .mode-menu svg {
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+  }
+
+  .mode-menu .text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+
+  .mode-menu .label {
+    color: var(--text-primary);
+    font-size: var(--text-md);
+  }
+
+  .mode-menu .current .label {
+    font-weight: 600;
+  }
+
+  .mode-menu .hint {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    line-height: 1.35;
+    white-space: normal;
   }
 
   button {

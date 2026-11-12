@@ -32,6 +32,7 @@
   import { languageFor } from '../lib/languages.js'
   import { sync, syncForward } from '../lib/synctex.svelte.js'
   import { showToast, ui } from '../lib/ui.svelte.js'
+  import { tabs } from '../lib/tabs.svelte.js'
   import { baseName, compileTarget, isTeXPath, workspace } from '../lib/workspace.svelte.js'
 
   /**
@@ -114,6 +115,11 @@
   // affects: saving docFile can change the PDF (Go: core.AffectsBuild). A
   // README.md that no document reads is only saved, never compiled.
   let affects = false
+  // The CodeMirror state of each open tab of this pane (cursor, selection,
+  // undo history), kept while the tab is open. The text always comes from
+  // disk: a cached state is reused only if the file did not change.
+  /** @type {Map<string, EditorState>} */
+  const tabStates = new Map()
   let timer = null // pending save debounce
   let compileTimer = null // pending compile debounce
   let saving = false // a SaveContent call is in flight
@@ -327,7 +333,13 @@
     compileTimer = null
     docFile = path
     dirty = false
-    view.setState(createState(content, path !== '', path))
+    const cached = path ? tabStates.get(path) : undefined
+    if (cached && cached.doc.toString() === content) {
+      view.setState(cached) // back to a tab: same cursor and undo history
+      setEditable(true)
+    } else {
+      view.setState(createState(content, path !== '', path))
+    }
     // Go's compile target without a main file is the last .tex of this pane.
     if (isPrimary && isTeXPath(path)) workspace.texFilePath = path
     // What Go compiles now (a chapter of a collection: its document's main.tex).
@@ -374,6 +386,7 @@
   async function showUntitled() {
     if (!view) return
     if (untitled) return view.focus()
+    if (docFile) tabStates.set(docFile, view.state) // its tab keeps cursor and undo
     const seq = ++switchSeq
     setEditable(false)
     const clean = await waitIdle()
@@ -400,6 +413,8 @@
   /** Switches the editor to `target`, saving the current file first. */
   async function switchTo(target) {
     if (!view || (target === docFile && !untitled)) return
+    // Remember the tab being left (before the read-only switch below).
+    if (docFile && !untitled) tabStates.set(docFile, view.state)
     const seq = ++switchSeq
     setEditable(false)
 
@@ -493,6 +508,15 @@
 
   // The only place where the editor's document changes: when the selected
   // file changes. CodeMirror itself is never remounted.
+  // A closed tab forgets its state.
+  $effect(() => {
+    const open = isPrimary ? tabs.primary : tabs.secondary
+    const keep = new Set(open)
+    untrack(() => {
+      for (const path of tabStates.keys()) if (!keep.has(path)) tabStates.delete(path)
+    })
+  })
+
   // ⌘+ / ⌘- change the text size through a CSS variable: CodeMirror does not
   // notice (no resize), so it measures its lines again.
   $effect(() => {

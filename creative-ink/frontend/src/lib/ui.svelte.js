@@ -4,6 +4,7 @@
 /** @typedef {'explorer' | 'search'} SidebarTool */
 /** @typedef {'problems' | 'terminal' | 'shell'} BottomTab  'terminal' = Terminal CI */
 /** @typedef {'primary' | 'secondary'} EditorPane */
+/** @typedef {'pdf' | 'minimal' | 'multi'} EditorMode */
 
 // Declared before `ui`: its initial values read them.
 const SPLIT_RATIO_KEY = 'creative-ink.splitRatio'
@@ -40,6 +41,18 @@ function readFlag(/** @type {string} */ key, /** @type {string} */ def) {
   } catch {
     return def
   }
+}
+
+/** @returns {EditorMode} */
+function readMode() {
+  const mode = readFlag('creative-ink.editorMode', 'minimal')
+  return mode === 'pdf' || mode === 'multi' ? mode : 'minimal'
+}
+
+/** Remembers the editor mode (actions.js setEditorMode applies it). */
+export function saveEditorMode(/** @type {EditorMode} */ mode) {
+  ui.editorMode = mode
+  writePref('creative-ink.editorMode', mode)
 }
 
 function writePref(/** @type {string} */ key, /** @type {string} */ value) {
@@ -89,6 +102,15 @@ export const ui = $state({
    * @type {'continuous' | 'page'}
    */
   pdfMode: readFlag('creative-ink.pdfMode', 'continuous') === 'page' ? 'page' : 'continuous',
+  /**
+   * Editor mode (docs/MAP.md §4.4, #9): 'pdf' only the PDF (presenting
+   * Beamer slides or an article, the code hidden), 'minimal' one code pane
+   * and the viewer (the original idea), 'multi' panes with tabs (VS Code).
+   * @type {EditorMode}
+   */
+  editorMode: readMode(),
+  /** The mode menu of the ActionBar is open. */
+  modeMenuOpen: false,
   /** The terminals' location banner was hidden (until another folder opens). */
   locationBannerHidden: false,
   /**
@@ -160,10 +182,20 @@ export function resetLayoutRatio(/** @type {'editorRatio' | 'editorRatioSplit' |
   setLayoutRatio(name, PREFS[name].def, true)
 }
 
-/** Shows or hides the PDF preview (⌥⌘P). */
+/** Shows or hides the PDF preview (⌥⌘P). In "Solo PDF" it brings the code back instead. */
 export function togglePreview() {
+  if (ui.editorMode === 'pdf') {
+    saveEditorMode('minimal')
+    return
+  }
   ui.previewVisible = !ui.previewVisible
   writePref('creative-ink.previewVisible', String(ui.previewVisible))
+}
+
+/** Shows or hides the preview (remembered). */
+export function setPreviewVisible(/** @type {boolean} */ visible) {
+  ui.previewVisible = visible
+  writePref('creative-ink.previewVisible', String(visible))
 }
 
 /** Moves the preview to the other side of the editors. */
@@ -215,6 +247,15 @@ export function setDirExpanded(/** @type {string} */ path, /** @type {boolean} *
  * @param {BottomTab} tab
  */
 export function toggleBottomTab(tab) {
+  // Solo PDF hides the editor column, and the bottom panel lives in it:
+  // bring the code back and show the tab (never close what was not visible).
+  if (ui.editorMode === 'pdf') {
+    saveEditorMode('minimal')
+    ui.bottomTab = tab
+    ui.bottomPanelOpen = true
+    ui.bottomAutoOpened = false
+    return
+  }
   if (ui.bottomPanelOpen && ui.bottomTab === tab) {
     ui.bottomPanelOpen = false
   } else {
