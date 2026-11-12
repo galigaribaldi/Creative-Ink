@@ -88,6 +88,24 @@ export namespace config {
 
 export namespace core {
 	
+	export class ExternalRef {
+	    file: string;
+	    line: number;
+	    ref: string;
+	    exists: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExternalRef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.file = source["file"];
+	        this.line = source["line"];
+	        this.ref = source["ref"];
+	        this.exists = source["exists"];
+	    }
+	}
 	export class FileNode {
 	    name: string;
 	    path: string;
@@ -146,6 +164,87 @@ export namespace core {
 	        this.steps = source["steps"];
 	    }
 	}
+	export class ImportPreview {
+	    canceled: boolean;
+	    id: string;
+	    source: string;
+	    file: string;
+	    inPlaceSingle: boolean;
+	    proposedName: string;
+	    files: number;
+	    bytes: number;
+	    hasGit: boolean;
+	    gitRoot: string;
+	    gitFiles: number;
+	    gitBytes: number;
+	    documents: string[];
+	    documentCount: number;
+	    collection: boolean;
+	    mainCandidates: string[];
+	    externalRefs: ExternalRef[];
+	    externalRefCount: number;
+	    notUtf8: string[];
+	    symlinks: string[];
+	    rcFiles: string[];
+	    freeBytes: number;
+	    large: boolean;
+	    canCopy: boolean;
+	    copyBlocked: string;
+	    notices: LocationNotice[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.canceled = source["canceled"];
+	        this.id = source["id"];
+	        this.source = source["source"];
+	        this.file = source["file"];
+	        this.inPlaceSingle = source["inPlaceSingle"];
+	        this.proposedName = source["proposedName"];
+	        this.files = source["files"];
+	        this.bytes = source["bytes"];
+	        this.hasGit = source["hasGit"];
+	        this.gitRoot = source["gitRoot"];
+	        this.gitFiles = source["gitFiles"];
+	        this.gitBytes = source["gitBytes"];
+	        this.documents = source["documents"];
+	        this.documentCount = source["documentCount"];
+	        this.collection = source["collection"];
+	        this.mainCandidates = source["mainCandidates"];
+	        this.externalRefs = this.convertValues(source["externalRefs"], ExternalRef);
+	        this.externalRefCount = source["externalRefCount"];
+	        this.notUtf8 = source["notUtf8"];
+	        this.symlinks = source["symlinks"];
+	        this.rcFiles = source["rcFiles"];
+	        this.freeBytes = source["freeBytes"];
+	        this.large = source["large"];
+	        this.canCopy = source["canCopy"];
+	        this.copyBlocked = source["copyBlocked"];
+	        this.notices = this.convertValues(source["notices"], LocationNotice);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class OutputChunk {
 	    runId: number;
 	    data: string;
@@ -274,6 +373,8 @@ export namespace core {
 	    folder: string;
 	    gitRoot: string;
 	    syncService: string;
+	    collection: boolean;
+	    documents: number;
 	    notices: LocationNotice[];
 	
 	    static createFrom(source: any = {}) {
@@ -286,6 +387,8 @@ export namespace core {
 	        this.folder = source["folder"];
 	        this.gitRoot = source["gitRoot"];
 	        this.syncService = source["syncService"];
+	        this.collection = source["collection"];
+	        this.documents = source["documents"];
 	        this.notices = this.convertValues(source["notices"], LocationNotice);
 	    }
 	
@@ -329,9 +432,28 @@ export namespace core {
 
 export namespace main {
 	
+	export class ImportOptions {
+	    id: string;
+	    name: string;
+	    mainFile: string;
+	    includeGit: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportOptions(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.mainFile = source["mainFile"];
+	        this.includeGit = source["includeGit"];
+	    }
+	}
 	export class OpenedFile {
 	    path: string;
 	    content: string;
+	    compileTarget: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new OpenedFile(source);
@@ -341,6 +463,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
 	        this.content = source["content"];
+	        this.compileTarget = source["compileTarget"];
 	    }
 	}
 	export class RecentFolder {
@@ -487,6 +610,8 @@ export namespace main {
 	}
 	export class WorkspaceState {
 	    location: core.ProjectLocation;
+	    compileTarget: string;
+	    singleFile: string;
 	    needsSetup: boolean;
 	    needsStart: boolean;
 	    repositoryPath: string;
@@ -508,6 +633,8 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.location = this.convertValues(source["location"], core.ProjectLocation);
+	        this.compileTarget = source["compileTarget"];
+	        this.singleFile = source["singleFile"];
 	        this.needsSetup = source["needsSetup"];
 	        this.needsStart = source["needsStart"];
 	        this.repositoryPath = source["repositoryPath"];
