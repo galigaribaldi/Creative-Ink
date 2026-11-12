@@ -1129,7 +1129,7 @@ func TestMenuOnlyOnMacAndEmitsCommands(t *testing.T) {
 			continue
 		}
 		for _, item := range top.SubMenu.Items {
-			if item.Label == "Nuevo archivo…" {
+			if item.Label == "Nuevo archivo" {
 				newFile = item
 			}
 		}
