@@ -10,6 +10,7 @@ import {
   GetProjectHealth,
   GetWorkspace,
   NewFileDialog,
+  NewWindow,
   OpenFolderDialog,
   OpenBlankDocument,
   OpenImportInPlace,
@@ -18,13 +19,14 @@ import {
   RefreshWorkspace,
   RequestCompile,
   SaveAsDialog,
+  SaveNewDialog,
   SetMainFile,
   SetupRepository,
   TrustProject,
   UntrustProject
 } from '../../wailsjs/go/main/App.js'
 import { EventsOn } from '../../wailsjs/runtime/runtime.js'
-import { toggleBottomTab, toggleSidebar, ui } from './ui.svelte.js'
+import { showToast, toggleBottomTab, toggleSidebar, ui } from './ui.svelte.js'
 import { applyTree, applyTrust, applyWorkspace, compileTarget, workspace } from './workspace.svelte.js'
 
 // Events emitted by Go (app.go, menu.go).
@@ -42,6 +44,8 @@ export const TRUST_CHANGED = 'trust:changed' // trust of the project's .latexmkr
  *   isDirty: () => boolean,
  *   getContent: () => string,
  *   adopt: (path: string) => void,
+ *   isUntitled: () => boolean,
+ *   hasUntitledText: () => boolean,
  *   focus: () => void,
  *   run: (command: string) => boolean
  * }} EditorCommands
@@ -138,6 +142,7 @@ let refreshPending = false
  * and closes the start screen on success. They return an error message or ''.
  */
 async function switchProject(/** @type {() => Promise<import('./workspace.svelte.js').WorkspaceState>} */ open) {
+  if (editors.primary?.hasUntitledText()) return UNTITLED_BLOCKS
   if (!(await persistPendingEdits())) return 'No se pudieron guardar los cambios del archivo abierto.'
   try {
     applyWorkspace(await open())
@@ -229,6 +234,12 @@ export function listenWorkspaceEvents() {
  * @param {string} path absolute
  */
 export function openFile(path) {
+  // Leaving the untitled document (the editor refuses it if it has text).
+  if (workspace.untitled && !(ui.splitEditor && ui.focusedPane === 'secondary')) {
+    workspace.untitled = false
+    workspace.currentFilePath = path
+    return
+  }
   if (path === workspace.currentFilePath) return focusPane('primary')
   if (ui.splitEditor && path === workspace.secondaryFilePath) return focusPane('secondary')
   if (ui.splitEditor && ui.focusedPane === 'secondary') workspace.secondaryFilePath = path
@@ -295,8 +306,52 @@ export async function toggleSplitEditor() {
  * (.tex by default; .bib, .sty, .txt… by extension). Without a project it
  * creates a quick document instead. The new file opens in the main pane.
  */
-export async function newFile() {
+const MOD_S = navigator.platform.toLowerCase().includes('mac') ? '⌘S' : 'Ctrl+S'
+export const UNTITLED_BLOCKS = `Guarda el documento sin título (${MOD_S}) o bórralo antes de abrir otro proyecto.`
+
+/**
+ * ⌘N / Ctrl+N: a new untitled document in this window's main pane, to write
+ * at once; ⌘S saves it (the dialog opens in the open project). Without a
+ * project, a quick document.
+ */
+export function newFile() {
   if (!workspace.currentFolderPath) return newQuickDocument()
+  ui.startOpen = false
+  ui.focusedPane = 'primary'
+  if (workspace.untitled) return editors.primary?.focus()
+  workspace.untitled = true
+}
+
+/** ⇧⌘N / Ctrl+Shift+N: another, independent Creative-ink window. */
+export async function newWindow() {
+  try {
+    await NewWindow()
+  } catch (err) {
+    showToast(String(err), 'warning')
+  }
+}
+
+/** Saves the untitled document of ⌘N; returns true if it was saved. */
+async function saveUntitled() {
+  const editor = editors.primary
+  if (!editor) return false
+  try {
+    const state = await SaveNewDialog(editor.getContent())
+    if (state.canceled) return false
+    workspace.untitled = false
+    editor.adopt(state.filePath) // same text, now a file: no reload
+    applyWorkspace(state)
+    return true
+  } catch (err) {
+    showToast(String(err), 'warning')
+    return false
+  }
+}
+
+/** The explorer's "Nuevo archivo…": asks for the name first (native dialog). */
+export async function newNamedFile() {
+  if (!workspace.currentFolderPath) return newQuickDocument()
+  if (editors.primary?.hasUntitledText()) return showToast(UNTITLED_BLOCKS, 'warning')
   if (!(await persistPendingEdits())) return
   try {
     const state = await NewFileDialog()
@@ -309,7 +364,7 @@ export async function newFile() {
   }
 }
 
-/** ⇧⌘N / Ctrl+Shift+N: tmp-Workspaces/unnamed-tmp<N>/main.tex. */
+/** ⌥⌘N / Ctrl+Alt+N (and ⌘N without a project): tmp-Workspaces/unnamed-tmp<N>/main.tex. */
 export async function newQuickDocument() {
   const message = await createQuickDocument()
   if (message) report(message)
@@ -333,6 +388,10 @@ export async function setMainFile(path) {
  * and then compiles. Without a document, it only compiles.
  */
 export async function saveDocument() {
+  if (editors.primary?.isUntitled()) {
+    if (await saveUntitled()) void RequestCompile('manual')
+    return
+  }
   // This compile replaces the ones the panes had scheduled after typing.
   for (const e of [editors.primary, editors.secondary]) e?.cancelScheduledCompile()
   if (!(await persistPendingEdits())) return // the PDF would not match the text
@@ -345,6 +404,7 @@ export async function saveDocument() {
  * document; the second pane only edits files in place).
  */
 export async function saveAs() {
+  if (editors.primary?.isUntitled()) return void saveUntitled()
   const editor = editors.primary
   if (!editor || !(await persistPendingEdits())) return
   try {
@@ -392,6 +452,7 @@ export function listenAppEvents() {
  */
 const COMMANDS = {
   'new-file': newFile,
+  'new-window': newWindow,
   'new-quick-doc': newQuickDocument,
   'open-folder': openFolder,
   start: () => (ui.startOpen = true),

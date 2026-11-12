@@ -54,7 +54,8 @@
   /**
    * Global shortcuts (they also fire inside CodeMirror: its keydown bubbles).
    * Editing commands (undo, find, ⌘D, ⌘/…) belong to CodeMirror's keymap.
-   * Cmd/Ctrl+N new file · Cmd/Ctrl+Shift+N quick document
+   * Cmd/Ctrl+N untitled document in this window · Cmd/Ctrl+Shift+N new window ·
+   * Cmd/Ctrl+Alt+N quick document
    * Cmd/Ctrl+S save + compile · Cmd/Ctrl+Shift+S save as
    * Cmd/Ctrl+B sidebar · Cmd/Ctrl+O open folder · Cmd/Ctrl+\ split editor
    * Ctrl+` or Cmd/Ctrl+J terminal (` is a dead key on Spanish layouts)
@@ -63,12 +64,20 @@
    * command again: WKWebView only passes unhandled keys to the menu.
    */
   function onkeydown(event) {
-    if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+    if (!(event.metaKey || event.ctrlKey)) return
+    // ⌥⌘N: quick document (event.code: ⌥ turns the key into another character).
+    if (event.altKey) {
+      if (event.code === 'KeyN' && !event.shiftKey) {
+        event.preventDefault()
+        runCommand('new-quick-doc')
+      }
+      return
+    }
     const key = event.key.toLowerCase()
     const shift = event.shiftKey
     let command = ''
     if ((event.ctrlKey && event.code === 'Backquote') || (key === 'j' && !shift)) command = 'toggle-terminal'
-    else if (key === 'n') command = shift ? 'new-quick-doc' : 'new-file'
+    else if (key === 'n') command = shift ? 'new-window' : 'new-file'
     else if (key === 's') command = shift ? 'save-as' : 'save' // no "Save page" from the webview
     else if (key === 'b' && !shift) command = 'toggle-sidebar'
     else if (key === 'o' && !shift) command = 'open-folder'

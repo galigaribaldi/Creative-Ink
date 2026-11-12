@@ -79,7 +79,13 @@ export const workspace = $state({
    */
   compileTargetPath: '',
   /** A loose file open where it is (Desktop, Downloads): only it is shown. */
-  singleFile: ''
+  singleFile: '',
+  /**
+   * ⌘N: the main pane shows a new untitled document. It lives only in the
+   * editor (Go knows nothing until ⌘S saves it with SaveNewDialog); while
+   * it has text, the editor refuses to switch away from it.
+   */
+  untitled: false
 })
 
 /** Applies a WorkspaceState returned by Go. */
@@ -91,7 +97,10 @@ export function applyWorkspace(/** @type {WorkspaceState} */ state) {
   }
   const folderChanged = state.folderPath !== workspace.currentFolderPath
   // Another project: its own analysis arrives later (project:health).
-  if (folderChanged) workspace.healthWarnings = []
+  if (folderChanged) {
+    workspace.healthWarnings = []
+    workspace.untitled = false // another project: the editor shows its file
+  }
   workspace.location = state.location ?? NO_LOCATION
   // Opening a folder outside the repository leaves a line in both terminals.
   if (folderChanged && state.folderPath) noteLocation(workspace.location)
