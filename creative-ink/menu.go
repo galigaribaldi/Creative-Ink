@@ -76,6 +76,12 @@ func (a *App) buildMenu(goos string) *menu.Menu {
 		{"toggle-sidebar", "Explorador", cmd("b")},
 		{"toggle-terminal", "Terminal CI", cmd("j")},
 		{"split-editor", "Dividir el editor", cmd("\\")},
+		{"toggle-preview", "Vista previa", combo("p", keys.OptionOrAltKey)},
+		{"preview-side", "Cambiar de lado la vista previa", nil},
+		{},
+		{"zoom-in", "Acercar", cmd("+")},
+		{"zoom-out", "Alejar", cmd("-")},
+		{"zoom-reset", "Tamaño real", cmd("0")},
 	})
 	root.Append(menu.WindowMenu())
 	return root
