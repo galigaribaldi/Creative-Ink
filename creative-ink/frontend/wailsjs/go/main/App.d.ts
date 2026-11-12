@@ -12,6 +12,10 @@ export function CancelTerminalCommand():Promise<void>;
 
 export function ConfirmClose(arg1:boolean):Promise<void>;
 
+export function CreateFile(arg1:string,arg2:string):Promise<main.WorkspaceState>;
+
+export function CreateFolder(arg1:string,arg2:string):Promise<main.WorkspaceState>;
+
 export function CreateProject(arg1:string):Promise<main.WorkspaceState>;
 
 export function CreateProjectFromTemplate(arg1:string,arg2:string):Promise<main.WorkspaceState>;
