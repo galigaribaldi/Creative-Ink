@@ -83,6 +83,12 @@ export const ui = $state({
   previewSide: readFlag('creative-ink.previewSide', 'right') === 'left' ? 'left' : 'right',
   /** UI and editor text zoom (⌘+ / ⌘- / ⌘0); the PDF has its own. */
   zoom: readPref('zoom'),
+  /**
+   * PDF view: 'continuous' (pdf.js PDFViewer: scroll, zoom, text) or
+   * 'page' (the original one-page canvas). Block B2 of §4.4 #9, on trial.
+   * @type {'continuous' | 'page'}
+   */
+  pdfMode: readFlag('creative-ink.pdfMode', 'continuous') === 'page' ? 'page' : 'continuous',
   /** The terminals' location banner was hidden (until another folder opens). */
   locationBannerHidden: false,
   /**
@@ -164,6 +170,12 @@ export function togglePreview() {
 export function swapPreviewSide() {
   ui.previewSide = ui.previewSide === 'right' ? 'left' : 'right'
   writePref('creative-ink.previewSide', ui.previewSide)
+}
+
+/** Switches the PDF view between continuous and one page. */
+export function setPdfMode(/** @type {'continuous' | 'page'} */ mode) {
+  ui.pdfMode = mode
+  writePref('creative-ink.pdfMode', mode)
 }
 
 /** ⌘+ / ⌘- (step) and ⌘0 (0 = back to 100 %). */

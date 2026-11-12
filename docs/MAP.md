@@ -93,6 +93,7 @@ Creative-Ink/                     ← raíz del repo (metadocumentación)
         │   │   ├── HealthPanel.svelte ← modal "Estado del sistema" (incluye "Sistema y repositorio")
         │   │   ├── RepositorySetup.svelte ← primer arranque: "Solo para mí" / "Para todos los usuarios"
         │   │   ├── StartScreen.svelte ← cada sesión: Nuevo proyecto, Documento rápido, proyectos, recientes y aviso de documentos rápidos antiguos
+        │   │   ├── PdfContinuous.svelte ← vista continua del PDF (PDFViewer de pdfjs-dist/web): zoom, capa de texto, doble búfer al recargar, SyncTeX
         │   │   └── Preview.svelte     ← PDF.js en <canvas>, doble buffer, conserva la página al recargar
         │   ├── lib/
         │   │   ├── ui.svelte.js          ← estado visual ($state): sidebarOpen, activeTool, healthOpen, splitEditor, focusedPane, startOpen. Nunca va a Go
@@ -545,7 +546,18 @@ Decisiones del usuario (2026-11-11): modo colección **sí**; al cerrar la panta
      - **A:** `Splitter.svelte` (columnas o filas; ratón, ←/→ o ↑/↓, Home y doble clic restablecen) entre los dos editores, entre los editores y la vista previa (`ui.editorRatio` / `editorRatioSplit`, 25–80 % y 40–85 %) y encima del panel inferior (`ui.bottomRatio`, 15–75 %). Todo en `localStorage` (estado visual, nunca Go). Durante el arrastre, `body.resizing` deja un solo cursor y CodeMirror y el canvas no toman el puntero. **Vista previa:** ⌥⌘P, botón en la ActionBar y en su barra (✕ y ⇄ cambiar de lado); oculta sigue montada (mismo PDF, página y worker) y no dibuja sin ancho.
      - **D:** `CreateFolder`/`CreateFile` con un campo de nombre encima del árbol (cabecera y clic derecho "Nuevo archivo aquí / Nueva carpeta aquí"); `core.AffectsBuild` → `SaveResult.affectsBuild`: ⌘S y la compilación automática solo compilan si un archivo abierto puede cambiar el PDF (observación 4 de §4.7 resuelta); el botón Compilar compila siempre. Observación 1 (crear carpetas desde la UI) resuelta.
      - **Zoom:** los 5 tokens de texto (`--text-*`, `--text-editor`) son `calc(px × var(--zoom))`; `ui.zoom` 70–200 % en pasos de 10 %; CodeMirror vuelve a medir (`requestMeasure`). El PDF tendrá su propio zoom (bloque B).
-   - **Siguiente:** prueba de B2 (`PDFViewer` con el renderer worker, recarga sin parpadeo, SyncTeX) → decidir B1/B2 → C1 pestañas.
+   - **B2 en prueba (2026-11-11):** `PdfContinuous.svelte` con `PDFViewer` de `pdfjs-dist/web/pdf_viewer.mjs` (ya instalado), detrás del selector **"Continuo / Página"** de la barra de la vista previa (`ui.pdfMode`, en `localStorage`; por defecto continuo). El modo "Página" (el visor anterior, B1) sigue intacto y no carga nada mientras está activo el continuo. Verificado en el código antes de escribirlo:
+     - el renderer worker de la Sección 20 se usa igual: `PDFViewer` dibuja con `pdfPage.render()` y la decisión de pintar en el worker está ahí dentro (`GlobalWorkerOptions.rendererSrc`);
+     - `pdf_viewer.mjs` lee `globalThis.pdfjsLib` al evaluarse (lo define `build/pdf.mjs`): se carga con `import()` dinámico al montar, después de `lib/pdf.js`; tampoco pesa en el arranque del modo "Página";
+     - su CSS no tiene reglas genéricas ni variables que choquen con los tokens;
+     - **recarga sin parpadeo:** dos visores apilados; el PDF nuevo se carga en el oculto (`visibility: hidden`, conserva el ancho) en la misma página, desplazamiento y zoom, y se intercambian al dibujarse la primera página visible (o a los 2 s); el anterior se libera (`setDocument(null)` y `releasePdf`);
+     - **SyncTeX:** hacia delante, `viewport.convertToViewportRectangle` (SyncTeX da puntos desde arriba a la izquierda; pdf.js, desde abajo); hacia atrás, doble clic en una página → `convertToPdfPoint`;
+     - enlaces internos (índice, referencias) activos; **externos desactivados** (`externalLinkEnabled = false`: navegarían el WebView fuera de la app); capa de texto para seleccionar y copiar; sin edición de formularios.
+     - **Zoom del PDF:** − / + (`increaseScale`/`decreaseScale`) y un selector (ajustar al ancho, página completa, 50–300 %); "ajustar" sigue al tamaño del panel.
+   - **Siguiente:** que el usuario confirme B2 en la app → retirar o conservar el modo "Página" → C1 pestañas (con el nombre del archivo arriba) → mover archivos arrastrándolos en el explorador.
+   - **Añadido por el usuario (2026-11-11), dentro de esta misma deuda (no obligatorio en la siguiente pasada):**
+     - **Mover archivos y carpetas arrastrándolos en el explorador** (soltar un archivo sobre una carpeta lo mete dentro). Implica un binding `MoveEntry(from, toDir)` en Go: ambos dentro de la carpeta abierta, nunca reemplaza, y actualiza lo que dependa de la ruta (paneles abiertos, archivo principal en `.creative-ink-meta`, objetivo de compilación). Hoy el arrastre del explorador solo abre en el panel secundario: habrá que distinguir "soltar sobre una carpeta" de "soltar sobre el editor".
+     - **El nombre del archivo arriba de cada panel del editor** (hoy solo está en la barra de estado, abajo): poco intuitivo con dos paneles. Lo resuelven las pestañas de C1 (cada panel muestra sus pestañas con el nombre arriba); si C1 se retrasa, una cabecera fina con el nombre y la ruta relativa.
 
 ## 4.5 Escalabilidad con documentos grandes (análisis del 2026-11-07; Secciones 14 y 20)
 

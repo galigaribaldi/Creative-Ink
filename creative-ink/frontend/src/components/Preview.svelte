@@ -4,7 +4,8 @@
   import { config } from '../lib/config.svelte.js'
   import { loadPdf, releasePdf } from '../lib/pdf.js'
   import { sync, syncBackward } from '../lib/synctex.svelte.js'
-  import { swapPreviewSide, togglePreview } from '../lib/ui.svelte.js'
+  import { setPdfMode, swapPreviewSide, togglePreview, ui } from '../lib/ui.svelte.js'
+  import PdfContinuous from './PdfContinuous.svelte'
 
   // Served by the Go AssetServer middleware (see preview.go: previewRoute).
   const PREVIEW_URL = '/__preview/document.pdf'
@@ -89,10 +90,68 @@
   // and the canvas is not reloaded. PDF.js then fetches only the byte ranges
   // it needs from that snapshot, even while latexmk rewrites the live PDF.
   $effect(() => {
-    if (!pdfVersion) return
+    if (!pdfVersion || ui.pdfMode !== 'page') return // the continuous view loads its own
     const url = `${PREVIEW_URL}?v=${pdfVersion}`
     untrack(() => reload(url))
   })
+
+  // ── Continuous view (PdfContinuous.svelte, block B2 on trial) ────────────
+  let continuous = $derived(ui.pdfMode === 'continuous')
+  /** @type {ReturnType<typeof PdfContinuous> | undefined} */
+  let cont = $state()
+  let contPages = $state(0)
+  let contPage = $state(1)
+  let contZoom = $state('')
+  let contError = $state('')
+  let previewUrl = $derived(pdfVersion ? `${PREVIEW_URL}?v=${pdfVersion}` : '')
+  // Switched to continuous: the one-page view frees its document.
+  $effect(() => {
+    if (!continuous) return
+    untrack(() => {
+      loadSeq++
+      renderTask?.cancel()
+      void releasePdf(pdfDoc)
+      pdfDoc = null
+      hasPage = false
+      pageCount = 0
+      rendered = { pageNumber: 0, cssScale: 1 }
+    })
+  })
+  // What the header shows, from whichever view is active.
+  let shownPages = $derived(continuous ? contPages : pageCount)
+  let shownPage = $derived(continuous ? contPage : currentPageNumber)
+  let shownError = $derived(continuous ? contError : renderError)
+  let anyPage = $derived(continuous ? contPages > 0 : hasPage)
+
+  const ZOOMS = [
+    { value: 'page-width', label: 'Ajustar al ancho' },
+    { value: 'page-fit', label: 'Página completa' },
+    { value: '0.5', label: '50 %' },
+    { value: '0.75', label: '75 %' },
+    { value: '1', label: '100 %' },
+    { value: '1.25', label: '125 %' },
+    { value: '1.5', label: '150 %' },
+    { value: '2', label: '200 %' },
+    { value: '3', label: '300 %' }
+  ]
+
+  // The select shows the chosen preset, or the current % after − / +.
+  let zoomPick = $state('page-width')
+
+  function onzoompick(/** @type {Event} */ event) {
+    zoomPick = /** @type {HTMLSelectElement} */ (event.currentTarget).value
+    cont?.setZoom(Number.isNaN(Number(zoomPick)) ? zoomPick : Number(zoomPick))
+  }
+
+  function zoomStep(/** @type {1 | -1} */ dir) {
+    zoomPick = '' // a free percentage now
+    cont?.zoomStep(dir)
+  }
+
+  function step(/** @type {1 | -1} */ dir) {
+    if (continuous) cont?.goToPage(contPage + dir)
+    else void goToPage(currentPageNumber + dir)
+  }
 
   /** Clamps a page number to [1, numPages] (the new PDF may be shorter). */
   const clampPage = (n, numPages) => Math.min(Math.max(1, n), numPages)
@@ -197,7 +256,7 @@
   // Forward search (Editor → PDF): jump to the page and flash the box.
   $effect(() => {
     const target = sync.highlight
-    if (target) untrack(() => void showSyncHighlight(target))
+    if (target && ui.pdfMode === 'page') untrack(() => void showSyncHighlight(target))
   })
 
   /** @param {import('../lib/synctex.svelte.js').SyncHighlight} target */
@@ -224,8 +283,8 @@
   }
 
   // ── Page navigation (header controls) ──────────────────────────────────
-  let canGoBack = $derived(hasPage && currentPageNumber > 1)
-  let canGoForward = $derived(hasPage && currentPageNumber < pageCount)
+  let canGoBack = $derived(anyPage && shownPage > 1)
+  let canGoForward = $derived(anyPage && shownPage < shownPages)
 
   /**
    * Shows page n (clamped). While a reload is in flight, it only moves
@@ -292,20 +351,20 @@
         <button class="back" onclick={showDocumentPreview} title="Volver al PDF del documento">Volver al documento</button>
       {/if}
     </span>
-    {#if pageCount}
+    {#if shownPages}
       <!-- Chevron paths in the Lucide style (ISC licence, lucide.dev). -->
       <nav class="pager" aria-label="Páginas del PDF">
         <button
-          onclick={() => goToPage(currentPageNumber - 1)}
+          onclick={() => step(-1)}
           disabled={!canGoBack}
           aria-label="Página anterior"
           title="Página anterior"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
         </button>
-        <span class="pages" aria-live="polite">Página {currentPageNumber} de {pageCount}</span>
+        <span class="pages" aria-live="polite">Página {shownPage} de {shownPages}</span>
         <button
-          onclick={() => goToPage(currentPageNumber + 1)}
+          onclick={() => step(1)}
           disabled={!canGoForward}
           aria-label="Página siguiente"
           title="Página siguiente"
@@ -320,8 +379,24 @@
     {:else}
       <span class="state-{compileState}">{LABELS[compileState]}</span>
     {/if}
-    <!-- Layout of the preview itself (ui.svelte.js): side and visibility. -->
+    {#if continuous && contPages}
+      <!-- Zoom of the PDF (its own; ⌘+/⌘- scale the UI text). -->
+      <span class="zoom" aria-label="Zoom del PDF">
+        <button onclick={() => zoomStep(-1)} aria-label="Alejar el PDF" title="Alejar el PDF">−</button>
+        <select value={zoomPick} onchange={onzoompick} aria-label="Zoom del PDF" title="Zoom del PDF">
+          <option value="" disabled hidden>{contZoom}</option>
+          {#each ZOOMS as z (z.value)}<option value={z.value}>{z.label}</option>{/each}
+        </select>
+        <button onclick={() => zoomStep(1)} aria-label="Acercar el PDF" title="Acercar el PDF">+</button>
+      </span>
+    {/if}
+    <!-- Layout of the preview itself (ui.svelte.js): view, side and visibility. -->
     <span class="layout-actions">
+      <button
+        class="mode"
+        onclick={() => setPdfMode(continuous ? 'page' : 'continuous')}
+        title={continuous ? 'Vista continua (desplazamiento y zoom). Clic: una página a la vez' : 'Una página a la vez. Clic: vista continua con zoom'}
+      >{continuous ? 'Continuo' : 'Página'}</button>
       <button onclick={swapPreviewSide} aria-label="Cambiar de lado la vista previa" title="Cambiar de lado la vista previa">
         <!-- Lucide "arrow-left-right" -->
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -335,7 +410,22 @@
     </span>
   </header>
 
-  <div class="viewer" bind:this={viewer}>
+  {#if continuous}
+    <PdfContinuous
+      bind:this={cont}
+      url={previewUrl}
+      {documentKey}
+      syncEnabled={!compilation.foreign}
+      bind:pageCount={contPages}
+      bind:currentPage={contPage}
+      bind:zoomLabel={contZoom}
+      bind:error={contError}
+    />
+    {#if !contPages}{@render placeholder()}{/if}
+  {/if}
+
+  <!-- The one-page view stays mounted (its ResizeObserver), hidden in continuous. -->
+  <div class="viewer" class:off={continuous} bind:this={viewer}>
     <div class="page" class:hidden={!hasPage}>
       <!-- Double-click: SyncTeX backward (keyboard alternative: ⌘⌥J/Ctrl+Alt+J
            works the other way, from the editor). -->
@@ -360,23 +450,25 @@
         {/key}
       {/if}
     </div>
-    {#if !hasPage}
-      <p class="placeholder">
-        {#if compileState === 'compiling'}
-          Compilando el documento…
-        {:else if !config.autoCompile}
-          La compilación automática está desactivada: pulsa {SAVE_SHORTCUT} para compilar y ver el PDF.
-        {:else}
-          Escribe un documento LaTeX válido para ver el PDF.
-        {/if}
-      </p>
-    {/if}
+    {#if !hasPage}{@render placeholder()}{/if}
   </div>
 
-  {#if renderError}
-    <p class="render-error" role="alert">⚠️ No se pudo mostrar el PDF: {renderError}</p>
+  {#if shownError}
+    <p class="render-error" role="alert">⚠️ No se pudo mostrar el PDF: {shownError}</p>
   {/if}
 </div>
+
+{#snippet placeholder()}
+  <p class="placeholder">
+    {#if compileState === 'compiling'}
+      Compilando el documento…
+    {:else if !config.autoCompile}
+      La compilación automática está desactivada: pulsa {SAVE_SHORTCUT} para compilar y ver el PDF.
+    {:else}
+      Escribe un documento LaTeX válido para ver el PDF.
+    {/if}
+  </p>
+{/snippet}
 
 <style>
   .preview {
@@ -489,6 +581,62 @@
     stroke-width: var(--icon-stroke);
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+
+  .viewer.off {
+    display: none;
+  }
+
+  /* PDF zoom: − [select] +, quiet like the pager. */
+  .zoom {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.1rem;
+    margin-left: 0.5rem;
+  }
+
+  .zoom button {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
+  }
+
+  .zoom button:hover {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+  }
+
+  .zoom select {
+    max-width: 8.5rem;
+    padding: 0.05rem 0.25rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-editor);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--text-xs);
+  }
+
+  .zoom button:focus-visible,
+  .zoom select:focus-visible,
+  .layout-actions .mode:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .layout-actions .mode {
+    width: auto;
+    padding: 0 0.4rem;
+    font: inherit;
+    font-size: var(--text-xs);
   }
 
   /* Side and hide: quiet icon buttons at the end of the bar, like the pager. */
