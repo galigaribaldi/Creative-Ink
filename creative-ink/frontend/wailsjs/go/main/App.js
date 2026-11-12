@@ -70,6 +70,10 @@ export function NewFileDialog() {
   return window['go']['main']['App']['NewFileDialog']();
 }
 
+export function NewWindow() {
+  return window['go']['main']['App']['NewWindow']();
+}
+
 export function OpenBlankDocument() {
   return window['go']['main']['App']['OpenBlankDocument']();
 }
@@ -120,6 +124,10 @@ export function SaveAsDialog(arg1) {
 
 export function SaveContent(arg1, arg2) {
   return window['go']['main']['App']['SaveContent'](arg1, arg2);
+}
+
+export function SaveNewDialog(arg1) {
+  return window['go']['main']['App']['SaveNewDialog'](arg1);
 }
 
 export function SetConfig(arg1, arg2, arg3) {
