@@ -40,6 +40,8 @@ export function LoadFile(arg1:string):Promise<main.OpenedFile>;
 
 export function NewFileDialog():Promise<main.WorkspaceState>;
 
+export function NewWindow():Promise<void>;
+
 export function OpenBlankDocument():Promise<main.WorkspaceState>;
 
 export function OpenFile(arg1:string):Promise<main.OpenedFile>;
@@ -65,6 +67,8 @@ export function RunTerminalCommand(arg1:string):Promise<main.TerminalResult>;
 export function SaveAsDialog(arg1:string):Promise<main.WorkspaceState>;
 
 export function SaveContent(arg1:string,arg2:string):Promise<main.SaveResult>;
+
+export function SaveNewDialog(arg1:string):Promise<main.WorkspaceState>;
 
 export function SetConfig(arg1:string,arg2:string,arg3:string):Promise<config.Entry>;
 
