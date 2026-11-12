@@ -1,14 +1,69 @@
 <script>
   import FileTreeItem from './FileTreeItem.svelte'
-  import { newNamedFile, openFolder, refreshWorkspace } from '../lib/actions.js'
+  import { tick } from 'svelte'
+  import { createInExplorer, openFolder, refreshWorkspace } from '../lib/actions.js'
   import { ui } from '../lib/ui.svelte.js'
-  import { workspace } from '../lib/workspace.svelte.js'
+  import { baseName, workspace } from '../lib/workspace.svelte.js'
 
   const TITLES = { explorer: 'Explorador' }
-  const MOD = navigator.platform.toUpperCase().includes('MAC') ? '⌘' : 'Ctrl+'
 
   let tree = $derived(workspace.fileTree)
+  let canCreate = $derived(!!tree && !workspace.singleFile)
+
+  // ── New file / folder: a name field above the tree (no native dialog) ──
+  let newName = $state('')
+  let createError = $state('')
+  let creating = $state(false)
+  /** @type {HTMLInputElement | undefined} */
+  let nameInput = $state()
+  let where = $derived(
+    ui.treeCreate ? (ui.treeCreate.parent === tree?.path ? tree.name : baseName(ui.treeCreate.parent)) : ''
+  )
+
+  /** @param {'file' | 'folder'} kind @param {string} [parent] */
+  async function startCreate(kind, parent = tree?.path ?? '') {
+    ui.treeMenu = null
+    if (!canCreate || !parent) return
+    ui.treeCreate = { kind, parent }
+    newName = ''
+    createError = ''
+    await tick()
+    nameInput?.focus()
+  }
+
+  function cancelCreate() {
+    ui.treeCreate = null
+    createError = ''
+  }
+
+  async function submitCreate() {
+    if (!ui.treeCreate || !newName.trim() || creating) return
+    creating = true
+    const error = await createInExplorer(ui.treeCreate.kind, ui.treeCreate.parent, newName)
+    creating = false
+    if (error) createError = error
+    else cancelCreate()
+  }
+
+  /** @param {KeyboardEvent} event */
+  function onnamekeydown(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      void submitCreate()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      cancelCreate()
+    }
+  }
+
+  // The right-click menu closes on any click elsewhere or Escape.
+  /** @param {KeyboardEvent} event */
+  function onwindowkeydown(event) {
+    if (event.key === 'Escape' && ui.treeMenu) ui.treeMenu = null
+  }
 </script>
+
+<svelte:window onclick={() => (ui.treeMenu = null)} onkeydown={onwindowkeydown} />
 
 <!-- Always mounted; hidden by the shell's zero-width column. `inert` keeps
      the collapsed drawer out of the tab order and the accessibility tree. -->
@@ -17,10 +72,17 @@
     <header>
       <span>{TITLES[ui.activeTool]}</span>
       <div class="tools">
-        <button onclick={newNamedFile} aria-label="Nuevo archivo con nombre" title="Nuevo archivo con nombre… ({MOD}N: uno sin título)" disabled={!tree}>
+        <button onclick={() => startCreate('file')} aria-label="Nuevo archivo" title="Nuevo archivo en la carpeta (clic derecho en una carpeta: dentro de ella)" disabled={!canCreate}>
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
             <path d="M14 3v5h5M12 11v6M9 14h6" />
+          </svg>
+        </button>
+        <button onclick={() => startCreate('folder')} aria-label="Nueva carpeta" title="Nueva carpeta (clic derecho en una carpeta: dentro de ella)" disabled={!canCreate}>
+          <!-- Lucide "folder-plus" -->
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 10v6M9 13h6" />
+            <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
           </svg>
         </button>
         <button onclick={openFolder} aria-label="Abrir carpeta" title="Abrir carpeta">
@@ -39,6 +101,25 @@
     {#if ui.activeTool === 'explorer'}
       {#if tree}
         <p class="folder" title={tree.path}>{tree.name}</p>
+        {#if ui.treeCreate}
+          <div class="create">
+            <label>
+              <span>{ui.treeCreate.kind === 'file' ? 'Nuevo archivo' : 'Nueva carpeta'} en <strong>{where}</strong></span>
+              <input
+                bind:this={nameInput}
+                bind:value={newName}
+                onkeydown={onnamekeydown}
+                onblur={() => !newName.trim() && cancelCreate()}
+                disabled={creating}
+                placeholder={ui.treeCreate.kind === 'file' ? 'capitulo-3.tex (sin extensión: .tex)' : 'Coloquio-2027-1'}
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+            <small>Enter crea · Esc cancela · se normaliza con «-» y sin acentos</small>
+            {#if createError}<p class="error" role="alert">{createError}</p>{/if}
+          </div>
+        {/if}
         {#if tree.children?.length}
           <ul class="tree" role="tree" aria-label="Archivos de {tree.name}">
             {#each tree.children as node (node.path)}
@@ -64,6 +145,15 @@
     {/if}
   </div>
 </aside>
+
+{#if ui.treeMenu}
+  {@const menu = ui.treeMenu}
+  <!-- Right-click menu of the explorer (FileTreeItem.svelte opens it). -->
+  <div class="context-menu" role="menu" style:left="{menu.x}px" style:top="{menu.y}px">
+    <button role="menuitem" onclick={(e) => (e.stopPropagation(), startCreate('file', menu.parent))}>Nuevo archivo aquí</button>
+    <button role="menuitem" onclick={(e) => (e.stopPropagation(), startCreate('folder', menu.parent))}>Nueva carpeta aquí</button>
+  </div>
+{/if}
 
 <style>
   /* Chrome: --surface-base like the ActionBar; the editor's own surface
@@ -201,5 +291,74 @@
 
   .error {
     color: var(--danger);
+  }
+
+  /* Name field of a new file or folder, above the tree. */
+  .create {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0 0.5rem 0.5rem;
+  }
+
+  .create label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+  }
+
+  .create input {
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-editor);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-sm);
+  }
+
+  .create input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+
+  .create small {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+  }
+
+  /* Raised surface, overlay shadow, medium radius (A3). */
+  .context-menu {
+    position: fixed;
+    z-index: 25;
+    display: flex;
+    flex-direction: column;
+    min-width: 11rem;
+    padding: 0.25rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-overlay);
+  }
+
+  .context-menu button {
+    padding: 0.3rem 0.6rem;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-sm);
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--transition);
+  }
+
+  .context-menu button:hover,
+  .context-menu button:focus-visible {
+    background: var(--surface-hover);
+    outline: none;
   }
 </style>

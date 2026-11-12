@@ -39,6 +39,11 @@
   // Terminal runs: id of the spooled output and build progress.
   onDestroy(listenTerminalEvents())
   onDestroy(listenImportEvents())
+
+  // ⌘+ / ⌘- / ⌘0: the text tokens of style.css scale with --zoom.
+  $effect(() => {
+    document.documentElement.style.setProperty('--zoom', String(ui.zoom))
+  })
   onDestroy(listenDropEvents())
   onDestroy(guardSystemDrops())
   void initWorkspace()
@@ -65,12 +70,22 @@
    */
   function onkeydown(event) {
     if (!(event.metaKey || event.ctrlKey)) return
-    // ⌥⌘N: quick document (event.code: ⌥ turns the key into another character).
+    // ⌥⌘N quick document, ⌥⌘P preview (event.code: ⌥ turns the key into
+    // another character on macOS).
     if (event.altKey) {
-      if (event.code === 'KeyN' && !event.shiftKey) {
+      const alt = event.shiftKey ? '' : { KeyN: 'new-quick-doc', KeyP: 'toggle-preview' }[event.code]
+      if (alt) {
         event.preventDefault()
-        runCommand('new-quick-doc')
+        runCommand(alt)
       }
+      return
+    }
+    // ⌘+ / ⌘- / ⌘0: zoom of the UI and editor text ("=" is "+" without
+    // Shift on US layouts; "+" has its own key on Spanish ones).
+    const zoom = { '+': 'zoom-in', '=': 'zoom-in', '-': 'zoom-out', '0': 'zoom-reset' }[event.key]
+    if (zoom) {
+      event.preventDefault()
+      runCommand(zoom)
       return
     }
     const key = event.key.toLowerCase()

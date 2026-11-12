@@ -111,6 +111,9 @@
   // untitled: CodeMirror holds the ⌘N document (main pane only). It has no
   // file yet: no autosave, no compile; ⌘S saves it (actions.js saveUntitled).
   let untitled = false
+  // affects: saving docFile can change the PDF (Go: core.AffectsBuild). A
+  // README.md that no document reads is only saved, never compiled.
+  let affects = false
   let timer = null // pending save debounce
   let compileTimer = null // pending compile debounce
   let saving = false // a SaveContent call is in flight
@@ -166,7 +169,7 @@
     // Nothing to compile without a document (e.g. behind the first-run screen).
     // "auto": Go rejects it if compile.auto was turned off meanwhile, and
     // may cancel it if a newer request makes it obsolete.
-    if (clean && compileTarget()) void RequestCompile('auto')
+    if (clean && affects && compileTarget()) void RequestCompile('auto')
   }
 
   function cancelScheduledCompile() {
@@ -198,7 +201,8 @@
     const path = docFile
     try {
       // Go saves and answers at once with { saved }; it does not wait for latexmk.
-      await SaveContent(path, view.state.doc.toString())
+      const result = await SaveContent(path, view.state.doc.toString())
+      if (path === docFile) affects = result.affectsBuild
       // If the user typed during the save, status is already 'dirty': keep it.
       if (status === 'saving') status = 'saved'
       errorMsg = ''
@@ -317,7 +321,8 @@
   }
 
   /** Shows `content` as the document `path`. setState fires no update listener (no autosave) and starts a fresh undo history for the file. */
-  function load(path, content, target = '') {
+  function load(path, content, target = '', affectsBuild = false) {
+    affects = affectsBuild
     clearTimeout(compileTimer) // OpenFile already queued a compile in Go
     compileTimer = null
     docFile = path
@@ -418,7 +423,7 @@
       // The main pane makes it Go's active document; the second one only reads it.
       const file = await (isPrimary ? OpenFile(target) : LoadFile(target))
       if (seq !== switchSeq) return
-      load(file.path, file.content, isPrimary ? file.compileTarget : '')
+      load(file.path, file.content, isPrimary ? file.compileTarget : '', file.affectsBuild)
     } catch (err) {
       if (seq !== switchSeq) return
       status = 'loadError'
@@ -443,6 +448,7 @@
       adopt,
       isUntitled: () => untitled,
       hasUntitledText: () => untitled && (view?.state.doc.length ?? 0) > 0,
+      affectsBuild: () => affects,
       focus: () => view?.focus(),
       run: (id) => {
         const command = COMMANDS[id]
@@ -482,6 +488,13 @@
 
   // The only place where the editor's document changes: when the selected
   // file changes. CodeMirror itself is never remounted.
+  // ⌘+ / ⌘- change the text size through a CSS variable: CodeMirror does not
+  // notice (no resize), so it measures its lines again.
+  $effect(() => {
+    void ui.zoom
+    untrack(() => view?.requestMeasure())
+  })
+
   // ⌘N shows the untitled document in the main pane instead.
   $effect(() => {
     const target = isPrimary ? workspace.currentFilePath : workspace.secondaryFilePath

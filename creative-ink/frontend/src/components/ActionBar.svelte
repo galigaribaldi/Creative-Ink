@@ -2,7 +2,7 @@
   import { compileDocument, openFolder, saveAs, saveDocument, toggleSplitEditor } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
   import { terminal } from '../lib/terminal.svelte.js'
-  import { toggleBottomTab, toggleTool, ui } from '../lib/ui.svelte.js'
+  import { toggleBottomTab, togglePreview, toggleTool, ui } from '../lib/ui.svelte.js'
 
   // macOS shows ⌘, Linux shows Ctrl in the tooltips.
   const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
@@ -85,6 +85,20 @@
     >
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM12 5v14" />
+      </svg>
+    </button>
+
+    <button
+      class:active={ui.previewVisible}
+      onclick={togglePreview}
+      aria-label="Vista previa"
+      aria-pressed={ui.previewVisible}
+      title="Mostrar u ocultar la vista previa ({MOD}⌥P)"
+    >
+      <!-- Lucide "panel-right" -->
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect width="18" height="18" x="3" y="3" rx="2" />
+        <path d="M15 3v18" />
       </svg>
     </button>
 
