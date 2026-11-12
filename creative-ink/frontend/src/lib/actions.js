@@ -5,11 +5,12 @@
 import {
   ConfirmClose,
   CreateProject,
+  CreateFile,
+  CreateFolder,
   CreateProjectFromTemplate,
   CreateQuickDocument,
   GetProjectHealth,
   GetWorkspace,
-  NewFileDialog,
   NewWindow,
   OpenFolderDialog,
   OpenBlankDocument,
@@ -26,7 +27,17 @@ import {
   UntrustProject
 } from '../../wailsjs/go/main/App.js'
 import { EventsOn } from '../../wailsjs/runtime/runtime.js'
-import { showToast, toggleBottomTab, toggleSidebar, ui } from './ui.svelte.js'
+import {
+  setDirExpanded,
+  showToast,
+  swapPreviewSide,
+  toggleBottomTab,
+  togglePreview,
+  toggleSidebar,
+  ui,
+  ZOOM_STEP,
+  zoomBy
+} from './ui.svelte.js'
 import { applyTree, applyTrust, applyWorkspace, compileTarget, workspace } from './workspace.svelte.js'
 
 // Events emitted by Go (app.go, menu.go).
@@ -46,6 +57,7 @@ export const TRUST_CHANGED = 'trust:changed' // trust of the project's .latexmkr
  *   adopt: (path: string) => void,
  *   isUntitled: () => boolean,
  *   hasUntitledText: () => boolean,
+ *   affectsBuild: () => boolean,
  *   focus: () => void,
  *   run: (command: string) => boolean
  * }} EditorCommands
@@ -348,19 +360,32 @@ async function saveUntitled() {
   }
 }
 
-/** The explorer's "Nuevo archivo…": asks for the name first (native dialog). */
-export async function newNamedFile() {
-  if (!workspace.currentFolderPath) return newQuickDocument()
-  if (editors.primary?.hasUntitledText()) return showToast(UNTITLED_BLOCKS, 'warning')
-  if (!(await persistPendingEdits())) return
+/**
+ * The explorer's "Nuevo archivo" / "Nueva carpeta" (its header and its
+ * right-click menu): Go normalizes the name, keeps it inside the folder and
+ * never replaces anything. A new file becomes the open document. Returns an
+ * error message or ''.
+ * @param {'file' | 'folder'} kind
+ * @param {string} parent absolute folder of the tree
+ * @param {string} name as typed
+ */
+export async function createInExplorer(kind, parent, name) {
+  if (kind === 'file') {
+    if (editors.primary?.hasUntitledText()) return UNTITLED_BLOCKS
+    if (!(await persistPendingEdits())) return 'No se pudieron guardar los cambios del archivo abierto.'
+  }
   try {
-    const state = await NewFileDialog()
-    if (!state.canceled) {
+    const state = kind === 'file' ? await CreateFile(parent, name) : await CreateFolder(parent, name)
+    setDirExpanded(parent, true)
+    if (kind === 'file') {
+      workspace.untitled = false
       applyWorkspace(state)
-      ui.startOpen = false
+    } else {
+      applyTree(state)
     }
+    return ''
   } catch (err) {
-    report(err)
+    return String(err)
   }
 }
 
@@ -395,8 +420,11 @@ export async function saveDocument() {
   // This compile replaces the ones the panes had scheduled after typing.
   for (const e of [editors.primary, editors.secondary]) e?.cancelScheduledCompile()
   if (!(await persistPendingEdits())) return // the PDF would not match the text
+  // Only when an open file can change the PDF: saving a README.md never
+  // compiles (Go decides, core.AffectsBuild). The toolbar's Compilar always does.
+  const affects = [editors.primary, editors.secondary].some((e) => e?.affectsBuild())
   // "manual": always compiles (and is never cancelled), whatever compile.auto says.
-  if (compileTarget()) void RequestCompile('manual')
+  if (affects && compileTarget()) void RequestCompile('manual')
 }
 
 /**
@@ -421,10 +449,14 @@ export async function saveAs() {
 
 /**
  * The toolbar's Compilar: pending edits are saved first, then Go compiles
- * the target (main file or active document). Same as Cmd/Ctrl+S.
+ * the target (main file or active document) whatever file is open: unlike ⌘S,
+ * it compiles even after saving a README.md.
  */
-export function compileDocument() {
-  saveDocument()
+export async function compileDocument() {
+  for (const e of [editors.primary, editors.secondary]) e?.cancelScheduledCompile()
+  if (editors.primary?.isUntitled()) return saveDocument()
+  if (!(await persistPendingEdits())) return
+  if (compileTarget()) void RequestCompile('manual') // explicit: whatever file is open
 }
 
 /**
@@ -460,7 +492,12 @@ const COMMANDS = {
   'save-as': saveAs,
   'toggle-sidebar': toggleSidebar,
   'toggle-terminal': () => toggleBottomTab('terminal'),
-  'split-editor': toggleSplitEditor
+  'split-editor': toggleSplitEditor,
+  'toggle-preview': togglePreview,
+  'preview-side': swapPreviewSide,
+  'zoom-in': () => zoomBy(ZOOM_STEP),
+  'zoom-out': () => zoomBy(-ZOOM_STEP),
+  'zoom-reset': () => zoomBy(0)
 }
 
 /** Commands run by CodeMirror itself (Editor.svelte `run`). */

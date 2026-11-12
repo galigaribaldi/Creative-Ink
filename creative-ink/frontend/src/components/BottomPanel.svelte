@@ -74,8 +74,9 @@
 <style>
   /* Tabs on the chrome surface; the content (log, terminal) on the editor's
      surface, like a text canvas. One hairline separates it from the editor. */
+  /* The height is dragged on the divider above it (Workspace.svelte). */
   .panel {
-    height: 35%;
+    height: var(--bottom-h, 35%);
     min-height: 120px;
     display: flex;
     flex-direction: column;

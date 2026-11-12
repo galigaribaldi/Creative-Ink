@@ -36,6 +36,16 @@
     event.dataTransfer.effectAllowed = 'copy'
   }
 
+  // Right click: "Nuevo archivo / Nueva carpeta aquí" (Sidebar.svelte shows
+  // the menu). On a file, "here" is its folder.
+  /** @param {MouseEvent} event */
+  function oncontextmenu(event) {
+    if (workspace.singleFile) return // a loose file: nothing is created next to it
+    event.preventDefault()
+    const sep = Math.max(node.path.lastIndexOf('/'), node.path.lastIndexOf('\\'))
+    ui.treeMenu = { x: event.clientX, y: event.clientY, parent: node.isDir ? node.path : node.path.slice(0, sep) }
+  }
+
   function toggleMain() {
     void setMainFile(isMain ? '' : node.path)
   }
@@ -49,7 +59,8 @@
 >
   <!-- Two sibling buttons (a button cannot contain another one): open the
        file, and, on hover/focus, set or unset it as the project's main file. -->
-  <div class="row" class:active class:disabled style:padding-left="{0.5 + depth * 0.75}rem">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="row" class:active class:disabled style:padding-left="{0.5 + depth * 0.75}rem" {oncontextmenu}>
     <button
       class="entry"
       {onclick}

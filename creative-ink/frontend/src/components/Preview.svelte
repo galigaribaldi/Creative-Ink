@@ -4,6 +4,7 @@
   import { config } from '../lib/config.svelte.js'
   import { loadPdf, releasePdf } from '../lib/pdf.js'
   import { sync, syncBackward } from '../lib/synctex.svelte.js'
+  import { swapPreviewSide, togglePreview } from '../lib/ui.svelte.js'
 
   // Served by the Go AssetServer middleware (see preview.go: previewRoute).
   const PREVIEW_URL = '/__preview/document.pdf'
@@ -261,8 +262,9 @@
     const observer = new ResizeObserver(() => {
       clearTimeout(timer)
       timer = setTimeout(() => {
-        // An in-flight reload will render at the new width by itself.
-        if (pdfDoc && !loading) {
+        // An in-flight reload will render at the new width by itself; a
+        // hidden preview (ui.previewVisible) has no width: nothing to draw.
+        if (pdfDoc && !loading && viewer.clientWidth > 0) {
           renderPage(pdfDoc, currentPageNumber).catch(
             (err) => (renderError = err?.message ?? String(err))
           )
@@ -318,6 +320,19 @@
     {:else}
       <span class="state-{compileState}">{LABELS[compileState]}</span>
     {/if}
+    <!-- Layout of the preview itself (ui.svelte.js): side and visibility. -->
+    <span class="layout-actions">
+      <button onclick={swapPreviewSide} aria-label="Cambiar de lado la vista previa" title="Cambiar de lado la vista previa">
+        <!-- Lucide "arrow-left-right" -->
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M8 3 4 7l4 4" /><path d="M4 7h16" /><path d="m16 21 4-4-4-4" /><path d="M20 17H4" />
+        </svg>
+      </button>
+      <button onclick={togglePreview} aria-label="Ocultar la vista previa" title="Ocultar la vista previa (⌥⌘P en macOS, Ctrl+Alt+P)">
+        <!-- Lucide "x" -->
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+      </button>
+    </span>
   </header>
 
   <div class="viewer" bind:this={viewer}>
@@ -469,6 +484,49 @@
   .pager svg {
     width: var(--icon-size);
     height: var(--icon-size);
+    fill: none;
+    stroke: currentColor;
+    stroke-width: var(--icon-stroke);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* Side and hide: quiet icon buttons at the end of the bar, like the pager. */
+  .layout-actions {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.1rem;
+    margin-left: 0.25rem;
+  }
+
+  .layout-actions button {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
+  }
+
+  .layout-actions button:hover {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+  }
+
+  .layout-actions button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .layout-actions svg {
+    width: 15px;
+    height: 15px;
     fill: none;
     stroke: currentColor;
     stroke-width: var(--icon-stroke);

@@ -1,11 +1,12 @@
 <script>
   import { FILE_DRAG_TYPE, openInSecondaryPane } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
-  import { setSplitRatio, ui } from '../lib/ui.svelte.js'
+  import { resetLayoutRatio, setLayoutRatio, setSplitRatio, ui } from '../lib/ui.svelte.js'
   import { compileTarget } from '../lib/workspace.svelte.js'
   import BottomPanel from './BottomPanel.svelte'
   import Editor from './Editor.svelte'
   import Preview from './Preview.svelte'
+  import Splitter from './Splitter.svelte'
   import TrustBanner from './TrustBanner.svelte'
 
   // Drag & drop from the explorer: dropping a file on the editor area opens
@@ -59,40 +60,27 @@
   // ── Resizable split: the divider between the two editor panes ───────────
   /** @type {HTMLDivElement} */
   let editorsEl
-  let resizing = $state(false)
-  const KEY_STEP = 0.05
+  /** @type {HTMLDivElement} */
+  let workspaceEl
+  /** @type {HTMLElement} */
+  let editorPaneEl
 
   // Two panes with the dragged proportion and a 4px divider between them.
   let columns = $derived(
     ui.splitEditor ? `minmax(0, ${ui.splitRatio}fr) 4px minmax(0, ${1 - ui.splitRatio}fr)` : 'minmax(0, 1fr)'
   )
 
-  /** @param {MouseEvent} event */
-  function onDividerMouseDown(event) {
-    if (event.button !== 0) return
-    event.preventDefault() // no text selection while dragging
-    const rect = editorsEl.getBoundingClientRect()
-    resizing = true
-    /** @param {MouseEvent} e */
-    const onmousemove = (e) => setSplitRatio((e.clientX - rect.left) / rect.width)
-    const onmouseup = () => {
-      resizing = false
-      window.removeEventListener('mousemove', onmousemove)
-      window.removeEventListener('mouseup', onmouseup)
-      setSplitRatio(ui.splitRatio, true) // remember it across sessions
-    }
-    window.addEventListener('mousemove', onmousemove)
-    window.addEventListener('mouseup', onmouseup)
-  }
-
-  /** Keyboard: ←/→ move the divider, Home centres it. @param {KeyboardEvent} event */
-  function onDividerKeyDown(event) {
-    const delta = { ArrowLeft: -KEY_STEP, ArrowRight: KEY_STEP }[event.key]
-    if (delta) setSplitRatio(ui.splitRatio + delta, true)
-    else if (event.key === 'Home') setSplitRatio(0.5, true)
-    else return
-    event.preventDefault()
-  }
+  // Editors | divider | preview (or the other way round), each share
+  // dragged on the divider. The preview stays mounted when hidden.
+  /** @type {'editorRatio' | 'editorRatioSplit'} */
+  let ratioName = $derived(ui.splitEditor ? 'editorRatioSplit' : 'editorRatio')
+  let editorShare = $derived(ui[ratioName])
+  let outerColumns = $derived.by(() => {
+    if (!ui.previewVisible) return 'minmax(0, 1fr)'
+    const editors = `minmax(0, ${editorShare}fr)`
+    const preview = `minmax(0, ${1 - editorShare}fr)`
+    return ui.previewSide === 'right' ? `${editors} 4px ${preview}` : `${preview} 4px ${editors}`
+  })
 
   // A drag cancelled outside (Esc, dropped elsewhere) must clear the hint.
   function ondragend() {
@@ -107,8 +95,18 @@
      inside {#if}, so CodeMirror and the PDF.js canvas keep their state across
      UI changes. The second pane (split editor, ⌘\) is mounted only while
      split: closing it saves its edits first (actions.js toggleSplitEditor). -->
-<div class="workspace" class:split={ui.splitEditor} class:resizing>
-  <section class="pane editor-pane" aria-label="Editor">
+<div
+  class="workspace"
+  class:preview-left={ui.previewSide === 'left'}
+  bind:this={workspaceEl}
+  style:grid-template-columns={outerColumns}
+>
+  <section
+    class="pane editor-pane"
+    aria-label="Editor"
+    bind:this={editorPaneEl}
+    style:--bottom-h="{ui.bottomRatio * 100}%"
+  >
     <!-- Untrusted .latexmkrc: compiling with -norc; offers to trust it. -->
     <TrustBanner />
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -126,22 +124,14 @@
         <Editor pane="primary" />
       </div>
       {#if ui.splitEditor}
-        <!-- A focusable separator is an ARIA widget: it takes the keyboard. -->
-        <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-        <div
-          class="divider"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Ancho de los editores"
-          aria-valuemin="20"
-          aria-valuemax="80"
-          aria-valuenow={Math.round(ui.splitRatio * 100)}
-          tabindex="0"
-          title="Arrastra para cambiar el ancho · doble clic para centrar"
-          onmousedown={onDividerMouseDown}
-          onkeydown={onDividerKeyDown}
-          ondblclick={() => setSplitRatio(0.5, true)}
-        ></div>
+        <Splitter
+          orientation="vertical"
+          ratio={ui.splitRatio}
+          label="Ancho de los editores"
+          container={() => editorsEl}
+          onchange={(r, persist) => setSplitRatio(r, persist)}
+          onreset={() => setSplitRatio(0.5, true)}
+        />
         <div class="editor-host secondary" aria-label="Segundo editor" data-pane="secondary">
           <Editor pane="secondary" />
         </div>
@@ -151,11 +141,37 @@
         <span>Soltar para abrir al lado</span>
       </div>
     </div>
+    {#if ui.bottomPanelOpen}
+      <Splitter
+        orientation="horizontal"
+        ratio={ui.bottomRatio}
+        invert
+        label="Alto del panel inferior"
+        container={() => editorPaneEl}
+        onchange={(r, persist) => setLayoutRatio('bottomRatio', r, persist)}
+        onreset={() => resetLayoutRatio('bottomRatio')}
+      />
+    {/if}
     <!-- "Errores LaTeX" | "Terminal". Always mounted; hides itself. -->
     <BottomPanel />
   </section>
 
-  <section class="pane" aria-label="Vista previa">
+  {#if ui.previewVisible}
+    <div class="outer-splitter">
+      <Splitter
+        orientation="vertical"
+        ratio={editorShare}
+        invert={ui.previewSide === 'left'}
+        label="Ancho de la vista previa"
+        container={() => workspaceEl}
+        onchange={(r, persist) => setLayoutRatio(ratioName, r, persist)}
+        onreset={() => resetLayoutRatio(ratioName)}
+      />
+    </div>
+  {/if}
+
+  <!-- Hidden, not unmounted: the PDF, its page and the worker stay. -->
+  <section class="pane preview-pane" aria-label="Vista previa" hidden={!ui.previewVisible}>
     <Preview
       compileState={compilation.status}
       pdfVersion={compilation.pdfVersion}
@@ -165,16 +181,33 @@
 </div>
 
 <style>
+  /* Columns come from the dragged ratios (inline style). */
   .workspace {
     height: 100%;
     min-width: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
-  /* Two editors share two thirds of the width; the preview keeps one. */
-  .workspace.split {
-    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  /* Preview on the left: same DOM (nothing remounts), another order. */
+  .preview-left .preview-pane {
+    order: 1;
+  }
+
+  .preview-left .outer-splitter {
+    order: 2;
+  }
+
+  .preview-left .editor-pane {
+    order: 3;
+  }
+
+  .outer-splitter {
+    display: flex;
+    min-height: 0;
+  }
+
+  .preview-pane[hidden] {
+    display: none;
   }
 
   .pane {
@@ -185,7 +218,6 @@
   .editor-pane {
     display: flex;
     flex-direction: column;
-    border-right: 1px solid var(--border);
   }
 
   .editors {
@@ -198,44 +230,6 @@
   .editor-host {
     min-width: 0;
     min-height: 0;
-  }
-
-  /* 4px hit area with a 1px hairline in the middle; it lights up on hover,
-     while dragging and on keyboard focus. */
-  .divider {
-    position: relative;
-    cursor: col-resize;
-    background: transparent;
-    transition: background-color var(--transition);
-  }
-
-  .divider::before {
-    content: '';
-    position: absolute;
-    inset: 0 auto 0 50%;
-    width: 1px;
-    background: var(--border);
-  }
-
-  .divider:hover,
-  .resizing .divider {
-    background: var(--surface-hover);
-  }
-
-  .divider:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -1px;
-  }
-
-  /* While dragging: the cursor stays col-resize everywhere and CodeMirror
-     does not start selecting text under the pointer. */
-  .resizing {
-    cursor: col-resize;
-    user-select: none;
-  }
-
-  .resizing .editor-host {
-    pointer-events: none;
   }
 
   .drop-hint {
