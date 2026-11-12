@@ -177,12 +177,13 @@ func TestOpenFileSwitchesActiveDocument(t *testing.T) {
 	a, events := newTestApp(t, okCompile)
 	folder, _ := a.workspace()
 	chapter := filepath.Join(folder, "chapter.tex")
-	if err := os.WriteFile(chapter, []byte("cap 1"), 0o644); err != nil {
+	const chapterText = "\\documentclass{article}\ncap 1" // a document: it compiles itself
+	if err := os.WriteFile(chapter, []byte(chapterText), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	got, err := a.OpenFile(chapter)
-	if err != nil || got.Path != chapter || got.Content != "cap 1" {
+	if err != nil || got.Path != chapter || got.Content != chapterText {
 		t.Fatalf("OpenFile = %+v, %v", got, err)
 	}
 	if _, doc := a.workspace(); doc != chapter {
@@ -240,12 +241,13 @@ func TestSaveAsDialog(t *testing.T) {
 		}
 		return filepath.Join(folder, "copia"), nil
 	}
-	st, err := a.SaveAsDialog("contenido")
+	const content = "\\documentclass{article}\ncontenido" // a copy of a document compiles itself
+	st, err := a.SaveAsDialog(content)
 	copyPath := filepath.Join(folder, "copia.tex")
 	if err != nil || st.FilePath != copyPath || st.FolderPath != folder {
 		t.Fatalf("SaveAs inside = %+v, %v", st, err)
 	}
-	if data, _ := os.ReadFile(copyPath); string(data) != "contenido" {
+	if data, _ := os.ReadFile(copyPath); string(data) != content {
 		t.Fatalf("copy = %q", data)
 	}
 	expectCompileOf(t, events, copyPath)
@@ -431,7 +433,10 @@ func newProjectApp(t *testing.T) (a *App, events chan emittedEvent, mainTex, cha
 	if err := os.MkdirAll(filepath.Dir(chapter), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(chapter, []byte("capítulo"), 0o644); err != nil {
+	// A chapter that is a document of its own (\documentclass, like
+	// subfiles): without a main file it compiles itself. A plain chapter
+	// would compile its folder's main.tex (RootDocumentFor).
+	if err := os.WriteFile(chapter, []byte("\\documentclass{article}\ncapítulo"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.OpenFile(chapter); err != nil {

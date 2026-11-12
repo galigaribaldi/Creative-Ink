@@ -198,24 +198,55 @@ func ListProjects(root string) ([]ProjectInfo, error) {
 // CreateQuickDoc creates tmp-Workspaces/unnamed-tmp<N>/main.tex with the
 // next free N, so many quick documents never mix their auxiliary files.
 func CreateQuickDoc(root, starter string) (dir, tex string, err error) {
-	parent := QuickDocsDir(root)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return "", "", fmt.Errorf("create %q: %w", parent, err)
-	}
-	for n := nextQuickDocNumber(parent); ; n++ {
-		dir = filepath.Join(parent, quickDocPrefix+strconv.Itoa(n))
-		if err := os.Mkdir(dir, 0o755); errors.Is(err, fs.ErrExist) {
-			continue // created meanwhile: try the next number
-		} else if err != nil {
-			return "", "", fmt.Errorf("create %q: %w", dir, err)
-		}
-		break
+	if dir, err = newQuickDocDir(root); err != nil {
+		return "", "", err
 	}
 	tex = filepath.Join(dir, "main.tex")
 	if err := writeNew(tex, starter); err != nil {
 		return "", "", err
 	}
 	return dir, tex, nil
+}
+
+// newQuickDocDir creates the next free tmp-Workspaces/unnamed-tmp<N>/.
+// Mkdir fails if another window created it meanwhile: then the next number.
+func newQuickDocDir(root string) (string, error) {
+	parent := QuickDocsDir(root)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", fmt.Errorf("create %q: %w", parent, err)
+	}
+	for n := nextQuickDocNumber(parent); ; n++ {
+		dir := filepath.Join(parent, quickDocPrefix+strconv.Itoa(n))
+		if err := os.Mkdir(dir, 0o755); errors.Is(err, fs.ErrExist) {
+			continue
+		} else if err != nil {
+			return "", fmt.Errorf("create %q: %w", dir, err)
+		}
+		return dir, nil
+	}
+}
+
+// ReusableQuickDoc returns the newest quick document that is still
+// untouched (only its main.tex, with exactly the starter text: never
+// edited nor compiled), so closing the start screen again and again does
+// not pile up empty documents in tmp-Workspaces (the editor never deletes
+// them). "" if there is none.
+func ReusableQuickDoc(root, starter string) (dir, tex string) {
+	docs, err := ListQuickDocs(root)
+	if err != nil {
+		return "", ""
+	}
+	for _, d := range docs {
+		entries, err := os.ReadDir(d.Path)
+		if err != nil || len(entries) != 1 || entries[0].Name() != "main.tex" {
+			continue
+		}
+		tex := filepath.Join(d.Path, "main.tex")
+		if data, err := os.ReadFile(tex); err == nil && string(data) == starter {
+			return d.Path, tex
+		}
+	}
+	return "", ""
 }
 
 // ListQuickDocs returns the quick documents, newest first.

@@ -30,7 +30,7 @@
   }
 
   async function copy() {
-    if (!name.trim()) return
+    if (!name.trim() && !preview.file) return // a file goes to a new quick document
     busy = true
     await copyImport({ name, mainFile, includeGit })
     busy = false
@@ -55,15 +55,15 @@
 <div class="backdrop">
   <div class="panel" role="dialog" aria-modal="true" aria-labelledby="import-title">
     <header>
-      <h1 id="import-title">Importar proyecto</h1>
+      <h1 id="import-title">{importer.fromDrop ? '¿Qué desea hacer?' : 'Importar proyecto'}</h1>
       <button class="close" onclick={closeImport} disabled={importer.copying} aria-label="Cerrar" title="Cerrar (Esc)">✕</button>
     </header>
 
-    <p class="source" title={preview.source}><code>{preview.source}</code></p>
+    <p class="source" title={preview.file || preview.source}><code>{preview.file || preview.source}</code></p>
 
     <NoticeList notices={preview.notices} />
 
-    {#if preview.canCopy}
+    {#if preview.canCopy && !preview.file}
       <form onsubmit={(e) => (e.preventDefault(), copy())}>
         <label>
           <span>Nombre del proyecto en My-Creative-Ink-Repository</span>
@@ -108,10 +108,10 @@
         <button class="link" onclick={closeImport} disabled={busy}>Cancelar</button>
         {#if copyFirst}
           <button class="secondary" onclick={inPlace} disabled={busy}>Abrir en su ubicación</button>
-          <button class="primary" onclick={copy} disabled={busy || !name.trim()}>Copiar a Creative-ink</button>
+          <button class="primary" onclick={copy} disabled={busy || (!preview.file && !name.trim())}>Copiar a Creative-ink</button>
         {:else}
           {#if preview.canCopy}
-            <button class="secondary" onclick={copy} disabled={busy || !name.trim()}>Copiar de todos modos</button>
+            <button class="secondary" onclick={copy} disabled={busy || (!preview.file && !name.trim())}>Copiar de todos modos</button>
           {/if}
           <button class="primary" onclick={inPlace} disabled={busy}>Abrir en su ubicación</button>
         {/if}

@@ -15,7 +15,9 @@
   } from './lib/actions.js'
   import { listenCompileEvents, resetCompilation } from './lib/compilation.svelte.js'
   import { listenConfigEvents } from './lib/config.svelte.js'
-  import { listenImportEvents } from './lib/import.svelte.js'
+  import { guardSystemDrops, importer, listenDropEvents, listenImportEvents } from './lib/import.svelte.js'
+  import ImportDialog from './components/ImportDialog.svelte'
+  import Toast from './components/Toast.svelte'
   import { listenTerminalEvents } from './lib/terminal.svelte.js'
   import { ui } from './lib/ui.svelte.js'
   import { compileTarget, workspace } from './lib/workspace.svelte.js'
@@ -37,6 +39,8 @@
   // Terminal runs: id of the spooled output and build progress.
   onDestroy(listenTerminalEvents())
   onDestroy(listenImportEvents())
+  onDestroy(listenDropEvents())
+  onDestroy(guardSystemDrops())
   void initWorkspace()
 
   // A different compile target (another file, or the main file changed): the
@@ -101,6 +105,15 @@
   <!-- Every session: new project, quick document, or an existing one. -->
   <StartScreen />
 {/if}
+
+<!-- "Importar proyecto…" and drops from the system ("¿Qué desea hacer?"). -->
+{#if importer.preview}
+  {#key importer.preview.id}
+    <ImportDialog preview={importer.preview} />
+  {/key}
+{/if}
+
+<Toast />
 
 <style>
   .shell {

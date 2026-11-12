@@ -122,7 +122,7 @@
       {ondragleavecapture}
       {ondropcapture}
     >
-      <div class="editor-host">
+      <div class="editor-host" data-pane="primary">
         <Editor pane="primary" />
       </div>
       {#if ui.splitEditor}
@@ -142,7 +142,7 @@
           onkeydown={onDividerKeyDown}
           ondblclick={() => setSplitRatio(0.5, true)}
         ></div>
-        <div class="editor-host secondary" aria-label="Segundo editor">
+        <div class="editor-host secondary" aria-label="Segundo editor" data-pane="secondary">
           <Editor pane="secondary" />
         </div>
       {/if}
