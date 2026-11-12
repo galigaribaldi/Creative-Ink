@@ -132,6 +132,14 @@ func ReadSettings(path string) (Settings, error) {
 // UpdateSettings reads path (a missing file counts as empty), applies
 // mutate and saves it, so changing one field never drops the others.
 func UpdateSettings(path string, mutate func(*Settings)) (Settings, error) {
+	// Another Creative-ink process may update it at the same time (recents,
+	// trust decisions, configuration): read-modify-write under a lock, or
+	// one of the two changes is lost.
+	unlock, err := LockFile(path + ".lock")
+	if err != nil {
+		return Settings{}, fmt.Errorf("bloquear la configuración: %w", err)
+	}
+	defer unlock()
 	s, err := ReadSettings(path)
 	if err != nil {
 		return Settings{}, err
