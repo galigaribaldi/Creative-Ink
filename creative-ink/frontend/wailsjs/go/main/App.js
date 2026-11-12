@@ -138,6 +138,10 @@ export function SaveNewDialog(arg1) {
   return window['go']['main']['App']['SaveNewDialog'](arg1);
 }
 
+export function SearchProject(arg1) {
+  return window['go']['main']['App']['SearchProject'](arg1);
+}
+
 export function SetConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetConfig'](arg1, arg2, arg3);
 }
