@@ -42,6 +42,8 @@ export function ListTerminalCommands():Promise<Array<ci.CommandInfo>>;
 
 export function LoadFile(arg1:string):Promise<main.OpenedFile>;
 
+export function MoveEntry(arg1:string,arg2:string):Promise<main.MoveResult>;
+
 export function NewFileDialog():Promise<main.WorkspaceState>;
 
 export function NewWindow():Promise<void>;

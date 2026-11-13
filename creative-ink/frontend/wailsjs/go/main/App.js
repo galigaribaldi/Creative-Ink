@@ -74,6 +74,10 @@ export function LoadFile(arg1) {
   return window['go']['main']['App']['LoadFile'](arg1);
 }
 
+export function MoveEntry(arg1, arg2) {
+  return window['go']['main']['App']['MoveEntry'](arg1, arg2);
+}
+
 export function NewFileDialog() {
   return window['go']['main']['App']['NewFileDialog']();
 }
