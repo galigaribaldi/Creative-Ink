@@ -142,6 +142,10 @@ export function SearchProject(arg1) {
   return window['go']['main']['App']['SearchProject'](arg1);
 }
 
+export function SetActiveDocument(arg1) {
+  return window['go']['main']['App']['SetActiveDocument'](arg1);
+}
+
 export function SetConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetConfig'](arg1, arg2, arg3);
 }

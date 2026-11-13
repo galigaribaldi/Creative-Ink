@@ -541,6 +541,20 @@ export namespace core {
 
 export namespace main {
 	
+	export class ActiveDocument {
+	    compileTarget: string;
+	    affectsBuild: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ActiveDocument(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.compileTarget = source["compileTarget"];
+	        this.affectsBuild = source["affectsBuild"];
+	    }
+	}
 	export class ImportOptions {
 	    id: string;
 	    name: string;

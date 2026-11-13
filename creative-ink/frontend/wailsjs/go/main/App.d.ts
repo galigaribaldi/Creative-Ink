@@ -76,6 +76,8 @@ export function SaveNewDialog(arg1:string):Promise<main.WorkspaceState>;
 
 export function SearchProject(arg1:core.SearchQuery):Promise<core.SearchResult>;
 
+export function SetActiveDocument(arg1:string):Promise<main.ActiveDocument>;
+
 export function SetConfig(arg1:string,arg2:string,arg3:string):Promise<config.Entry>;
 
 export function SetMainFile(arg1:string):Promise<main.WorkspaceState>;
