@@ -2,7 +2,7 @@
   import FileTreeItem from './FileTreeItem.svelte'
   import SearchPanel from './SearchPanel.svelte'
   import { tick } from 'svelte'
-  import { createInExplorer, openFolder, refreshWorkspace } from '../lib/actions.js'
+  import { MOVE_DRAG_TYPE, createInExplorer, moveInExplorer, openFolder, refreshWorkspace } from '../lib/actions.js'
   import { ui } from '../lib/ui.svelte.js'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
@@ -57,6 +57,26 @@
     }
   }
 
+  // The project's name receives entries moved to the root.
+  let rootDrop = $state(false)
+
+  /** @param {DragEvent} event */
+  function onrootdragover(event) {
+    if (workspace.singleFile || !event.dataTransfer?.types.includes(MOVE_DRAG_TYPE)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    rootDrop = true
+  }
+
+  /** @param {DragEvent} event */
+  function onrootdrop(event) {
+    if (!event.dataTransfer?.types.includes(MOVE_DRAG_TYPE) || !tree) return
+    event.preventDefault()
+    rootDrop = false
+    const from = event.dataTransfer.getData(MOVE_DRAG_TYPE)
+    if (from) void moveInExplorer(from, tree.path)
+  }
+
   // The right-click menu closes on any click elsewhere or Escape.
   /** @param {KeyboardEvent} event */
   function onwindowkeydown(event) {
@@ -103,7 +123,15 @@
 
     {#if ui.activeTool === 'explorer'}
       {#if tree}
-        <p class="folder" title={tree.path}>{tree.name}</p>
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <p
+          class="folder"
+          class:drop-over={rootDrop}
+          title="{tree.path} · suelta aquí para mover a la raíz del proyecto"
+          ondragover={onrootdragover}
+          ondragleave={() => (rootDrop = false)}
+          ondrop={onrootdrop}
+        >{tree.name}</p>
         {#if ui.treeCreate}
           <div class="create">
             <label>
@@ -296,6 +324,12 @@
 
   .error {
     color: var(--danger);
+  }
+
+  .folder.drop-over {
+    background: var(--surface-active);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+    border-radius: var(--radius-sm);
   }
 
   /* Name field of a new file or folder, above the tree. */

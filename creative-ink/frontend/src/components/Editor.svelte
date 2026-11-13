@@ -32,7 +32,7 @@
   import { languageFor } from '../lib/languages.js'
   import { sync, syncForward } from '../lib/synctex.svelte.js'
   import { showToast, ui } from '../lib/ui.svelte.js'
-  import { openPanes, panes } from '../lib/panes.svelte.js'
+  import { openPanes, panes, remapPath } from '../lib/panes.svelte.js'
   import { baseName, compileTarget, isTeXPath, workspace } from '../lib/workspace.svelte.js'
 
   /**
@@ -474,6 +474,18 @@
       isUntitled: () => untitled,
       hasUntitledText: () => untitled && (view?.state.doc.length ?? 0) > 0,
       affectsBuild: () => affects,
+      // The explorer moved a file or folder: same text, new path (no reload).
+      renamePaths: (from, to) => {
+        for (const [path, state] of [...tabStates]) {
+          const moved = remapPath(path, from, to)
+          if (moved !== path) {
+            tabStates.delete(path)
+            tabStates.set(moved, state)
+          }
+        }
+        const moved = remapPath(docFile, from, to)
+        if (moved !== docFile) adopt(moved)
+      },
       focus: () => view?.focus(),
       run: (id) => {
         const command = COMMANDS[id]

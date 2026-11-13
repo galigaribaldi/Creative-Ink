@@ -8,6 +8,7 @@ import {
   CreateFile,
   CreateFolder,
   CreateProjectFromTemplate,
+  MoveEntry,
   CreateQuickDocument,
   GetProjectHealth,
   GetWorkspace,
@@ -29,7 +30,7 @@ import {
 } from '../../wailsjs/go/main/App.js'
 import { EventsOn } from '../../wailsjs/runtime/runtime.js'
 import { MAX_PANES } from './layout.js'
-import { addPane, addTab, dropPane, mirrorPreview, openPanes, paneOf, panes, removeTab, resetLayout } from './panes.svelte.js'
+import { addPane, addTab, dropPane, mirrorPreview, openPanes, paneOf, panes, remapPath, removeTab, resetLayout } from './panes.svelte.js'
 import {
   saveEditorMode,
   setDirExpanded,
@@ -63,6 +64,7 @@ export const TRUST_CHANGED = 'trust:changed' // trust of the project's .latexmkr
  *   isUntitled: () => boolean,
  *   hasUntitledText: () => boolean,
  *   affectsBuild: () => boolean,
+ *   renamePaths: (from: string, to: string) => void,
  *   focus: () => void,
  *   run: (command: string) => boolean
  * }} EditorCommands
@@ -377,6 +379,9 @@ export async function setEditorMode(mode) {
 /** MIME type of a file dragged from the explorer (FileTreeItem → Workspace). */
 export const FILE_DRAG_TYPE = 'application/x-creative-ink-path'
 
+/** MIME type of an explorer entry being moved to another folder (files and folders). */
+export const MOVE_DRAG_TYPE = 'application/x-creative-ink-move'
+
 /**
  * Drag & drop onto an editor pane: opens `path` in THAT pane (Multiventana;
  * in the other modes, in the shown one).
@@ -478,6 +483,46 @@ async function saveUntitled() {
   } catch (err) {
     showToast(String(err), 'warning')
     return false
+  }
+}
+
+/**
+ * Drag & drop inside the explorer: moves a file or folder into another
+ * folder. Pending edits are saved first (a late autosave would recreate the
+ * old path); then the open panes, their tabs and the expanded folders follow
+ * the new path without reloading (Go moved the main file and its active
+ * document itself, MoveEntry).
+ * @param {string} from @param {string} toDir
+ */
+export async function moveInExplorer(from, toDir) {
+  if (!from || !toDir) return
+  if (!(await persistPendingEdits())) {
+    showToast('No se pudieron guardar los cambios: no se mueve nada.', 'warning')
+    return
+  }
+  try {
+    const res = await MoveEntry(from, toDir)
+    if (res.from === res.to) return // already there
+    for (const id of openPanes()) {
+      editors[id]?.renamePaths(res.from, res.to) // before the files change: no reload
+      panes.files[id] = remapPath(panes.files[id], res.from, res.to)
+      panes.tabs[id] = panes.tabs[id].map((p) => remapPath(p, res.from, res.to))
+    }
+    goActive = remapPath(goActive, res.from, res.to)
+    for (const dir of Object.keys(ui.expandedDirs)) {
+      const moved = remapPath(dir, res.from, res.to)
+      if (moved !== dir) {
+        ui.expandedDirs[moved] = ui.expandedDirs[dir]
+        delete ui.expandedDirs[dir]
+      }
+    }
+    setDirExpanded(toDir, true)
+    applyTree(res.state)
+    workspace.texFilePath = res.state.texFilePath
+    const tex = /\.(tex|bib|sty|cls)$/i.test(res.to)
+    showToast(`Movido a ${toDir.split(/[\\/]/).pop()}.` + (tex ? ' Revisa los \\input o \\bibliography que lo citan: no se actualizan solos.' : ''))
+  } catch (err) {
+    showToast(String(err), 'warning')
   }
 }
 

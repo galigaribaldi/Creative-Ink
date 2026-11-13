@@ -165,3 +165,15 @@ export function mirrorPreview() {
   const edge = i === 0 ? others.at(-1) : others[0]
   if (edge) setLayout(placeItem(root, 'pdf', edge, i === 0 ? 'right' : 'left'))
 }
+
+/**
+ * path after moving `from` to `to` (a file, or a folder and everything
+ * below it); other paths unchanged. Separators of the three systems.
+ * @param {string} path @param {string} from @param {string} to
+ */
+export function remapPath(path, from, to) {
+  if (!path || !from) return path
+  if (path === from) return to
+  if (path.startsWith(from + '/') || path.startsWith(from + '\\')) return to + path.slice(from.length)
+  return path
+}

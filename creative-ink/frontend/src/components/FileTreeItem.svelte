@@ -1,6 +1,6 @@
 <script>
   import FileTreeItem from './FileTreeItem.svelte'
-  import { FILE_DRAG_TYPE, openFile, setMainFile } from '../lib/actions.js'
+  import { FILE_DRAG_TYPE, MOVE_DRAG_TYPE, moveInExplorer, openFile, setMainFile } from '../lib/actions.js'
   import { setDirExpanded, ui } from '../lib/ui.svelte.js'
   import { isShown } from '../lib/panes.svelte.js'
   import { isTeXPath, workspace } from '../lib/workspace.svelte.js'
@@ -25,16 +25,74 @@
     else if (node.editable) openFile(node.path)
   }
 
-  // Editable files can be dragged onto the editor area: they open in the
-  // pane under the pointer (Workspace.svelte, actions.js openInPane).
-  let draggable = $derived(!node.isDir && node.editable)
+  // Every entry can be dragged onto a folder of the explorer (it moves
+  // there: actions.js moveInExplorer); editable files also onto an editor
+  // pane (they open there: Workspace.svelte, actions.js openInPane).
+  let draggable = $derived(!workspace.singleFile)
 
   /** @param {DragEvent} event */
   function ondragstart(event) {
     if (!draggable || !event.dataTransfer) return
-    event.dataTransfer.setData(FILE_DRAG_TYPE, node.path)
-    event.dataTransfer.setData('text/plain', node.path)
-    event.dataTransfer.effectAllowed = 'copy'
+    event.dataTransfer.setData(MOVE_DRAG_TYPE, node.path)
+    if (!node.isDir && node.editable) {
+      event.dataTransfer.setData(FILE_DRAG_TYPE, node.path)
+      event.dataTransfer.setData('text/plain', node.path)
+    }
+    event.dataTransfer.effectAllowed = 'copyMove'
+  }
+
+  // ── Drop target: a folder (or a file: its folder) receives moved entries ──
+  const OPEN_DELAY_MS = 600 // a closed folder opens while hovered with a drag
+  let dropOver = $state(false)
+  let openTimer = 0
+  let dragDepth = 0 // dragenter/dragleave pairs of the row and its children
+
+  /** Folder that receives what is dropped on this row. */
+  function dropFolder() {
+    if (node.isDir) return node.path
+    const sep = Math.max(node.path.lastIndexOf('/'), node.path.lastIndexOf('\\'))
+    return node.path.slice(0, sep)
+  }
+
+  /** @param {DragEvent} event */
+  function isMove(event) {
+    return !workspace.singleFile && (event.dataTransfer?.types.includes(MOVE_DRAG_TYPE) ?? false)
+  }
+
+  /** @param {DragEvent} event */
+  function ondragenter(event) {
+    if (!isMove(event)) return
+    event.preventDefault()
+    if (dragDepth++ > 0) return
+    dropOver = true
+    if (node.isDir && !expanded) openTimer = setTimeout(() => setDirExpanded(node.path, true), OPEN_DELAY_MS)
+  }
+
+  /** @param {DragEvent} event */
+  function ondragover(event) {
+    if (!isMove(event)) return
+    event.preventDefault() // allows the drop
+    event.stopPropagation()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  }
+
+  function ondragleave() {
+    if (--dragDepth > 0) return
+    dragDepth = 0
+    dropOver = false
+    clearTimeout(openTimer)
+  }
+
+  /** @param {DragEvent} event */
+  function ondrop(event) {
+    if (!isMove(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    dragDepth = 0
+    dropOver = false
+    clearTimeout(openTimer)
+    const from = event.dataTransfer?.getData(MOVE_DRAG_TYPE) ?? ''
+    if (from && from !== node.path) void moveInExplorer(from, dropFolder())
   }
 
   // Right click: "Nuevo archivo / Nueva carpeta aquí" (Sidebar.svelte shows
@@ -61,7 +119,18 @@
   <!-- Two sibling buttons (a button cannot contain another one): open the
        file, and, on hover/focus, set or unset it as the project's main file. -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="row" class:active class:disabled style:padding-left="{0.5 + depth * 0.75}rem" {oncontextmenu}>
+  <div
+    class="row"
+    class:active
+    class:disabled
+    class:drop-over={dropOver}
+    style:padding-left="{0.5 + depth * 0.75}rem"
+    {oncontextmenu}
+    {ondragenter}
+    {ondragover}
+    {ondragleave}
+    {ondrop}
+  >
     <button
       class="entry"
       {onclick}
@@ -128,6 +197,12 @@
 
   .row:hover:not(.disabled) {
     background: var(--surface-hover);
+  }
+
+  /* Where a dragged entry will move to (never the accent, A2). */
+  .row.drop-over {
+    background: var(--surface-active);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
   }
 
   /* Active item (A2, accent rule 2): soft accent fill, primary text and a
