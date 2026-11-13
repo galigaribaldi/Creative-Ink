@@ -3,20 +3,16 @@
 
 /** @typedef {'explorer' | 'search'} SidebarTool */
 /** @typedef {'problems' | 'terminal' | 'shell'} BottomTab  'terminal' = Terminal CI */
-/** @typedef {'primary' | 'secondary'} EditorPane */
+/** @typedef {import('./layout.js').PaneId} EditorPane  'p1'…'p4' (panes.svelte.js) */
 /** @typedef {'pdf' | 'minimal' | 'multi'} EditorMode */
 
 // Declared before `ui`: its initial values read them.
-const SPLIT_RATIO_KEY = 'creative-ink.splitRatio'
-const MIN_SPLIT = 0.2
-const MAX_SPLIT = 0.8
 
 // Layout preferences (purely visual: localStorage, never Go). Ratios are the
 // share of the first element: the editors next to the preview, the bottom
 // panel inside the editor column.
 const PREFS = {
   editorRatio: { key: 'creative-ink.editorRatio', min: 0.25, max: 0.8, def: 0.5 },
-  editorRatioSplit: { key: 'creative-ink.editorRatioSplit', min: 0.4, max: 0.85, def: 2 / 3 },
   bottomRatio: { key: 'creative-ink.bottomRatio', min: 0.15, max: 0.75, def: 0.35 },
   zoom: { key: 'creative-ink.zoom', min: 0.7, max: 2, def: 1 }
 }
@@ -79,15 +75,9 @@ export const ui = $state({
   bottomAutoOpened: false,
   /** Start screen reopened by the user while a project is open. */
   startOpen: false,
-  /** Two editor panes side by side (⌘\). The main one decides what compiles. */
-  splitEditor: false,
-  /** Pane that last had the focus: the explorer opens files there. @type {EditorPane} */
-  focusedPane: 'primary',
-  /** Width of the main pane in the split editor (0.2–0.8), dragged on the divider. */
-  splitRatio: readSplitRatio(),
-  /** Share of the width for the editors next to the preview (one pane / split). */
+  // The editor panes, their files and their arrangement: panes.svelte.js.
+  /** Minimalista: share of the width for the code next to the preview. */
   editorRatio: readPref('editorRatio'),
-  editorRatioSplit: readPref('editorRatioSplit'),
   /** Share of the editor column's height for the bottom panel. */
   bottomRatio: readPref('bottomRatio'),
   /** The PDF preview is shown (it stays mounted when hidden: same PDF and page). */
@@ -139,35 +129,10 @@ export function showToast(text, level = 'info') {
   toastTimer = setTimeout(() => (ui.toast = null), 6000)
 }
 
-function readSplitRatio() {
-  try {
-    const saved = Number(localStorage.getItem(SPLIT_RATIO_KEY))
-    if (saved >= MIN_SPLIT && saved <= MAX_SPLIT) return saved
-  } catch {
-    // Storage unavailable: start centred.
-  }
-  return 0.5
-}
-
-/**
- * Sets the split editor's proportion (clamped to 20–80 %). With persist, it
- * is remembered across sessions (purely visual: localStorage, never Go).
- * @param {number} ratio share of the main pane
- * @param {boolean} [persist]
- */
-export function setSplitRatio(ratio, persist = false) {
-  ui.splitRatio = Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, ratio))
-  if (!persist) return
-  try {
-    localStorage.setItem(SPLIT_RATIO_KEY, String(ui.splitRatio))
-  } catch {
-    // Not persisted; it still applies for this session.
-  }
-}
 
 /**
  * Sets a layout ratio (clamped); with persist, it is remembered.
- * @param {'editorRatio' | 'editorRatioSplit' | 'bottomRatio'} name
+ * @param {'editorRatio' | 'bottomRatio'} name
  * @param {number} ratio
  * @param {boolean} [persist]
  */
@@ -178,7 +143,7 @@ export function setLayoutRatio(name, ratio, persist = false) {
 }
 
 /** Restores a layout ratio to its default (double click on a divider). */
-export function resetLayoutRatio(/** @type {'editorRatio' | 'editorRatioSplit' | 'bottomRatio'} */ name) {
+export function resetLayoutRatio(/** @type {'editorRatio' | 'bottomRatio'} */ name) {
   setLayoutRatio(name, PREFS[name].def, true)
 }
 

@@ -1,5 +1,5 @@
 <script>
-  import { compileDocument, saveAs, saveDocument, setEditorMode } from '../lib/actions.js'
+  import { compileDocument, resetArrangement, saveAs, saveDocument, setEditorMode } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
   import { terminal } from '../lib/terminal.svelte.js'
   import { toggleBottomTab, togglePreview, toggleTool, ui } from '../lib/ui.svelte.js'
@@ -19,7 +19,7 @@
   const MODES = [
     { id: 'pdf', label: 'Solo PDF', hint: 'Oculta el código: para presentar (Beamer) o enseñar un artículo' },
     { id: 'minimal', label: 'Minimalista', hint: 'Un panel de código y la vista previa' },
-    { id: 'multi', label: 'Multiventana', hint: `Pestañas y dos paneles (${MOD}\\ divide)` }
+    { id: 'multi', label: 'Multiventana', hint: `Pestañas y hasta 4 paneles, colocados donde quieras (${MOD}\\ añade uno)` }
   ]
   let currentMode = $derived(MODES.find((m) => m.id === ui.editorMode) ?? MODES[1])
 
@@ -149,6 +149,13 @@
               </span>
             </button>
           {/each}
+          <div class="mode-sep" role="separator"></div>
+          <button role="menuitem" class="mode-reset" onclick={(e) => (e.stopPropagation(), void resetArrangement())}>
+            <span class="text">
+              <span class="label">Restablecer la distribución</span>
+              <span class="hint">Un editor y la vista previa, como al principio</span>
+            </span>
+          </button>
         </div>
       {/if}
     </div>
@@ -243,6 +250,16 @@
 
   .mode-menu button.current {
     background: var(--surface-active);
+  }
+
+  .mode-sep {
+    height: 1px;
+    margin: 0.2rem 0.3rem;
+    background: var(--border);
+  }
+
+  .mode-menu .mode-reset {
+    padding-left: calc(0.55rem + 18px + 0.6rem); /* aligned with the labels above */
   }
 
   .mode-menu svg {

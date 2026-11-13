@@ -158,3 +158,8 @@ body.resizing-col {
 body.resizing-row {
   cursor: row-resize;
 }
+
+/* Dragging a pane or the preview to another place (lib/dock.svelte.js). */
+body.docking {
+  cursor: grabbing;
+}

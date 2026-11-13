@@ -2,18 +2,20 @@
   // The tabs of an editor pane (docs/MAP.md §4.4, #9, C1): the file's name
   // on top of each pane. In "Multiventana", one tab per open file; in
   // "Minimalista", only the shown file (a header, no tabs to manage).
-  import { closeTab, closeUntitled, openFile } from '../lib/actions.js'
-  import { tabs } from '../lib/tabs.svelte.js'
+  import { closePane, closeTab, closeUntitled, focusPane, openFile } from '../lib/actions.js'
+  import { startDockDrag } from '../lib/dock.svelte.js'
+  import { openPanes, panes } from '../lib/panes.svelte.js'
   import { ui } from '../lib/ui.svelte.js'
   import { baseName, workspace } from '../lib/workspace.svelte.js'
 
   /** @type {{ pane: import('../lib/ui.svelte.js').EditorPane, single?: boolean }} */
   let { pane, single = false } = $props()
 
-  let active = $derived(pane === 'primary' ? workspace.currentFilePath : workspace.secondaryFilePath)
-  let untitled = $derived(pane === 'primary' && workspace.untitled)
-  let list = $derived(single ? (active ? [active] : []) : tabs[pane])
-  let focused = $derived(ui.splitEditor && ui.focusedPane === pane)
+  let active = $derived(panes.files[pane])
+  let untitled = $derived(panes.untitled === pane)
+  let list = $derived(single ? (active ? [active] : []) : panes.tabs[pane])
+  let several = $derived(openPanes().length > 1)
+  let focused = $derived(several && panes.focused === pane)
 
   /** Path from the open folder, for the tooltip. */
   function relative(/** @type {string} */ path) {
@@ -31,7 +33,7 @@
   }
 
   function show(/** @type {string} */ path) {
-    ui.focusedPane = pane
+    focusPane(pane, false)
     openFile(path)
   }
 
@@ -44,8 +46,9 @@
   }
 </script>
 
-{#if list.length || untitled}
-  <div class="tabs" class:single class:focused role="tablist" aria-label={pane === 'primary' ? 'Archivos abiertos' : 'Archivos del segundo panel'}>
+{#if list.length || untitled || !single}
+  <!-- A pointer anywhere in the pane focuses it (Workspace.svelte). -->
+  <div class="tabs" class:single class:focused role="tablist" aria-label="Archivos abiertos en el panel">
     {#each list as path (path)}
       {@const isActive = path === active && !untitled}
       <div class="tab" class:active={isActive} title={relative(path)}>
@@ -66,6 +69,29 @@
         <button class="name" role="tab" aria-selected="true">Sin título</button>
         <button class="close" onclick={closeUntitled} aria-label="Cerrar el documento sin título" title="Cerrar">×</button>
       </div>
+    {/if}
+    {#if !single && ui.editorMode === 'multi'}
+      <!-- The pane itself (Multiventana): drag it anywhere, or close it. -->
+      <span class="pane-actions">
+        <button
+          class="grip"
+          onpointerdown={(e) => startDockDrag(pane, e)}
+          aria-label="Mover el panel"
+          title="Arrastra para colocar el panel donde quieras (Esc cancela)"
+        >
+          <!-- Lucide "grip-vertical" -->
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="9" cy="12" r="1" /><circle cx="9" cy="5" r="1" /><circle cx="9" cy="19" r="1" />
+            <circle cx="15" cy="12" r="1" /><circle cx="15" cy="5" r="1" /><circle cx="15" cy="19" r="1" />
+          </svg>
+        </button>
+        {#if several}
+          <button class="close-pane" onclick={(e) => (e.stopPropagation(), closePane(pane))} aria-label="Cerrar el panel" title="Cerrar el panel">
+            <!-- Lucide "x" -->
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+          </button>
+        {/if}
+      </span>
     {/if}
   </div>
 {/if}
@@ -115,6 +141,64 @@
     inset: 0 0 auto 0;
     height: 2px;
     background: var(--accent);
+  }
+
+  .pane-actions {
+    position: sticky;
+    right: 0;
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    padding: 0 0.3rem;
+    background: var(--surface-base);
+  }
+
+  .grip {
+    display: grid;
+    place-items: center;
+    width: 1.3rem;
+    height: 1.4rem;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: grab;
+    touch-action: none;
+    transition: background-color var(--transition), color var(--transition);
+  }
+
+  .grip:hover {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+  }
+
+  .grip svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+    stroke: none;
+  }
+
+  .close-pane {
+    display: grid;
+    place-items: center;
+    width: 1.4rem;
+    height: 1.4rem;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    transition: background-color var(--transition), color var(--transition);
+  }
+
+  .close-pane:hover {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+  }
+
+  .close-pane svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: var(--icon-stroke);
+    stroke-linecap: round;
   }
 
   .untitled .name {

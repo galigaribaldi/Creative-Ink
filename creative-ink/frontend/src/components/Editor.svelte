@@ -25,14 +25,14 @@
     gotoLine
   } from '@codemirror/search'
   import { LoadFile, OpenFile, RequestCompile, SaveContent } from '../../wailsjs/go/main/App.js'
-  import { UNTITLED_BLOCKS, registerEditor } from '../lib/actions.js'
+  import { UNTITLED_BLOCKS, focusPane, markActiveDocument, registerEditor } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
   import { config } from '../lib/config.svelte.js'
   import { editorTheme } from '../lib/editor-theme.js'
   import { languageFor } from '../lib/languages.js'
   import { sync, syncForward } from '../lib/synctex.svelte.js'
   import { showToast, ui } from '../lib/ui.svelte.js'
-  import { tabs } from '../lib/tabs.svelte.js'
+  import { openPanes, panes } from '../lib/panes.svelte.js'
   import { baseName, compileTarget, isTeXPath, workspace } from '../lib/workspace.svelte.js'
 
   /**
@@ -41,9 +41,12 @@
    * (LoadFile: it only edits and saves in place).
    * @type {{ pane?: import('../lib/ui.svelte.js').EditorPane }}
    */
-  let { pane = 'primary' } = $props()
+  let { pane = 'p1' } = $props()
   // A pane never changes role: read once.
-  const isPrimary = untrack(() => pane) === 'primary'
+  const paneId = untrack(() => pane) // a pane never changes id
+  // The focused pane is Go's active document: it opens files with OpenFile
+  // (what is compiled follows it); the others only read them (LoadFile).
+  let isFocused = $derived(panes.focused === paneId)
 
   // Two inactivity windows, both restarted by every keystroke:
   //  - 1 s → save to disk (cheap: protects the text early).
@@ -251,8 +254,7 @@
 
   /** Selects the file of this pane ("" = none) in the shared state. */
   function select(path) {
-    if (isPrimary) workspace.currentFilePath = path
-    else workspace.secondaryFilePath = path
+    panes.files[paneId] = path
   }
 
   /**
@@ -288,7 +290,7 @@
         // SyncTeX forward: ⌘-click (Ctrl-click on Linux/Windows) on a line.
         EditorView.domEventHandlers({
           focus() {
-            ui.focusedPane = pane
+            if (panes.focused !== paneId) focusPane(paneId, false)
             return false
           },
           mousedown(event, v) {
@@ -341,9 +343,10 @@
       view.setState(createState(content, path !== '', path))
     }
     // Go's compile target without a main file is the last .tex of this pane.
-    if (isPrimary && isTeXPath(path)) workspace.texFilePath = path
+    const active = untrack(() => panes.focused === paneId)
+    if (active && isTeXPath(path)) workspace.texFilePath = path
     // What Go compiles now (a chapter of a collection: its document's main.tex).
-    if (isPrimary && target) workspace.compileTargetPath = target
+    if (active && target) workspace.compileTargetPath = target
     adopt(path)
     status = path ? 'saved' : 'empty'
     errorMsg = ''
@@ -392,7 +395,7 @@
     const clean = await waitIdle()
     if (seq !== switchSeq) return
     if (!clean) {
-      workspace.untitled = false // the current file could not be saved: stay on it
+      panes.untitled = '' // the current file could not be saved: stay on it
       setEditable(docFile !== '')
       return
     }
@@ -422,7 +425,7 @@
     if (seq !== switchSeq) return
     if (!clean && untitled) {
       // The untitled document has text: never thrown away silently.
-      workspace.untitled = true
+      panes.untitled = paneId
       setEditable(true)
       select('')
       showToast(UNTITLED_BLOCKS.replace('otro proyecto', 'otro archivo'), 'warning')
@@ -441,9 +444,11 @@
     status = 'loading'
     try {
       // The main pane makes it Go's active document; the second one only reads it.
-      const file = await (isPrimary ? OpenFile(target) : LoadFile(target))
+      const opening = untrack(() => panes.focused === paneId)
+      const file = await (opening ? OpenFile(target) : LoadFile(target))
+      if (opening) markActiveDocument(file.path)
       if (seq !== switchSeq) return
-      load(file.path, file.content, isPrimary ? file.compileTarget : '', file.affectsBuild)
+      load(file.path, file.content, opening ? file.compileTarget : '', file.affectsBuild)
     } catch (err) {
       if (seq !== switchSeq) return
       status = 'loadError'
@@ -510,7 +515,7 @@
   // file changes. CodeMirror itself is never remounted.
   // A closed tab forgets its state.
   $effect(() => {
-    const open = isPrimary ? tabs.primary : tabs.secondary
+    const open = panes.tabs[paneId]
     const keep = new Set(open)
     untrack(() => {
       for (const path of tabStates.keys()) if (!keep.has(path)) tabStates.delete(path)
@@ -524,30 +529,30 @@
     untrack(() => view?.requestMeasure())
   })
 
-  // ⌘N shows the untitled document in the main pane instead.
+  // ⌘N shows the untitled document in this pane instead.
   $effect(() => {
-    const target = isPrimary ? workspace.currentFilePath : workspace.secondaryFilePath
-    const wantUntitled = isPrimary && workspace.untitled
+    const target = panes.files[paneId]
+    const wantUntitled = panes.untitled === paneId
     untrack(() => void (wantUntitled ? showUntitled() : switchTo(target)))
   })
 </script>
 
-<div class="editor" class:focused={ui.splitEditor && ui.focusedPane === pane}>
+<div class="editor" class:focused={openPanes().length > 1 && isFocused}>
   <div class="surface" bind:this={container}></div>
   {#if status === 'empty'}
-    {#if isPrimary}
+    {#if openPanes().length === 1}
       <p class="empty">Abre una carpeta y elige un archivo (<code>.tex</code>, <code>.bib</code>…) en el explorador.</p>
     {:else}
-      <p class="empty">Elige en el explorador el archivo que quieres ver junto al otro.</p>
+      <p class="empty">Panel vacío: elige un archivo en el explorador o arrástralo aquí.</p>
     {/if}
   {/if}
   <footer class="statusbar">
     <span class="file" title={filePath}>{fileName}</span>
-    {#if isPrimary && healthTooltip}
+    {#if isFocused && healthTooltip}
       <!-- Large-project detector: only a warning with a tooltip, it changes nothing. -->
       <span class="health" role="note" title={healthTooltip} aria-label={healthTooltip}>⚠ Proyecto grande</span>
     {/if}
-    {#if isPrimary && !config.autoCompile && status !== 'empty'}
+    {#if isFocused && !config.autoCompile && status !== 'empty'}
       <span class="auto-off" title="Actívala en la terminal: ci config autocompile on (o --project solo para este proyecto)">
         Compilación automática: off · {SAVE_SHORTCUT} compila
       </span>

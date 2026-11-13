@@ -21,13 +21,15 @@ import {
   RequestCompile,
   SaveAsDialog,
   SaveNewDialog,
+  SetActiveDocument,
   SetMainFile,
   SetupRepository,
   TrustProject,
   UntrustProject
 } from '../../wailsjs/go/main/App.js'
 import { EventsOn } from '../../wailsjs/runtime/runtime.js'
-import { addTab, paneOf, removeTab, tabs } from './tabs.svelte.js'
+import { MAX_PANES } from './layout.js'
+import { addPane, addTab, dropPane, mirrorPreview, openPanes, paneOf, panes, removeTab, resetLayout } from './panes.svelte.js'
 import {
   saveEditorMode,
   setDirExpanded,
@@ -66,9 +68,12 @@ export const TRUST_CHANGED = 'trust:changed' // trust of the project's .latexmkr
  * }} EditorCommands
  */
 
-/** One Editor.svelte per pane; the secondary exists only while split. */
-/** @type {Record<import('./ui.svelte.js').EditorPane, EditorCommands | null>} */
-const editors = { primary: null, secondary: null }
+/** One Editor.svelte per open pane (p1…p4). */
+/** @type {Partial<Record<import('./ui.svelte.js').EditorPane, EditorCommands | null>>} */
+const editors = {}
+
+/** Every registered editor (the open panes). */
+const allEditors = () => /** @type {EditorCommands[]} */ (Object.values(editors).filter(Boolean))
 
 /**
  * Called by Editor.svelte once CodeMirror is ready.
@@ -85,12 +90,15 @@ export function registerEditor(pane, commands) {
 
 /** The pane that has (or last had) the focus. */
 function focusedEditor() {
-  return (ui.splitEditor && editors[ui.focusedPane]) || editors.primary
+  return editors[panes.focused] ?? allEditors()[0] ?? null
 }
+
+/** The editor showing the untitled document of ⌘N, if any. */
+const untitledEditor = () => (panes.untitled ? (editors[panes.untitled] ?? null) : null)
 
 /** Saves the pending edits of every pane; false if any could not be written. */
 async function persistPendingEdits() {
-  const pending = [editors.primary, editors.secondary].filter(Boolean).map((e) => e.waitIdle())
+  const pending = allEditors().map((e) => e.waitIdle())
   const results = await Promise.all(pending)
   return results.every(Boolean)
 }
@@ -157,7 +165,7 @@ let refreshPending = false
  * and closes the start screen on success. They return an error message or ''.
  */
 async function switchProject(/** @type {() => Promise<import('./workspace.svelte.js').WorkspaceState>} */ open) {
-  if (editors.primary?.hasUntitledText()) return UNTITLED_BLOCKS
+  if (untitledEditor()?.hasUntitledText()) return UNTITLED_BLOCKS
   if (!(await persistPendingEdits())) return 'No se pudieron guardar los cambios del archivo abierto.'
   try {
     applyWorkspace(await open())
@@ -249,23 +257,56 @@ export function listenWorkspaceEvents() {
  * @param {string} path absolute
  */
 export function openFile(path) {
-  // A file is never in both panes: if one has it (as a tab), it opens there.
-  const owner = paneOf(path)
-  /** @type {import('./ui.svelte.js').EditorPane} */
-  let pane = ui.splitEditor && ui.focusedPane === 'secondary' ? 'secondary' : 'primary'
-  if (owner === 'primary' || (owner === 'secondary' && ui.splitEditor)) pane = owner
+  // A file is never in two panes: if one has it (as a tab), it opens there.
+  const pane = paneOf(path) || panes.focused
   // Leaving the untitled document (the editor refuses it if it has text).
-  const leavingUntitled = pane === 'primary' && workspace.untitled
-  if (leavingUntitled) workspace.untitled = false
-  const current = pane === 'primary' ? workspace.currentFilePath : workspace.secondaryFilePath
-  // Multiventana: one more tab. Minimalista: it takes the place of the shown one.
+  const leavingUntitled = panes.untitled === pane
+  if (leavingUntitled) panes.untitled = ''
+  const current = panes.files[pane]
+  // Multiventana: one more tab. Minimalista / Solo PDF: it takes the place of the shown one.
   addTab(pane, path, current, ui.editorMode !== 'multi')
-  ui.focusedPane = pane
-  if (path === current && !leavingUntitled) return void editors[pane]?.focus()
-  if (pane === 'primary') workspace.currentFilePath = path
-  else workspace.secondaryFilePath = path
+  // Already shown there: only the focus (and Go's active document) move.
+  if (path === current && !leavingUntitled) return focusPane(pane)
+  // A new file: the focused pane loads it with OpenFile, which already
+  // makes it Go's active document (no SetActiveDocument of the old one).
+  panes.focused = pane
+  panes.files[pane] = path
 }
 
+/**
+ * The focused pane (a click in it, its tab, opening a file there). Its file
+ * becomes Go's active document (SetActiveDocument): what is compiled
+ * follows the last focused .tex; a main file (★) still wins.
+ * @param {import('./ui.svelte.js').EditorPane} pane
+ */
+export function focusPane(pane, focusEditor = true) {
+  if (!openPanes().includes(pane)) return
+  panes.focused = pane
+  if (focusEditor) editors[pane]?.focus()
+  void syncActiveDocument()
+}
+
+/** Go's active document as far as the UI knows (set by OpenFile or SetActiveDocument). */
+let goActive = ''
+
+/** Called by Editor.svelte after OpenFile made path Go's active document. */
+export function markActiveDocument(/** @type {string} */ path) {
+  goActive = path
+}
+
+async function syncActiveDocument() {
+  const file = panes.files[panes.focused]
+  if (!file || file === goActive || panes.untitled === panes.focused) return
+  goActive = file
+  try {
+    const active = await SetActiveDocument(file)
+    if (panes.files[panes.focused] !== file) return // focus moved on meanwhile
+    workspace.compileTargetPath = active.compileTarget
+    if (/\.tex$/i.test(file)) workspace.texFilePath = file
+  } catch {
+    goActive = '' // e.g. the file was deleted: the next focus retries
+  }
+}
 /**
  * Closes a tab. The shown one is saved first (a failed save keeps it open);
  * the neighbour tab is shown instead, and the second pane closes with its
@@ -274,7 +315,7 @@ export function openFile(path) {
  * @param {string} path
  */
 export async function closeTab(pane, path) {
-  const active = pane === 'primary' ? workspace.currentFilePath : workspace.secondaryFilePath
+  const active = panes.files[pane]
   if (path === active) {
     const editor = editors[pane]
     if (editor && !(await editor.waitIdle())) {
@@ -284,19 +325,37 @@ export async function closeTab(pane, path) {
   }
   const next = removeTab(pane, path)
   if (path !== active) return
-  if (pane === 'secondary' && !next) {
-    await closeSplit()
-    return
-  }
-  if (pane === 'primary') workspace.currentFilePath = next
-  else workspace.secondaryFilePath = next
+  // The last tab of a pane closes the pane (never the last pane).
+  if (!next && openPanes().length > 1) return void closePane(pane)
+  panes.files[pane] = next
 }
-
 /** Closes the untitled tab: refused while it has text (it would be lost). */
 export function closeUntitled() {
-  if (editors.primary?.hasUntitledText()) return showToast(UNTITLED_BLOCKS.replace('otro proyecto', 'cerrarlo'), 'warning')
-  workspace.untitled = false
-  workspace.currentFilePath = tabs.primary.at(-1) ?? ''
+  const pane = panes.untitled
+  if (!pane) return
+  if (untitledEditor()?.hasUntitledText()) return showToast(UNTITLED_BLOCKS.replace('otro proyecto', 'cerrarlo'), 'warning')
+  panes.untitled = ''
+  panes.files[pane] = panes.tabs[pane].at(-1) ?? ''
+}
+/**
+ * Back to one editor and the preview. The other panes are saved first; their
+ * files stay on disk (reopen them from the explorer).
+ */
+export async function resetArrangement() {
+  ui.modeMenuOpen = false
+  if (!(await persistPendingEdits())) {
+    showToast('No se pudieron guardar los cambios: la distribución no cambia.', 'warning')
+    return
+  }
+  if (panes.untitled && panes.untitled !== 'p1') panes.untitled = ''
+  resetLayout()
+  focusPane('p1')
+}
+
+/** ⇄ of the preview: Multiventana moves it to the other end; Minimalista swaps its side. */
+export function swapPreview() {
+  if (ui.editorMode === 'multi') mirrorPreview()
+  else swapPreviewSide()
 }
 
 /**
@@ -308,45 +367,41 @@ export function closeUntitled() {
 export async function setEditorMode(mode) {
   ui.modeMenuOpen = false
   if (mode === ui.editorMode) return
-  if (mode !== 'multi' && ui.splitEditor && !(await closeSplit())) return
+  // The modes are only a safety over the same panes: nothing is closed or
+  // rebuilt; Minimalista shows the focused pane, Solo PDF hides them all.
   if (mode === 'pdf') setPreviewVisible(true)
   saveEditorMode(mode)
-  if (mode !== 'pdf') editors.primary?.focus()
-}
-
-function focusPane(/** @type {import('./ui.svelte.js').EditorPane} */ pane) {
-  ui.focusedPane = pane
-  editors[pane]?.focus()
+  if (mode !== 'pdf') focusedEditor()?.focus()
 }
 
 /** MIME type of a file dragged from the explorer (FileTreeItem → Workspace). */
 export const FILE_DRAG_TYPE = 'application/x-creative-ink-path'
 
 /**
- * Drag & drop into the editor area: opens `path` in the SECOND pane
- * (opening the split if needed), where the Editor reads it with LoadFile.
+ * Drag & drop onto an editor pane: opens `path` in THAT pane (Multiventana;
+ * in the other modes, in the shown one).
  * Only editable files of the open folder's tree are accepted: a drop can
  * carry any text. A file already shown in a pane is focused there instead
  * (never the same file in both panes).
  * @param {string} path absolute
  * @returns {boolean} whether the drop was accepted
  */
-export function openInSecondaryPane(path) {
+export function openInPane(path, pane) {
   if (!isEditableInTree(workspace.fileTree, path)) return false
-  if (path === workspace.currentFilePath || paneOf(path) === 'primary') {
-    focusPane('primary')
-    if (path !== workspace.currentFilePath) openFile(path)
+  if (ui.editorMode !== 'multi') {
+    openFile(path) // one pane on screen
     return true
   }
-  if (ui.editorMode !== 'multi') saveEditorMode('multi') // two panes side by side
-  ui.splitEditor = true
-  ui.focusedPane = 'secondary'
-  addTab('secondary', path, workspace.secondaryFilePath)
-  if (path === workspace.secondaryFilePath) editors.secondary?.focus()
-  else workspace.secondaryFilePath = path
+  const owner = paneOf(path)
+  if (owner) {
+    focusPane(owner)
+    if (panes.files[owner] !== path) openFile(path)
+    return true
+  }
+  focusPane(pane, false)
+  openFile(path)
   return true
 }
-
 /** @param {import('./workspace.svelte.js').FileNode | null} node @param {string} path */
 function isEditableInTree(node, path) {
   if (!node) return false
@@ -360,26 +415,23 @@ function isEditableInTree(node, path) {
  * its pending edits first.
  */
 export async function toggleSplitEditor() {
-  if (!ui.splitEditor) {
-    if (ui.editorMode !== 'multi') saveEditorMode('multi') // two panes = Multiventana
-    ui.splitEditor = true
-    ui.focusedPane = 'secondary'
-    ui.sidebarOpen = true // the explorer is how a file gets into the new pane
-    return
-  }
-  await closeSplit()
+  if (ui.editorMode !== 'multi') saveEditorMode('multi') // several panes = Multiventana
+  const id = addPane(panes.focused)
+  if (!id) return void showToast(`Como mucho ${MAX_PANES} paneles de editor.`, 'warning')
+  focusPane(id, false)
+  ui.sidebarOpen = true // the explorer is how a file gets into the new pane
 }
-
-/** Closes the second pane after saving it; false if it could not be saved. */
-async function closeSplit() {
-  if (editors.secondary && !(await editors.secondary.waitIdle())) return false // keep it: unsaved
-  ui.splitEditor = false
-  workspace.secondaryFilePath = ''
-  tabs.secondary = []
-  focusPane('primary')
+/** Closes an editor pane after saving it (never the last one); false if it could not be saved. */
+export async function closePane(pane) {
+  const editor = editors[pane]
+  if (editor && !(await editor.waitIdle())) {
+    showToast('No se pudo guardar el panel: sigue abierto.', 'warning')
+    return false
+  }
+  dropPane(pane)
+  focusPane(panes.focused)
   return true
 }
-
 /**
  * ⌘N / Ctrl+N "Nuevo archivo…": native dialog inside the open project
  * (.tex by default; .bib, .sty, .txt… by extension). Without a project it
@@ -396,9 +448,8 @@ export const UNTITLED_BLOCKS = `Guarda el documento sin título (${MOD_S}) o bó
 export function newFile() {
   if (!workspace.currentFolderPath) return newQuickDocument()
   ui.startOpen = false
-  ui.focusedPane = 'primary'
-  if (workspace.untitled) return editors.primary?.focus()
-  workspace.untitled = true
+  if (panes.untitled) return focusPane(panes.untitled) // one untitled document at a time
+  panes.untitled = panes.focused
 }
 
 /** ⇧⌘N / Ctrl+Shift+N: another, independent Creative-ink window. */
@@ -412,12 +463,15 @@ export async function newWindow() {
 
 /** Saves the untitled document of ⌘N; returns true if it was saved. */
 async function saveUntitled() {
-  const editor = editors.primary
-  if (!editor) return false
+  const pane = panes.untitled
+  const editor = untitledEditor()
+  if (!pane || !editor) return false
   try {
     const state = await SaveNewDialog(editor.getContent())
     if (state.canceled) return false
-    workspace.untitled = false
+    panes.untitled = ''
+    panes.focused = pane // Go's active document is the saved file now
+    goActive = state.filePath
     editor.adopt(state.filePath) // same text, now a file: no reload
     applyWorkspace(state)
     return true
@@ -438,14 +492,14 @@ async function saveUntitled() {
  */
 export async function createInExplorer(kind, parent, name) {
   if (kind === 'file') {
-    if (editors.primary?.hasUntitledText()) return UNTITLED_BLOCKS
+    if (untitledEditor()?.hasUntitledText()) return UNTITLED_BLOCKS
     if (!(await persistPendingEdits())) return 'No se pudieron guardar los cambios del archivo abierto.'
   }
   try {
     const state = kind === 'file' ? await CreateFile(parent, name) : await CreateFolder(parent, name)
     setDirExpanded(parent, true)
     if (kind === 'file') {
-      workspace.untitled = false
+      panes.untitled = ''
       applyWorkspace(state)
     } else {
       applyTree(state)
@@ -480,16 +534,16 @@ export async function setMainFile(path) {
  * and then compiles. Without a document, it only compiles.
  */
 export async function saveDocument() {
-  if (editors.primary?.isUntitled()) {
+  if (focusedEditor()?.isUntitled()) {
     if (await saveUntitled()) void RequestCompile('manual')
     return
   }
   // This compile replaces the ones the panes had scheduled after typing.
-  for (const e of [editors.primary, editors.secondary]) e?.cancelScheduledCompile()
+  for (const e of allEditors()) e.cancelScheduledCompile()
   if (!(await persistPendingEdits())) return // the PDF would not match the text
   // Only when an open file can change the PDF: saving a README.md never
   // compiles (Go decides, core.AffectsBuild). The toolbar's Compilar always does.
-  const affects = [editors.primary, editors.secondary].some((e) => e?.affectsBuild())
+  const affects = allEditors().some((e) => e.affectsBuild())
   // "manual": always compiles (and is never cancelled), whatever compile.auto says.
   if (affects && compileTarget()) void RequestCompile('manual')
 }
@@ -499,8 +553,8 @@ export async function saveDocument() {
  * document; the second pane only edits files in place).
  */
 export async function saveAs() {
-  if (editors.primary?.isUntitled()) return void saveUntitled()
-  const editor = editors.primary
+  if (focusedEditor()?.isUntitled()) return void saveUntitled()
+  const editor = focusedEditor()
   if (!editor || !(await persistPendingEdits())) return
   try {
     const state = await SaveAsDialog(editor.getContent())
@@ -508,6 +562,7 @@ export async function saveAs() {
     // Same content, new file: rename the editor's document in place instead
     // of reloading it (keeps cursor, scroll and undo history).
     editor.adopt(state.filePath)
+    goActive = state.filePath // SaveAsDialog made it Go's active document
     applyWorkspace(state)
   } catch (err) {
     report(err)
@@ -520,8 +575,8 @@ export async function saveAs() {
  * it compiles even after saving a README.md.
  */
 export async function compileDocument() {
-  for (const e of [editors.primary, editors.secondary]) e?.cancelScheduledCompile()
-  if (editors.primary?.isUntitled()) return saveDocument()
+  for (const e of allEditors()) e.cancelScheduledCompile()
+  if (focusedEditor()?.isUntitled()) return saveDocument()
   if (!(await persistPendingEdits())) return
   if (compileTarget()) void RequestCompile('manual') // explicit: whatever file is open
 }
@@ -565,7 +620,8 @@ const COMMANDS = {
   'mode-multi': () => setEditorMode('multi'),
   'search-project': () => void import('./search.svelte.js').then((m) => m.focusSearch()),
   'toggle-preview': togglePreview,
-  'preview-side': swapPreviewSide,
+  'preview-side': swapPreview,
+  'reset-layout': resetArrangement,
   'zoom-in': () => zoomBy(ZOOM_STEP),
   'zoom-out': () => zoomBy(-ZOOM_STEP),
   'zoom-reset': () => zoomBy(0)

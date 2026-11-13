@@ -4,7 +4,7 @@
 // that: the summary, the progress and the outcome.
 import { CancelImport, ImportProject, InspectDrop, InspectImport } from '../../wailsjs/go/main/App.js'
 import { EventsOn } from '../../wailsjs/runtime/runtime.js'
-import { openFile, openImportInPlace, openInSecondaryPane, openProject } from './actions.js'
+import { openFile, openImportInPlace, openInPane, openProject } from './actions.js'
 import { showToast } from './ui.svelte.js'
 
 export const IMPORT_PROGRESS = 'import:progress'
@@ -131,7 +131,7 @@ export function listenDropEvents() {
       case 'open': {
         // A file of the open folder: the pane under the cursor.
         const pane = document.elementFromPoint(drop.x, drop.y)?.closest('[data-pane]')?.getAttribute('data-pane')
-        if (pane !== 'secondary' || !openInSecondaryPane(drop.path)) openFile(drop.path)
+        if (!pane || !openInPane(drop.path, /** @type {import('./ui.svelte.js').EditorPane} */ (pane))) openFile(drop.path)
         return
       }
       case 'in-place': {

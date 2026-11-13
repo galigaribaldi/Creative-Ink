@@ -14,7 +14,7 @@
  * @typedef {{ kind: 'files' | 'size' | 'images', message: string }} ProjectWarning
  */
 import { config } from './config.svelte.js'
-import { addTab, removeTab, resetTabs } from './tabs.svelte.js'
+import { addTab, paneOf, panes, resetPanes } from './panes.svelte.js'
 import { noteLocation } from './terminal.svelte.js'
 
 /** @type {ProjectLocation} */
@@ -23,19 +23,12 @@ const NO_LOCATION = { kind: '', folder: '', gitRoot: '', syncService: '', collec
 export const workspace = $state({
   /** Absolute path of the open folder ("" before the first load). */
   currentFolderPath: '',
+  // The file of each editor pane lives in panes.svelte.js (panes.files).
   /**
-   * Absolute path of the file shown in the main editor pane ("" = none):
-   * any text file (.tex, .bib, .sty…). Changing it makes Editor.svelte save
-   * pending edits and load the new file.
-   */
-  currentFilePath: '',
-  /**
-   * Last .tex opened in the main pane: what Go compiles when the project has
+   * Last .tex made active (focused): what Go compiles when the project has
    * no main file. Opening refs.bib keeps it, so the preview does not change.
    */
   texFilePath: '',
-  /** File of the second editor pane ("" = none or split closed). Never equal to currentFilePath. */
-  secondaryFilePath: '',
   /**
    * Absolute path of the project's root document ("" = none). When set, Go
    * compiles and previews it whatever file is being edited.
@@ -80,33 +73,24 @@ export const workspace = $state({
    */
   compileTargetPath: '',
   /** A loose file open where it is (Desktop, Downloads): only it is shown. */
-  singleFile: '',
-  /**
-   * ⌘N: the main pane shows a new untitled document. It lives only in the
-   * editor (Go knows nothing until ⌘S saves it with SaveNewDialog); while
-   * it has text, the editor refuses to switch away from it.
-   */
-  untitled: false
+  singleFile: ''
 })
 
 /** Applies a WorkspaceState returned by Go. */
 export function applyWorkspace(/** @type {WorkspaceState} */ state) {
-  // Another folder: the second pane's file belongs to the old one (its edits
-  // were saved before the switch, see actions.js persistPendingEdits).
-  if (state.folderPath !== workspace.currentFolderPath || state.filePath === workspace.secondaryFilePath) {
-    if (state.filePath && state.filePath === workspace.secondaryFilePath) removeTab('secondary', state.filePath)
-    workspace.secondaryFilePath = ''
-  }
-  // Tabs: another project starts with its open file; in the same one, Go's
-  // active file (Save As, a new file…) gets its tab next to the shown one.
-  if (state.folderPath !== workspace.currentFolderPath) resetTabs(state.filePath)
-  else if (state.filePath) addTab('primary', state.filePath, workspace.currentFilePath)
   const folderChanged = state.folderPath !== workspace.currentFolderPath
-  // Another project: its own analysis arrives later (project:health).
-  if (folderChanged) {
-    workspace.healthWarnings = []
-    workspace.untitled = false // another project: the editor shows its file
+  // Panes: another project empties them (the arrangement is global) and the
+  // focused one shows its open file (edits were saved before the switch:
+  // actions.js persistPendingEdits). In the same project, Go's active file
+  // (Save As, a new file…) is shown in the focused pane, with its tab,
+  // unless another pane already has it.
+  if (folderChanged) resetPanes(state.filePath)
+  else if (state.filePath && !paneOf(state.filePath)) {
+    addTab(panes.focused, state.filePath, panes.files[panes.focused])
+    panes.files[panes.focused] = state.filePath
   }
+  // Another project: its own analysis arrives later (project:health).
+  if (folderChanged) workspace.healthWarnings = []
   workspace.location = state.location ?? NO_LOCATION
   // Opening a folder outside the repository leaves a line in both terminals.
   if (folderChanged && state.folderPath) noteLocation(workspace.location)
@@ -118,7 +102,6 @@ export function applyWorkspace(/** @type {WorkspaceState} */ state) {
   workspace.currentFolderPath = state.folderPath
   workspace.fileTree = state.tree
   workspace.truncated = state.truncated
-  workspace.currentFilePath = state.filePath
   workspace.texFilePath = state.texFilePath
   workspace.mainFilePath = state.mainFilePath
   workspace.compileTargetPath = state.compileTarget ?? ''
@@ -129,7 +112,7 @@ export function applyWorkspace(/** @type {WorkspaceState} */ state) {
 /**
  * Applies only the folder contents of a WorkspaceState (tree, truncation,
  * main file). Used by refreshes, automatic or manual: they must never touch
- * currentFilePath, or a refresh landing during a file switch would send the
+ * the panes' files, or a refresh landing during a file switch would send the
  * editor back to the previous file.
  */
 export function applyTree(/** @type {WorkspaceState} */ state) {

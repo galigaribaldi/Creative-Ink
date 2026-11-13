@@ -2,6 +2,7 @@
   import FileTreeItem from './FileTreeItem.svelte'
   import { FILE_DRAG_TYPE, openFile, setMainFile } from '../lib/actions.js'
   import { setDirExpanded, ui } from '../lib/ui.svelte.js'
+  import { isShown } from '../lib/panes.svelte.js'
   import { isTeXPath, workspace } from '../lib/workspace.svelte.js'
 
   /** @type {{ node: import('../lib/workspace.svelte.js').FileNode, depth: number }} */
@@ -11,7 +12,7 @@
   let expanded = $derived(ui.expandedDirs[node.path] ?? false)
   // Shown in one of the editor panes (main or the split one).
   let active = $derived(
-    !node.isDir && (node.path === workspace.currentFilePath || node.path === workspace.secondaryFilePath)
+    !node.isDir && isShown(node.path)
   )
   let isTeX = $derived(!node.isDir && isTeXPath(node.name))
   // Short type label: TeX, BIB, STY… ("·" for files the editor cannot open).
@@ -25,7 +26,7 @@
   }
 
   // Editable files can be dragged onto the editor area: they open in the
-  // second pane (Workspace.svelte, actions.js openInSecondaryPane).
+  // pane under the pointer (Workspace.svelte, actions.js openInPane).
   let draggable = $derived(!node.isDir && node.editable)
 
   /** @param {DragEvent} event */

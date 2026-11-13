@@ -1,7 +1,17 @@
 <script>
-  import { FILE_DRAG_TYPE, openInSecondaryPane } from '../lib/actions.js'
+  // The dock (docs/MAP.md §4.4, #9): up to 4 editor panes and the PDF
+  // preview, each drawn ONCE and placed in the rectangle the layout engine
+  // gives it (lib/layout.js). Rearranging only changes rectangles: CodeMirror
+  // and PDF.js are never remounted. The three modes are a safety over the
+  // same items: Multiventana shows the global arrangement, Minimalista the
+  // focused pane next to the preview, Solo PDF only the preview. The bottom
+  // panel (Errores LaTeX | Terminal CI | Shell) spans the width below.
+  import { FILE_DRAG_TYPE, focusPane, openInPane } from '../lib/actions.js'
   import { compilation } from '../lib/compilation.svelte.js'
-  import { resetLayoutRatio, setLayoutRatio, setSplitRatio, ui } from '../lib/ui.svelte.js'
+  import { dock } from '../lib/dock.svelte.js'
+  import { computeLayout, nextVisible, resize } from '../lib/layout.js'
+  import { openPanes, panes, setLayout } from '../lib/panes.svelte.js'
+  import { resetLayoutRatio, setLayoutRatio, ui } from '../lib/ui.svelte.js'
   import { compileTarget } from '../lib/workspace.svelte.js'
   import BottomPanel from './BottomPanel.svelte'
   import Editor from './Editor.svelte'
@@ -10,12 +20,126 @@
   import TabStrip from './TabStrip.svelte'
   import TrustBanner from './TrustBanner.svelte'
 
-  // Drag & drop from the explorer: dropping a file on the editor area opens
-  // it in the second pane. Capture-phase handlers so CodeMirror never sees
-  // these drags (it would insert the path as text); any other drag (e.g.
-  // moving text inside the editor) passes through untouched.
-  let dropActive = $state(false)
-  let dragDepth = 0 // enter/leave pairs of the nested elements
+  /** Smallest pane along a dragged divider (px). */
+  const MIN_ITEM_PX = 160
+
+  /** @type {HTMLDivElement} */
+  let workspaceEl
+  /** @type {HTMLDivElement} */
+  let dockEl
+
+  let pdfOnly = $derived(ui.editorMode === 'pdf')
+
+  /** @typedef {import('../lib/layout.js').LayoutNode} LayoutNode */
+
+  // What is on screen, per mode.
+  let view = $derived.by(() => {
+    if (ui.editorMode === 'pdf') {
+      return { kind: 'pdf', ...computeLayout({ kind: 'leaf', item: 'pdf' }) }
+    }
+    if (ui.editorMode === 'minimal') {
+      const pane = { kind: 'leaf', item: panes.focused }
+      /** @type {LayoutNode} */
+      const tree = ui.previewVisible
+        ? {
+            kind: 'split',
+            dir: 'row',
+            sizes: ui.previewSide === 'right' ? [ui.editorRatio, 1 - ui.editorRatio] : [1 - ui.editorRatio, ui.editorRatio],
+            children: ui.previewSide === 'right' ? [pane, { kind: 'leaf', item: 'pdf' }] : [{ kind: 'leaf', item: 'pdf' }, pane]
+          }
+        : /** @type {LayoutNode} */ (pane)
+      return { kind: 'minimal', ...computeLayout(tree) }
+    }
+    const hidden = ui.previewVisible ? new Set() : new Set(['pdf'])
+    return { kind: 'multi', hidden, ...computeLayout(panes.layout, /** @type {Set<any>} */ (hidden)) }
+  })
+
+  // The dragging code (dock.svelte.js) hit-tests these rectangles.
+  $effect(() => {
+    dock.rects = view.rects
+    dock.el = dockEl
+  })
+
+  /** Where the dragged item would go: half of the target, or all of it (swap). */
+  let dropHint = $derived.by(() => {
+    const r = dock.target ? view.rects[dock.target] : undefined
+    if (!r || !dock.zone) return ''
+    const half = {
+      left: { ...r, w: r.w / 2 },
+      right: { ...r, x: r.x + r.w / 2, w: r.w / 2 },
+      top: { ...r, h: r.h / 2 },
+      bottom: { ...r, y: r.y + r.h / 2, h: r.h / 2 },
+      center: r
+    }[dock.zone]
+    return place(half)
+  })
+
+  /** CSS of an item's rectangle (fractions of the dock). @param {import('../lib/layout.js').Rect | undefined} r */
+  function place(r) {
+    return r ? `left:${r.x * 100}%;top:${r.y * 100}%;width:${r.w * 100}%;height:${r.h * 100}%` : ''
+  }
+
+  /** CSS of a divider: 4px centred on the boundary. @param {import('../lib/layout.js').Handle} h */
+  function handleStyle(h) {
+    const { pair } = h
+    return h.dir === 'row'
+      ? `left:calc(${h.at * 100}% - 2px);top:${pair.y * 100}%;height:${pair.h * 100}%;width:4px`
+      : `top:calc(${h.at * 100}% - 2px);left:${pair.x * 100}%;width:${pair.w * 100}%;height:4px`
+  }
+
+  /** The two items a divider separates, as a box the Splitter can measure. @param {import('../lib/layout.js').Handle} h */
+  function pairBox(h) {
+    return /** @type {HTMLElement} */ (
+      /** @type {unknown} */ ({
+        getBoundingClientRect() {
+          const d = dockEl.getBoundingClientRect()
+          return {
+            left: d.left + h.pair.x * d.width,
+            top: d.top + h.pair.y * d.height,
+            width: h.pair.w * d.width,
+            height: h.pair.h * d.height
+          }
+        }
+      })
+    )
+  }
+
+  /** Current share of the first item of the pair. @param {import('../lib/layout.js').Handle} h */
+  function pairRatio(h) {
+    return h.dir === 'row' ? (h.at - h.pair.x) / h.pair.w : (h.at - h.pair.y) / h.pair.h
+  }
+
+  /** Keeps both items at least MIN_ITEM_PX. @param {import('../lib/layout.js').Handle} h @param {number} r */
+  function clampRatio(h, r) {
+    const d = dockEl.getBoundingClientRect()
+    const size = h.dir === 'row' ? h.pair.w * d.width : h.pair.h * d.height
+    const min = Math.min(0.45, MIN_ITEM_PX / Math.max(size, 1))
+    return Math.min(1 - min, Math.max(min, r))
+  }
+
+  /** A divider moved. @param {import('../lib/layout.js').Handle} h @param {number} r @param {boolean} persist */
+  function onresize(h, r, persist) {
+    r = clampRatio(h, r)
+    if (view.kind === 'minimal') {
+      setLayoutRatio('editorRatio', ui.previewSide === 'right' ? r : 1 - r, persist)
+      return
+    }
+    const hidden = /** @type {Set<any>} */ (view.kind === 'multi' ? view.hidden : new Set())
+    const other = nextVisible(panes.layout, h.path, h.index, hidden)
+    if (other >= 0) setLayout(resize(panes.layout, h.path, h.index, other, r), persist)
+  }
+
+  /** Double click on a divider: share the two items equally. @param {import('../lib/layout.js').Handle} h */
+  function onreset(h) {
+    if (view.kind === 'minimal') return resetLayoutRatio('editorRatio')
+    onresize(h, 0.5, true)
+  }
+
+  // ── Files dragged from the explorer: they open in the pane under the
+  // pointer. Capture-phase handlers so CodeMirror never sees these drags (it
+  // would insert the path as text); other drags pass through untouched.
+  /** @type {string} */
+  let dropTarget = $state('')
 
   /** @param {DragEvent} event */
   function isFileDrag(event) {
@@ -23,12 +147,9 @@
   }
 
   /** @param {DragEvent} event */
-  function ondragentercapture(event) {
-    if (!isFileDrag(event)) return
-    event.preventDefault()
-    event.stopPropagation()
-    dragDepth++
-    dropActive = true
+  function paneUnder(event) {
+    const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest?.('[data-pane]'))
+    return el?.dataset.pane ?? ''
   }
 
   /** @param {DragEvent} event */
@@ -37,14 +158,14 @@
     event.preventDefault() // allows the drop
     event.stopPropagation()
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+    dropTarget = paneUnder(event) || panes.focused
   }
 
   /** @param {DragEvent} event */
   function ondragleavecapture(event) {
     if (!isFileDrag(event)) return
     event.stopPropagation()
-    dragDepth = Math.max(0, dragDepth - 1)
-    if (dragDepth === 0) dropActive = false
+    if (!dockEl.contains(/** @type {Node | null} */ (event.relatedTarget))) dropTarget = ''
   }
 
   /** @param {DragEvent} event */
@@ -52,221 +173,175 @@
     if (!isFileDrag(event)) return
     event.preventDefault()
     event.stopPropagation()
-    dragDepth = 0
-    dropActive = false
+    const pane = /** @type {import('../lib/ui.svelte.js').EditorPane} */ (paneUnder(event) || panes.focused)
+    dropTarget = ''
     const path = event.dataTransfer?.getData(FILE_DRAG_TYPE) || event.dataTransfer?.getData('text/plain') || ''
-    openInSecondaryPane(path)
-  }
-
-  // ── Resizable split: the divider between the two editor panes ───────────
-  /** @type {HTMLDivElement} */
-  let editorsEl
-  /** @type {HTMLDivElement} */
-  let workspaceEl
-  /** @type {HTMLElement} */
-  let editorPaneEl
-
-  // Two panes with the dragged proportion and a 4px divider between them.
-  let columns = $derived(
-    ui.splitEditor ? `minmax(0, ${ui.splitRatio}fr) 4px minmax(0, ${1 - ui.splitRatio}fr)` : 'minmax(0, 1fr)'
-  )
-
-  // Editors | divider | preview (or the other way round), each share
-  // dragged on the divider. The preview stays mounted when hidden.
-  /** @type {'editorRatio' | 'editorRatioSplit'} */
-  let ratioName = $derived(ui.splitEditor ? 'editorRatioSplit' : 'editorRatio')
-  let editorShare = $derived(ui[ratioName])
-  // Solo PDF: the editors are hidden (still mounted: CodeMirror keeps its
-  // state) and the preview takes the whole width.
-  let pdfOnly = $derived(ui.editorMode === 'pdf')
-  let showPreview = $derived(ui.previewVisible || pdfOnly)
-  let outerColumns = $derived.by(() => {
-    if (pdfOnly || !ui.previewVisible) return 'minmax(0, 1fr)'
-    const editors = `minmax(0, ${editorShare}fr)`
-    const preview = `minmax(0, ${1 - editorShare}fr)`
-    return ui.previewSide === 'right' ? `${editors} 4px ${preview}` : `${preview} 4px ${editors}`
-  })
-
-  // A drag cancelled outside (Esc, dropped elsewhere) must clear the hint.
-  function ondragend() {
-    dragDepth = 0
-    dropActive = false
+    openInPane(path, pane)
   }
 </script>
 
-<svelte:window {ondragend} />
+<svelte:window ondragend={() => (dropTarget = '')} />
 
-<!-- Layout only: the main Editor and the Preview are never re-keyed or put
-     inside {#if}, so CodeMirror and the PDF.js canvas keep their state across
-     UI changes. The second pane (split editor, ⌘\) is mounted only while
-     split: closing it saves its edits first (actions.js toggleSplitEditor). -->
-<div
-  class="workspace"
-  class:preview-left={ui.previewSide === 'left'}
-  bind:this={workspaceEl}
-  style:grid-template-columns={outerColumns}
->
-  <section
-    class="pane editor-pane"
-    aria-label="Editor"
-    hidden={pdfOnly}
-    bind:this={editorPaneEl}
-    style:--bottom-h="{ui.bottomRatio * 100}%"
-  >
-    <!-- Untrusted .latexmkrc: compiling with -norc; offers to trust it. -->
-    <TrustBanner />
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="editors"
-      bind:this={editorsEl}
-      style:grid-template-columns={columns}
-      style:--hint-left={ui.splitEditor ? `calc(${ui.splitRatio * 100}% + 6px)` : '50%'}
-      {ondragentercapture}
-      {ondragovercapture}
-      {ondragleavecapture}
-      {ondropcapture}
-    >
-      <div class="editor-host" data-pane="primary">
-        <!-- The file's name on top: tabs (Multiventana) or one header (Minimalista). -->
-        <TabStrip pane="primary" single={ui.editorMode !== 'multi'} />
-        <Editor pane="primary" />
+<div class="workspace" bind:this={workspaceEl} style:--bottom-h="{ui.bottomRatio * 100}%">
+  <!-- Untrusted .latexmkrc: compiling with -norc; offers to trust it. -->
+  <TrustBanner />
+
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="dock" bind:this={dockEl} {ondragovercapture} {ondragleavecapture} {ondropcapture}>
+    {#each openPanes() as id (id)}
+      {@const rect = view.rects[id]}
+      <section
+        class="item editor-item"
+        class:off={!rect}
+        class:drop-target={dropTarget === id}
+        data-pane={id}
+        style={place(rect)}
+        aria-label="Editor"
+        onpointerdowncapture={() => panes.focused !== id && focusPane(id, false)}
+      >
+        <!-- The file's name on top: tabs (Multiventana) or one header. -->
+        <TabStrip pane={id} single={ui.editorMode !== 'multi'} />
+        <Editor pane={id} />
+      </section>
+    {/each}
+
+    <!-- Hidden, not unmounted: the PDF, its page and the worker stay. -->
+    <section class="item preview-item" class:off={!view.rects.pdf} style={place(view.rects.pdf)} aria-label="Vista previa">
+      <Preview compileState={compilation.status} pdfVersion={compilation.pdfVersion} documentKey={compileTarget()} />
+    </section>
+
+    {#if dropHint}
+      <div class="dock-hint" class:swap={dock.zone === 'center'} style={dropHint} aria-hidden="true">
+        <span>{dock.zone === 'center' ? 'Intercambiar' : 'Colocar aquí'}</span>
       </div>
-      {#if ui.splitEditor}
+    {/if}
+
+    {#each view.handles as h (h.key)}
+      <div class="handle {h.dir}" style={handleStyle(h)}>
         <Splitter
-          orientation="vertical"
-          ratio={ui.splitRatio}
-          label="Ancho de los editores"
-          container={() => editorsEl}
-          onchange={(r, persist) => setSplitRatio(r, persist)}
-          onreset={() => setSplitRatio(0.5, true)}
+          orientation={h.dir === 'row' ? 'vertical' : 'horizontal'}
+          ratio={pairRatio(h)}
+          label={h.dir === 'row' ? 'Ancho de los paneles' : 'Alto de los paneles'}
+          container={() => pairBox(h)}
+          onchange={(r, persist) => onresize(h, r, persist)}
+          onreset={() => onreset(h)}
         />
-        <div class="editor-host secondary" aria-label="Segundo editor" data-pane="secondary">
-          <TabStrip pane="secondary" />
-          <Editor pane="secondary" />
-        </div>
-      {/if}
-      <!-- Where the dropped file will open: the right half (second pane). -->
-      <div class="drop-hint" class:visible={dropActive} aria-hidden="true">
-        <span>Soltar para abrir al lado</span>
       </div>
-    </div>
+    {/each}
+  </div>
+
+  <!-- "Errores LaTeX" | "Terminal CI" | "Shell": always mounted, hidden in Solo PDF. -->
+  <div class="bottom" class:open={ui.bottomPanelOpen} class:off={pdfOnly}>
     {#if ui.bottomPanelOpen}
       <Splitter
         orientation="horizontal"
         ratio={ui.bottomRatio}
         invert
         label="Alto del panel inferior"
-        container={() => editorPaneEl}
+        container={() => workspaceEl}
         onchange={(r, persist) => setLayoutRatio('bottomRatio', r, persist)}
         onreset={() => resetLayoutRatio('bottomRatio')}
       />
     {/if}
-    <!-- "Errores LaTeX" | "Terminal". Always mounted; hides itself. -->
     <BottomPanel />
-  </section>
-
-  {#if ui.previewVisible && !pdfOnly}
-    <div class="outer-splitter">
-      <Splitter
-        orientation="vertical"
-        ratio={editorShare}
-        invert={ui.previewSide === 'left'}
-        label="Ancho de la vista previa"
-        container={() => workspaceEl}
-        onchange={(r, persist) => setLayoutRatio(ratioName, r, persist)}
-        onreset={() => resetLayoutRatio(ratioName)}
-      />
-    </div>
-  {/if}
-
-  <!-- Hidden, not unmounted: the PDF, its page and the worker stay. -->
-  <section class="pane preview-pane" aria-label="Vista previa" hidden={!showPreview}>
-    <Preview
-      compileState={compilation.status}
-      pdfVersion={compilation.pdfVersion}
-      documentKey={compileTarget()}
-    />
-  </section>
+  </div>
 </div>
 
 <style>
-  /* Columns come from the dragged ratios (inline style). */
   .workspace {
     height: 100%;
     min-width: 0;
-    display: grid;
-  }
-
-  /* Preview on the left: same DOM (nothing remounts), another order. */
-  .preview-left .preview-pane {
-    order: 1;
-  }
-
-  .preview-left .outer-splitter {
-    order: 2;
-  }
-
-  .preview-left .editor-pane {
-    order: 3;
-  }
-
-  .outer-splitter {
-    display: flex;
-    min-height: 0;
-  }
-
-  .preview-pane[hidden],
-  .editor-pane[hidden] {
-    display: none;
-  }
-
-  .pane {
-    min-width: 0;
-    min-height: 0;
-  }
-
-  .editor-pane {
     display: flex;
     flex-direction: column;
   }
 
-  .editors {
+  .dock {
     position: relative;
     flex: 1;
     min-height: 0;
-    display: grid; /* columns come from splitRatio (inline style) */
   }
 
-  /* Tabs (auto height) above the editor (the rest): a grid row gives the
-     editor a definite height for its height: 100%. */
-  .editor-host {
+  /* Every item fills the rectangle the layout engine gives it. */
+  .item {
+    position: absolute;
     min-width: 0;
     min-height: 0;
+    overflow: hidden;
+  }
+
+  .item.off {
+    display: none;
+  }
+
+  /* Tabs (auto height) above the editor (the rest). */
+  .editor-item {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
   }
 
   /* Always the second row, even when there is no tab to show above. */
-  .editor-host > :global(.editor) {
+  .editor-item > :global(.editor) {
     grid-row: 2;
   }
 
-  .drop-hint {
+  /* Where an explorer file will open: the pane under the pointer. */
+  .editor-item.drop-target::after {
+    content: '';
     position: absolute;
-    inset: 8px 8px 8px var(--hint-left);
-    display: grid;
-    place-items: center;
+    inset: 4px;
     border: 1px dashed var(--border-strong);
     border-radius: var(--radius-md);
     background: var(--surface-active);
-    color: var(--text-secondary);
-    font-size: var(--text-md);
+    opacity: 0.6;
     pointer-events: none;
-    opacity: 0;
-    transition: opacity var(--transition);
   }
 
-  .drop-hint.visible {
-    opacity: 1;
+  /* Docking: where the dragged pane or preview will land (A3: soft surface,
+     dashed border; never the accent). */
+  .dock-hint {
+    position: absolute;
+    z-index: 4;
+    display: grid;
+    place-items: center;
+    margin: 4px;
+    box-sizing: border-box;
+    border: 2px dashed var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--surface-active);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    opacity: 0.85;
+    pointer-events: none;
+    transition: left var(--transition), top var(--transition), width var(--transition), height var(--transition);
+  }
+
+  .handle {
+    position: absolute;
+    z-index: 3;
+    display: flex;
+  }
+
+  .handle.col {
+    flex-direction: column;
+  }
+
+  .handle.col :global(.splitter) {
+    width: 100%;
+  }
+
+  /* Below the dock, the whole width (like VS Code's panel); its height is
+     dragged on the divider above it. Closed, it takes no space. */
+  .bottom {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .bottom.open {
+    flex: 0 0 var(--bottom-h, 35%);
+  }
+
+  .bottom.off {
+    display: none;
   }
 </style>

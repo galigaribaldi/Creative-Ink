@@ -4,7 +4,9 @@
   import { config } from '../lib/config.svelte.js'
   import { loadPdf, releasePdf } from '../lib/pdf.js'
   import { sync, syncBackward } from '../lib/synctex.svelte.js'
-  import { setPdfMode, swapPreviewSide, togglePreview, ui } from '../lib/ui.svelte.js'
+  import { swapPreview } from '../lib/actions.js'
+  import { startDockDrag } from '../lib/dock.svelte.js'
+  import { setPdfMode, togglePreview, ui } from '../lib/ui.svelte.js'
   import PdfContinuous from './PdfContinuous.svelte'
 
   // Served by the Go AssetServer middleware (see preview.go: previewRoute).
@@ -392,12 +394,26 @@
     {/if}
     <!-- Layout of the preview itself (ui.svelte.js): view, side and visibility. -->
     <span class="layout-actions">
+      {#if ui.editorMode === 'multi'}
+        <button
+          class="grip"
+          onpointerdown={(e) => startDockDrag('pdf', e)}
+          aria-label="Mover la vista previa"
+          title="Arrastra para colocar la vista previa donde quieras (Esc cancela)"
+        >
+          <!-- Lucide "grip-vertical" -->
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="9" cy="12" r="1" /><circle cx="9" cy="5" r="1" /><circle cx="9" cy="19" r="1" />
+            <circle cx="15" cy="12" r="1" /><circle cx="15" cy="5" r="1" /><circle cx="15" cy="19" r="1" />
+          </svg>
+        </button>
+      {/if}
       <button
         class="mode"
         onclick={() => setPdfMode(continuous ? 'page' : 'continuous')}
         title={continuous ? 'Vista continua (desplazamiento y zoom). Clic: una página a la vez' : 'Una página a la vez. Clic: vista continua con zoom'}
       >{continuous ? 'Continuo' : 'Página'}</button>
-      <button onclick={swapPreviewSide} aria-label="Cambiar de lado la vista previa" title="Cambiar de lado la vista previa">
+      <button onclick={swapPreview} aria-label="Cambiar de lado la vista previa" title="Cambiar de lado la vista previa">
         <!-- Lucide "arrow-left-right" -->
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M8 3 4 7l4 4" /><path d="M4 7h16" /><path d="m16 21 4-4-4-4" /><path d="M20 17H4" />
@@ -670,6 +686,16 @@
   .layout-actions button:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
+  }
+
+  .layout-actions .grip {
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .layout-actions .grip svg {
+    fill: currentColor;
+    stroke: none;
   }
 
   .layout-actions svg {
