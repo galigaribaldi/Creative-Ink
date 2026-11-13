@@ -106,3 +106,51 @@ func TestSetActiveDocumentFollowsTheFocusedPane(t *testing.T) {
 	_, err = a.SetActiveDocument(filepath.Join(filepath.Dir(folder), "fuera.tex"))
 	assert.Error(t, err, "only files of the open folder")
 }
+
+func TestMoveEntryKeepsTheMainFileAndTheActiveDocument(t *testing.T) {
+	a, _ := newTestApp(t, okCompile)
+	folder, mainTex := a.workspace()
+	caps := filepath.Join(folder, "capitulos")
+	require.NoError(t, os.MkdirAll(caps, 0o755))
+	notes := filepath.Join(folder, "notas.md")
+	require.NoError(t, os.WriteFile(notes, []byte("x"), 0o644))
+	_, err := a.SetMainFile(mainTex)
+	require.NoError(t, err)
+
+	// A file into a folder.
+	res, err := a.MoveEntry(notes, caps)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(caps, "notas.md"), res.To)
+	assert.FileExists(t, res.To)
+	assert.NoFileExists(t, notes)
+
+	// The main file moves too: .creative-ink-meta follows it.
+	res, err = a.MoveEntry(mainTex, caps)
+	require.NoError(t, err)
+	newMain := filepath.Join(caps, "main.tex")
+	assert.Equal(t, newMain, res.State.MainFilePath)
+	meta, err := core.LoadProjectMeta(folder)
+	require.NoError(t, err)
+	assert.Equal(t, "capitulos/main.tex", meta.MainFile)
+	_, doc := a.workspace()
+	assert.Equal(t, newMain, doc, "Go's active document follows the move")
+
+	// A folder (and everything in it) into another one.
+	partes := filepath.Join(folder, "partes")
+	require.NoError(t, os.MkdirAll(partes, 0o755))
+	res, err = a.MoveEntry(caps, partes)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(partes, "capitulos"), res.To)
+	assert.Equal(t, filepath.Join(partes, "capitulos", "main.tex"), res.State.MainFilePath)
+
+	// Never into itself, never replacing, never outside.
+	_, err = a.MoveEntry(partes, filepath.Join(partes, "capitulos"))
+	assert.ErrorContains(t, err, "dentro de sí misma")
+	require.NoError(t, os.WriteFile(filepath.Join(folder, "main.tex"), []byte("otro"), 0o644))
+	_, err = a.MoveEntry(filepath.Join(folder, "main.tex"), filepath.Join(partes, "capitulos"))
+	assert.ErrorContains(t, err, "no se reemplaza")
+	_, err = a.MoveEntry(filepath.Join(folder, "main.tex"), filepath.Dir(folder))
+	assert.Error(t, err)
+	_, err = a.MoveEntry(folder, partes)
+	assert.Error(t, err)
+}

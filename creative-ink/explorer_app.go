@@ -142,3 +142,87 @@ func (a *App) SetActiveDocument(path string) (ActiveDocument, error) {
 	}
 	return ActiveDocument{CompileTarget: after, AffectsBuild: core.AffectsBuild(after, clean)}, nil
 }
+
+// MoveResult is MoveEntry's answer: the new state, and the paths the UI
+// renames in its open panes and tabs (a file, or a folder and everything
+// below it).
+type MoveResult struct {
+	State WorkspaceState `json:"state"`
+	From  string         `json:"from"`
+	To    string         `json:"to"`
+}
+
+// MoveEntry moves a file or folder of the open folder into another folder
+// of it (drag & drop in the explorer). It never replaces an entry, never
+// moves a folder into itself, and keeps what depends on the path: the main
+// file (.creative-ink-meta) and Go's active document. The UI saves pending
+// edits before calling it, so no late autosave can recreate the old path.
+func (a *App) MoveEntry(from, toDir string) (MoveResult, error) {
+	folder, _ := a.workspace()
+	switch {
+	case folder == "":
+		return MoveResult{}, core.ErrNoFolder
+	case a.openSingleFile() != "":
+		return MoveResult{}, errSingleFile
+	}
+	src, err := core.ResolveInFolder(folder, from)
+	if err != nil {
+		return MoveResult{}, err
+	}
+	dir, err := core.ResolveInFolder(folder, toDir)
+	if err != nil {
+		return MoveResult{}, err
+	}
+	if src == folder {
+		return MoveResult{}, errors.New("no se puede mover la carpeta del proyecto")
+	}
+	if _, err := os.Lstat(src); err != nil {
+		return MoveResult{}, fmt.Errorf("%s ya no existe", filepath.Base(src))
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return MoveResult{}, fmt.Errorf("%q no es una carpeta del proyecto", filepath.Base(toDir))
+	}
+	if dir == src || isInsideDir(src, dir) {
+		return MoveResult{}, errors.New("no se puede mover una carpeta dentro de sí misma")
+	}
+	dest := filepath.Join(dir, filepath.Base(src))
+	if dest == src {
+		state, err := a.workspaceState()
+		return MoveResult{State: state, From: src, To: src}, err // already there
+	}
+	if _, err := os.Lstat(dest); err == nil {
+		return MoveResult{}, fmt.Errorf("ya existe %s en %s: no se reemplaza", filepath.Base(src), filepath.Base(dir))
+	}
+	if err := os.Rename(src, dest); err != nil {
+		return MoveResult{}, fmt.Errorf("mover %s: %w", filepath.Base(src), err)
+	}
+
+	// Paths that pointed into what moved now point to its new place.
+	moved := func(p string) string {
+		if p == src {
+			return dest
+		}
+		if isInsideDir(src, p) {
+			rel, _ := filepath.Rel(src, p)
+			return filepath.Join(dest, rel)
+		}
+		return p
+	}
+	a.mu.Lock()
+	a.docPath, a.texDoc, a.texTarget = moved(a.docPath), moved(a.texDoc), moved(a.texTarget)
+	oldMain := a.mainFile
+	a.mainFile = moved(a.mainFile)
+	newMain := a.mainFile
+	a.mu.Unlock()
+	if newMain != oldMain && newMain != "" {
+		meta, _ := core.LoadProjectMeta(folder)
+		if rel, err := core.RelativeMainFile(folder, newMain); err == nil {
+			meta.MainFile = rel
+			if err := core.SaveProjectMeta(folder, meta); err != nil {
+				return MoveResult{}, fmt.Errorf("guardar el archivo principal: %w", err)
+			}
+		}
+	}
+	state, err := a.workspaceState()
+	return MoveResult{State: state, From: src, To: dest}, err
+}
