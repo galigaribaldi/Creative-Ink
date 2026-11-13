@@ -113,3 +113,32 @@ func (a *App) SearchProject(q core.SearchQuery) (core.SearchResult, error) {
 	}
 	return res, err
 }
+
+// ActiveDocument is SetActiveDocument's answer.
+type ActiveDocument struct {
+	CompileTarget string `json:"compileTarget"`
+	AffectsBuild  bool   `json:"affectsBuild"`
+}
+
+// SetActiveDocument makes path (a text file of the open folder, already
+// shown in an editor pane) Go's active document, without reading it: the
+// user focused that pane (docs/MAP.md §4.4, #9, several panes). What is
+// compiled follows the last focused .tex (its root document); a main file
+// (★) still wins. When the target changes, it is compiled (or its PDF on
+// disk shown) like opening a file.
+func (a *App) SetActiveDocument(path string) (ActiveDocument, error) {
+	folder, _ := a.workspace()
+	clean, err := a.validateEditablePath(folder, path)
+	if err != nil {
+		return ActiveDocument{}, err
+	}
+	before := a.compileTarget()
+	if err := a.setWorkspaceMode(folder, clean, a.openSingleFile()); err != nil {
+		return ActiveDocument{}, err
+	}
+	after := a.compileTarget()
+	if after != "" && after != before {
+		a.compileOnOpen()
+	}
+	return ActiveDocument{CompileTarget: after, AffectsBuild: core.AffectsBuild(after, clean)}, nil
+}

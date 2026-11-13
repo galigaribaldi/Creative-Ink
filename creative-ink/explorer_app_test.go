@@ -73,3 +73,36 @@ func TestSearchProjectSearchesTheOpenFolder(t *testing.T) {
 	_, err = empty.SearchProject(core.SearchQuery{Text: "x"})
 	assert.ErrorIs(t, err, core.ErrNoFolder)
 }
+
+func TestSetActiveDocumentFollowsTheFocusedPane(t *testing.T) {
+	a, events := newTestApp(t, okCompile)
+	folder, mainTex := a.workspace()
+	poster := filepath.Join(folder, "poster.tex")
+	notes := filepath.Join(folder, "notas.md")
+	require.NoError(t, os.WriteFile(poster, []byte("\\documentclass{beamer}"), 0o644))
+	require.NoError(t, os.WriteFile(notes, []byte("# notas"), 0o644))
+
+	got, err := a.SetActiveDocument(poster)
+	require.NoError(t, err)
+	assert.Equal(t, poster, got.CompileTarget, "the focused .tex compiles")
+	assert.True(t, got.AffectsBuild)
+	expectCompileOf(t, events, poster)
+
+	// A non-TeX pane keeps the last .tex as the target.
+	got, err = a.SetActiveDocument(notes)
+	require.NoError(t, err)
+	assert.Equal(t, poster, got.CompileTarget)
+	assert.False(t, got.AffectsBuild)
+	expectNoEvent(t, events)
+
+	// A main file (★) wins whatever pane is focused.
+	_, err = a.SetMainFile(mainTex)
+	require.NoError(t, err)
+	expectCompileOf(t, events, mainTex)
+	got, err = a.SetActiveDocument(poster)
+	require.NoError(t, err)
+	assert.Equal(t, mainTex, got.CompileTarget)
+
+	_, err = a.SetActiveDocument(filepath.Join(filepath.Dir(folder), "fuera.tex"))
+	assert.Error(t, err, "only files of the open folder")
+}
