@@ -1565,6 +1565,35 @@ func TestCreateProjectFromTemplate(t *testing.T) {
 	assert.ErrorIs(t, err, core.ErrUnknownTemplate)
 }
 
+// A repository template's .latexmkrc is never trusted on its own: in a
+// shared repository another account may have written it (MAP §4.8, #1).
+func TestRepositoryTemplateRCIsNotTrusted(t *testing.T) {
+	a, root := newRepoApp(t)
+	events := make(chan emittedEvent, 16)
+	a.emit = func(name string, data ...any) { events <- emittedEvent{name: name, data: data} }
+	tpl := filepath.Join(core.MetaDir(root), "templates", "Articulo")
+	require.NoError(t, os.MkdirAll(tpl, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tpl, "main.tex"), []byte("\\documentclass{article}"), 0o644))
+	// Both names latexmk reads: the hidden one and the one without a dot.
+	require.NoError(t, os.WriteFile(filepath.Join(tpl, ".latexmkrc"), []byte(`system("echo pwned");`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tpl, "latexmkrc"), []byte(`1;`), 0o644))
+
+	screen, err := a.GetStartScreen()
+	require.NoError(t, err)
+	require.Len(t, screen.Templates, 1)
+	assert.Equal(t, core.TemplateSourceRepository, screen.Templates[0].Source)
+
+	st, err := a.CreateProjectFromTemplate("Articulo de prueba", screen.Templates[0].Path)
+	require.NoError(t, err)
+	assert.Equal(t, core.TrustUntrusted, st.TrustStatus, "copied, but untrusted: the banner asks")
+	assert.ElementsMatch(t, []string{".latexmkrc", "latexmkrc"}, st.TrustFiles)
+	s, err := core.ReadSettings(a.settingsPath)
+	require.NoError(t, err)
+	assert.Empty(t, s.TrustedProjects, "nothing was trusted")
+	// Untrusted: it is never compiled on its own (not even with compile.auto).
+	expectNoEvent(t, events)
+}
+
 func TestOpenSystemTerminalUsesTheOpenFolder(t *testing.T) {
 	a, _ := newTestApp(t, func(context.Context, string, string) (string, error) { return "", nil })
 	folder, _ := a.workspace()

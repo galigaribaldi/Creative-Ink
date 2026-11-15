@@ -86,8 +86,11 @@ func (a *App) ensureUserTemplatesDir() {
 // CreateProjectFromTemplate creates <repo>/<name normalized>/ as a copy of
 // one of the templates listed on the start screen (template = its path),
 // opens it and compiles it like CreateProject. A .latexmkrc that comes from
-// the user's own template is trusted: projects created by the editor are
-// (docs/MAP.md §4.6, decision 7).
+// the user's OWN template (<UserConfigDir>/creative-ink/templates) is
+// trusted (docs/MAP.md §4.6, decision 7). One from the repository's
+// templates is not: in a shared repository another account may have
+// written it, and it is Perl that latexmk runs. It is copied, untrusted,
+// and the banner asks (docs/MAP.md §4.8, conflict 1).
 func (a *App) CreateProjectFromTemplate(name, template string) (WorkspaceState, error) {
 	root := a.repository()
 	if root == "" {
@@ -107,7 +110,7 @@ func (a *App) CreateProjectFromTemplate(name, template string) (WorkspaceState, 
 	if err != nil {
 		return WorkspaceState{}, err
 	}
-	if a.settingsPath != "" {
+	if a.settingsPath != "" && chosen.Source == core.TemplateSourceUser {
 		trustDir := dir
 		if mainTex != "" {
 			trustDir = filepath.Dir(mainTex)

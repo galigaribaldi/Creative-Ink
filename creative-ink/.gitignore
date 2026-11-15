@@ -8,3 +8,8 @@ frontend/package.json.md5
 
 # Documentos de prueba del editor
 workspace/
+
+# Go workspace local (go work init . ../../Memorandum-tex/tools): enlaza la
+# librería de plantillas solo en esta máquina; nunca se sube (MAP §4.8).
+go.work
+go.work.sum
