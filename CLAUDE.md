@@ -43,7 +43,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
    - **`DEV`**: integración. Recibe las ramas de trabajo terminadas.
    - **`DEV-feat-<Tema>`**: ramas de trabajo, que **nacen siempre de `DEV`**. Ahí se escriben los cambios y se proponen los commits.
    - Integración siempre con *fast-forward* (`git merge --ff-only`), para que la historia siga lineal. Al integrar, la rama de trabajo se borra.
-   - **Rama de trabajo actual: `DEV-feat-UI-Layout`** (Sección 24). Contiene, en línea recta, las secciones 21–24 (`DEV-feat-Confianza`, `DEV-feat-UI-Diseno`, `DEV-feat-UX-Editor`, `DEV-feat-Ubicacion-proyectos`), todavía no integradas en `DEV`: basta un `git merge --ff-only DEV-feat-UI-Layout` en `DEV`. Las pruebas de rendimiento con la tesis (`DEV-feat-Rendimiento-latex`) siguen pendientes.
+   - **Rama de trabajo actual: `DEV-feat-Plantillas`** (Sección 25, catálogo de plantillas), nacida de `DEV` el 2026-11-15, después de integrar las secciones 21–24 en `DEV` y `main` (`00e6166`). Las ramas de esas secciones se borraron (local y remoto).
    - **Identidad de git (2026-11-15):** todos los commits son de `galigaribaldi <galigaribaldi@live.com>` (fijado con `git config --local`). 16 commits del 2026-11-08 hechos con otra cuenta se reescribieron con `git filter-branch` y se subieron con `--force-with-lease`: **los hashes anteriores a esa fecha de reescritura ya no existen** (p. ej. `32ad4e7` es ahora `088c89e`).
    - Antes de proponer commits, confirma la rama con `git branch --show-current`. Si es `main` o `DEV`, propón primero crear o cambiar a la rama `DEV-feat-…` correspondiente.
 
@@ -71,7 +71,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 - **Dependencias del frontend:** `npm install` se ejecuta **siempre en `creative-ink/frontend/`**. En `creative-ink/` crea un `package.json` y un `node_modules` sueltos (ya pasó una vez).
 
 ## Estado actual (actualizar al cerrar cada sección)
-Todo lo de abajo está **integrado en `main` y `DEV` (commit `088c89e`, 2026-11-08; antes `32ad4e7`, hash reescrito el 2026-11-15)**. El detalle de cada sección está en `docs/MAP.md` y en el historial de git (`git log --oneline`).
+Todo lo de abajo está **integrado en `main` y `DEV`**: secciones 1–20 hasta `088c89e` (2026-11-08; antes `32ad4e7`, hash reescrito el 2026-11-15) y secciones 21–24 hasta `00e6166` (2026-11-15). El detalle de cada sección está en `docs/MAP.md` y en el historial de git (`git log --oneline`).
 
 ### Secciones integradas
 | # | Sección | Dónde está documentada |
@@ -96,18 +96,23 @@ Todo lo de abajo está **integrado en `main` y `DEV` (commit `088c89e`, 2026-11-
 | 18 | Estructura del repositorio (`.creative-ink/`, `tmp-Workspaces/`) y pantalla de inicio | MAP §1, §4.6 (paso 1) |
 | 19 | Comandos básicos de editor, archivos de texto, ⌘N, menú de macOS y editor dividido | MAP §4.2 |
 | 20 | Escalabilidad: configuración por capas (`compile.auto` apagado), PDF en un worker, detector de proyecto grande, cancelación acotada, terminal en disco | MAP §4.3, §4.3.6, §4.5, §4.6 (paso 2) |
+| 21 | Confianza en el `.latexmkrc` (`-norc`, `ci trust`, banner) y migración visual a los tokens de diseño | MAP §4.3.6, §4.6 (paso 3); skill `ui-svelte-architect` |
+| 22 | Registro de comandos `ci`, `ci guide`, Tab en la Terminal CI, plantillas de proyecto; Terminal CI y Shell separadas | MAP §4.3.6, §4.6 (paso 4) |
+| 23 | Proyectos fuera del repositorio: ubicación y git, importar (colecciones, `COPIA-DE-GIT.md`), modo colección, arrastrar desde el sistema, pantalla de inicio cerrable, nueva ventana y bloqueo por proyecto, ⌘N sin título | MAP §4.7 |
+| 24 | Rediseño de UI/UX: divisores, vista previa continua con zoom (pdf.js `PDFViewer`), buscar en el proyecto, pestañas, tres modos de editor, Multiventana con 4 paneles acoplables, crear y mover en el explorador, zoom ⌘+/⌘- | MAP §4.4 (#9) |
 
-### En curso: `DEV-feat-Rendimiento-latex`
+### Pendiente: pruebas de rendimiento con la tesis (antes `DEV-feat-Rendimiento-latex`)
 Pruebas de rendimiento con la tesis (unas 200 páginas, imágenes pesadas, TikZ, bibliografía) antes de pasar a otra cosa. El plan de medición está en `docs/MAP.md` §4.5 ("Cómo medir antes de decidir").
 - [ ] Programador: reiniciar `wails dev` y probar la Sección 20: abrir sin compilar (PDF `cached`), `ci config autocompile on|off`, ⌘S, `ci compile completo` con progreso y "Salida completa", el aviso "⚠ Proyecto grande" y escribir con la vista previa recargándose
 - [ ] Medir: `durationMs` (primera e incrementales), CPU mientras se escribe, tiempo de carga y de dibujo del PDF, y memoria del WebView tras 20 compilaciones
 - [ ] Ajustar con esos datos los umbrales del detector (`core/project_health.go`) y de la cancelación (`compiler/scheduler.go`)
 
-### En curso: `DEV-feat-Ubicacion-proyectos` (Sección 23, nace de `DEV-feat-UX-Editor`)
-Proyectos fuera del repositorio (§4.7). Fase 1 (ubicación, git, avisos en la terminal, `ci status`, carpetas demasiado amplias) hecha y **probada a mano el 2026-11-11** con `Trabajos-Maestria-Urbanismo` (repositorio git con ~30 documentos). Fase 2 (importar: `InspectImport`/`ImportProject`, colecciones, `COPIA-DE-GIT.md`) **hecha el 2026-11-11, pendiente de prueba manual**. Repositorios ya hechos (modo colección), pantalla de inicio cerrable, arrastrar desde el sistema y barreras para varios procesos **hechos el 2026-11-11, pendientes de prueba manual**; "Nueva ventana" (⇧⌘N, bloqueo por proyecto) y documento sin título (⌘N) hechos y **validados por el usuario el 2026-11-11** (la ventana nueva se prueba con `wails build`: en `wails dev` la segunda instancia chocaría con el servidor de desarrollo, ver §4.7). Fase 3 (guardar proyecto en otra ruta) pendiente. Las decisiones, las observaciones de la prueba (crear carpetas desde el explorador, Makefile y git en la Shell, guardar un `.md` recompila) y lo que falta decidir están en §4.7.
-- **Orden acordado con el usuario (2026-11-11):** al terminar las pruebas de §4.7 y **antes de empezar otra sección**, retomar la deuda de UI/UX del layout (MAP §4.4, #9).
+### En curso: `DEV-feat-Plantillas` (Sección 25)
+Catálogo de plantillas de Memorandum-tex (MAP §4.8, segunda revisión del 2026-11-13). Primero los prerrequisitos de Creative-ink (C0), empezando por la confianza: `CreateProjectFromTemplate` solo confía en el `.latexmkrc` de las plantillas del usuario. Las notas vigentes están en `Memorandum-tex/docs/` (la copia `docs/Integration/` de este repositorio está desfasada).
 
 ### Pendientes (siguientes secciones; no empezar sin confirmación)
+- **§4.7 Fase 3 — Guardar en otra ruta:** "Guardar proyecto como…", la pregunta al guardar como un proyecto de varios archivos y "Mover al repositorio".
+- **Arrastrar pestañas entre paneles** (aplazado en la Sección 24).
 - **§4.6 paso 5 — Host de plugins** (JSON-RPC por stdio; el modelo de plugins sigue sin decidir).
 - **Configuración:** capa del repositorio (`.creative-ink/config.json`) y claves nuevas: motor seleccionable (`pdflatex`/`xelatex`/`lualatex`, requisito del MVP), límite de tiempo configurable (hoy 60 s fijos), modo borrador para las compilaciones automáticas.
 - **Decisión abierta:** ofrecer o no `--shell-escape` (externalización de TikZ).
