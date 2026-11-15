@@ -43,7 +43,8 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
    - **`DEV`**: integración. Recibe las ramas de trabajo terminadas.
    - **`DEV-feat-<Tema>`**: ramas de trabajo, que **nacen siempre de `DEV`**. Ahí se escriben los cambios y se proponen los commits.
    - Integración siempre con *fast-forward* (`git merge --ff-only`), para que la historia siga lineal. Al integrar, la rama de trabajo se borra.
-   - **Rama de trabajo actual: `DEV-feat-Ubicacion-proyectos`** (Sección 23), apilada sobre `DEV-feat-UX-Editor`, que aún no está integrada en `DEV`: integra primero `DEV-feat-UX-Editor` y después esta, las dos con `--ff-only`. Las pruebas de rendimiento con la tesis (`DEV-feat-Rendimiento-latex`) siguen pendientes.
+   - **Rama de trabajo actual: `DEV-feat-UI-Layout`** (Sección 24). Contiene, en línea recta, las secciones 21–24 (`DEV-feat-Confianza`, `DEV-feat-UI-Diseno`, `DEV-feat-UX-Editor`, `DEV-feat-Ubicacion-proyectos`), todavía no integradas en `DEV`: basta un `git merge --ff-only DEV-feat-UI-Layout` en `DEV`. Las pruebas de rendimiento con la tesis (`DEV-feat-Rendimiento-latex`) siguen pendientes.
+   - **Identidad de git (2026-11-15):** todos los commits son de `galigaribaldi <galigaribaldi@live.com>` (fijado con `git config --local`). 16 commits del 2026-11-08 hechos con otra cuenta se reescribieron con `git filter-branch` y se subieron con `--force-with-lease`: **los hashes anteriores a esa fecha de reescritura ya no existen** (p. ej. `32ad4e7` es ahora `088c89e`).
    - Antes de proponer commits, confirma la rama con `git branch --show-current`. Si es `main` o `DEV`, propón primero crear o cambiar a la rama `DEV-feat-…` correspondiente.
 
 ## Gotchas técnicos
@@ -70,7 +71,7 @@ Las hace cumplir `.claude/settings.json`. Aun así, respétalas aunque un permis
 - **Dependencias del frontend:** `npm install` se ejecuta **siempre en `creative-ink/frontend/`**. En `creative-ink/` crea un `package.json` y un `node_modules` sueltos (ya pasó una vez).
 
 ## Estado actual (actualizar al cerrar cada sección)
-Todo lo de abajo está **integrado en `main` y `DEV` (commit `32ad4e7`, 2026-11-08)**. El detalle de cada sección está en `docs/MAP.md` y en el historial de git (`git log --oneline`).
+Todo lo de abajo está **integrado en `main` y `DEV` (commit `088c89e`, 2026-11-08; antes `32ad4e7`, hash reescrito el 2026-11-15)**. El detalle de cada sección está en `docs/MAP.md` y en el historial de git (`git log --oneline`).
 
 ### Secciones integradas
 | # | Sección | Dónde está documentada |
