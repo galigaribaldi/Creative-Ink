@@ -90,7 +90,7 @@ func init() {
 		},
 		{
 			Name:        "config",
-			Usage:       "ci config [list|get|set|unset] …",
+			Usage:       "ci config [list|get|set|unset|add|remove] …",
 			Description: "Configuración por capas: por defecto < usuario < proyecto",
 			Subcommands: []Subcommand{
 				{"config list", "Ver la configuración (valor y de dónde sale)"},
@@ -98,6 +98,8 @@ func init() {
 				{"config get <clave>", "Ver una clave"},
 				{"config set <clave> <valor>", "Cambiar un valor (--project para el proyecto)"},
 				{"config unset <clave>", "Quitar el valor de una capa (--project para el proyecto)"},
+				{"config add <clave> <valor>", "Añadir un elemento a una clave de tipo lista (p. ej. templates.sources)"},
+				{"config remove <clave> <valor>", "Quitar un elemento de una clave de tipo lista"},
 			},
 			Run: func(_ context.Context, args []string, env Env) (string, error) { return runConfig(args, env) },
 		},

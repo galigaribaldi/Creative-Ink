@@ -209,6 +209,46 @@ func TestConfigAutocompile(t *testing.T) {
 	}
 }
 
+func TestConfigListKeys(t *testing.T) {
+	env, _ := newEnv(t, &recorder{})
+	run := func(line string) (string, error) { return Run(context.Background(), line, env) }
+	a, b := "https://a.example/index.json", "https://b.example/index.json"
+	if out, err := run("ci config add sources " + a); err != nil || !strings.Contains(out, a) {
+		t.Fatalf("add: %q, %v", out, err)
+	}
+	if _, err := run("ci config add templates.sources " + b); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := run("ci config get templates.sources")
+	if !strings.Contains(out, a+", "+b) || !strings.Contains(out, "Se guarda en: usuario") || strings.Contains(out, "proyecto (") {
+		t.Fatalf("get: %q", out)
+	}
+	// Only the user layer: --project is refused with an explanation.
+	if _, err := run("ci config add templates.sources https://c.example/i.json --project"); !errors.Is(err, ErrUsage) ||
+		!strings.Contains(err.Error(), "solo se guarda en tu configuración de usuario") {
+		t.Fatalf("--project: %v", err)
+	}
+	if _, err := run("ci config remove templates.sources " + a); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := run("ci config remove templates.sources " + b); !strings.Contains(out, "(vacía)") {
+		t.Fatalf("removing the last item goes back to the default: %q", out)
+	}
+	for _, bad := range []string{
+		"ci config add templates.sources http://a.example/i.json", // not https
+		"ci config remove templates.sources " + a,                 // not in the list
+		"ci config add compile.auto on",                           // not a list
+		"ci config add templates.sources",                         // no item
+	} {
+		if _, err := run(bad); !errors.Is(err, ErrUsage) {
+			t.Errorf("%s: err = %v", bad, err)
+		}
+	}
+	if out, _ := run("ci config"); !strings.Contains(out, "templates.sources") || !strings.Contains(out, "(vacía)") {
+		t.Fatalf("list: %q", out)
+	}
+}
+
 func TestCompileStreamsWithExpectedPages(t *testing.T) {
 	r := &recorder{}
 	env, dir := newEnv(t, r)

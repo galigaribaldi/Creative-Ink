@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -110,6 +111,7 @@ const configUsage = `ci config [list]
   ci config get <clave>
   ci config set <clave> <valor> [--project]
   ci config unset <clave> [--project]
+  ci config add|remove <clave> <valor> [--project]   (claves de tipo lista)
   ci config <clave> [valor] [--project]     (p. ej. ci config autocompile on)`
 
 func runConfig(args []string, env Env) (string, error) {
@@ -138,7 +140,9 @@ func runConfig(args []string, env Env) (string, error) {
 		return setConfig(env, rest[1], rest[2], scope)
 	case rest[0] == "unset" && len(rest) == 2:
 		return setConfig(env, rest[1], "", scope)
-	case rest[0] != "get" && rest[0] != "set" && rest[0] != "unset" && rest[0] != "list" && len(rest) <= 2:
+	case (rest[0] == "add" || rest[0] == "remove") && len(rest) == 3:
+		return changeListConfig(env, rest[1], rest[2], scope, rest[0] == "add")
+	case !slices.Contains([]string{"get", "set", "unset", "list", "add", "remove"}, rest[0]) && len(rest) <= 2:
 		if len(rest) == 1 {
 			return getConfig(env, rest[0])
 		}
@@ -150,9 +154,10 @@ func runConfig(args []string, env Env) (string, error) {
 func listConfig(entries []config.Entry) string {
 	var b strings.Builder
 	for _, e := range entries {
-		fmt.Fprintf(&b, "%-14s = %-4s (%s)  %s\n", e.ID, config.Format(e.Value), scopeLabel(e.Scope), e.Description)
+		fmt.Fprintf(&b, "%-17s = %-8s (%s)  %s\n", e.ID, config.Format(e.Value), scopeLabel(e.Scope), e.Description)
 	}
 	b.WriteString("\nCambiar: ci config set <clave> <valor> [--project] · Quitar: ci config unset <clave> [--project]\n")
+	b.WriteString("Listas: ci config add|remove <clave> <valor> · Detalle y valores permitidos: ci config get <clave>\n")
 	return b.String()
 }
 
@@ -161,12 +166,59 @@ func getConfig(env Env, name string) (string, error) {
 	if err != nil {
 		return "", usage("%v", err)
 	}
+	e, ok := effective(env, k)
+	if !ok {
+		return "", usage("clave %q", name)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s = %s (%s)\n  %s\n", e.ID, config.Format(e.Value), scopeLabel(e.Scope), e.Description)
+	if len(e.Values) > 0 {
+		fmt.Fprintf(&b, "  Valores: %s\n", strings.Join(e.Values, " | "))
+	}
+	layers := make([]string, 0, len(e.Scopes))
+	for _, s := range e.Scopes {
+		layers = append(layers, scopeName(s))
+	}
+	fmt.Fprintf(&b, "  Se guarda en: %s\n", strings.Join(layers, " o "))
+	return b.String(), nil
+}
+
+// effective is the key's entry as the service resolves it now.
+func effective(env Env, k config.Key) (config.Entry, bool) {
 	for _, e := range env.Config.List() {
 		if e.ID == k.ID {
-			return fmt.Sprintf("%s = %s (%s)\n  %s\n", e.ID, config.Format(e.Value), scopeLabel(e.Scope), e.Description), nil
+			return e, true
 		}
 	}
-	return "", usage("clave %q", name)
+	return config.Entry{}, false
+}
+
+// changeListConfig adds an item to a list key, or removes it, in scope.
+// The current list is the effective one, so it must come from that layer
+// (or be the default): adding to the user layer what the project sets
+// would silently copy the project's list.
+func changeListConfig(env Env, name, item string, scope config.Scope, add bool) (string, error) {
+	k, err := config.Lookup(name)
+	if err != nil {
+		return "", usage("%v", err)
+	}
+	if !k.Allows(scope) {
+		_, _, err := config.Prepare(k.ID, "", scope) // the scope error, worded once
+		return "", usage("%v", err)
+	}
+	e, ok := effective(env, k)
+	if !ok {
+		return "", usage("clave %q", name)
+	}
+	if e.Scope != scope && e.Scope != config.ScopeDefault {
+		return "", usage("%s sale ahora de %s; cámbiala ahí (o quita ese valor con ci config unset %s)", k.ID, scopeLabel(e.Scope), k.ID)
+	}
+	current, _ := e.Value.([]string)
+	next, err := k.WithItem(current, item, add)
+	if err != nil {
+		return "", usage("%v", err)
+	}
+	return setConfig(env, k.ID, strings.Join(next, ","), scope) // empty → unset: back to the default
 }
 
 func setConfig(env Env, name, value string, scope config.Scope) (string, error) {
@@ -188,6 +240,17 @@ func setConfig(env Env, name, value string, scope config.Scope) (string, error) 
 			config.Format(e.Value), e.ID)
 	}
 	return b.String(), nil
+}
+
+// scopeName is a layer in a sentence ("tu configuración de usuario").
+func scopeName(s config.Scope) string {
+	switch s {
+	case config.ScopeUser:
+		return "usuario (settings.json)"
+	case config.ScopeProject:
+		return "proyecto (.creative-ink-meta, con --project)"
+	}
+	return string(s)
 }
 
 func scopeLabel(s config.Scope) string {
